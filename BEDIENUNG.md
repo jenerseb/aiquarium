@@ -1,0 +1,114 @@
+# AIquarium — Bedienung
+
+Kurz und praktisch. Das Programm liegt in diesem Ordner (`app/`), die Datenbank **außerhalb**, damit Syncthing sie nicht anfasst.
+
+## Wo was liegt
+
+| Was | Pfad |
+|---|---|
+| Programm | `<Vault>/Seb Privat Stuff/aiquarium/app/` |
+| Zugangsschlüssel | `app/.env` (nicht im Git, nicht im Backup) |
+| Datenbank | Linux: `~/.local/share/aiquarium/world.sqlite` · Windows: `C:\Users\<du>\.local\share\aiquarium\world.sqlite` |
+| Log (bei Hintergrundstart) | `app/aiquarium.log` |
+
+## Starten
+
+**Linux (VPS oder PC), im Vordergrund** — Strg+C beendet ihn sauber:
+
+```
+cd "<Vault>/Seb Privat Stuff/aiquarium/app"
+node src/server.js
+```
+
+**Linux, im Hintergrund** (läuft weiter, wenn das Terminal zugeht):
+
+```
+cd "<Vault>/Seb Privat Stuff/aiquarium/app"
+nohup node src/server.js > aiquarium.log 2>&1 & echo $! > aiquarium.pid
+```
+
+**Windows (PowerShell), im Vordergrund:**
+
+```
+cd "<Vault>\Seb Privat Stuff\aiquarium\app"
+node src/server.js
+```
+
+**Windows, im Hintergrund:**
+
+```
+cd "<Vault>\Seb Privat Stuff\aiquarium\app"
+$p = Start-Process node -ArgumentList 'src/server.js' -PassThru; $p.Id | Out-File aiquarium.pid
+```
+
+## Stoppen
+
+- **Vordergrund:** `Strg+C`. Der Server schließt offene Verbindungen und ist in unter zwei Sekunden weg.
+- **Linux, Hintergrund:** `kill $(cat aiquarium.pid)`
+- **Windows, Hintergrund:** `Stop-Process -Id (Get-Content aiquarium.pid)`
+- **Port belegt und PID unbekannt:** Linux `ss -ltnp | grep 3077` · Windows `Get-NetTCPConnection -LocalPort 3077 | Select-Object OwningProcess`
+
+`kill -9` nur, wenn nichts anderes hilft. Er schreibt sekündlich in die Datenbank; ein hartes Abschießen ist dank WAL meist unkritisch, kann aber den letzten Tick verlieren. Verpasste Zeit holt er beim nächsten Start automatisch nach (max. 12 Stunden).
+
+## Nach einer Änderung
+
+Stoppen, starten. Kein Build, kein `npm install` — es gibt keine Abhängigkeiten.
+
+## Läuft er?
+
+```
+curl http://127.0.0.1:3077/api/state
+```
+
+Im Startlog müssen zwei Zeilen stehen:
+
+```
+[env] …/app/.env geladen (1 gesetzt)
+AIquarium läuft auf http://127.0.0.1:3077 (DB: …)
+```
+
+## Adressen
+
+| Adresse | Was |
+|---|---|
+| `http://127.0.0.1:3077/` | 3D-Ansicht mit HUD, Feed (per `Feed`-Knopf ein-/ausblendbar, Standard: aus), zwei Kameras (`1` `2`) |
+| `http://127.0.0.1:3077/?mode=dev` | zusätzlich das **Debug-Log**: jede Entscheidung mit Ziel, Dauer, Auswahlraum, Werten und Gedanken, im gestrichelten Rahmen |
+
+Debug-Log liest `/api/debug` alle zwei Sekunden — der normale Live-Strom bleibt davon unberührt.
+
+## Dev-Werkzeuge (nur `?mode=dev`)
+
+Im Panel rechts unten:
+
+- **Drei Schieber** für Hunger, Erschöpfung und Stress (0–100). Sie setzen den Wert sofort und schreiben ein `dev_set`-Ereignis ins Log.
+- **Zeitraffer** `×1 / ×3 / ×10`: Die Simulationsuhr läuft schneller, alle Aktionen und Bedürfnisse entsprechend auch. Der aktuelle Faktor steht in der Kopfzeile.
+- Jede Entscheidung erscheint mit Aktion, Ziel, Dauer, Auswahlmenü, Werten und Gedanken im gestrichelten Debug-Rahmen.
+- **Taste `G`**: Koordinaten-Grid (Ringe alle 10 m, Speichen alle 30°) auf dem Planeten ein/aus — zum Prüfen, wo Orte und Figur stehen.
+
+Nur von `127.0.0.1` erreichbar; von außen antworten die Endpunkte mit 403:
+
+```
+curl "http://127.0.0.1:3077/api/dev/set?stress=80"
+curl "http://127.0.0.1:3077/api/dev/speed?x=10"
+```
+
+Beim Start lässt sich der Faktor auch per Umgebung setzen: `AIQUARIUM_SPEED=10 node src/server.js`.
+
+## Wenn etwas klemmt
+
+| Symptom | Ursache und Abhilfe |
+|---|---|
+| „Modell still" im HUD | `model.last.reason` in `/api/state` lesen: `no_key` = `.env` fehlt/leer, `request: HTTP 401` = Key ungültig, `HTTP 429` = Rate-Limit |
+| `EADDRINUSE` | Port belegt: `PORT=3080 node src/server.js` |
+| Figur steht still | normal während einer Aktion (Aktionen haben Dauer); im Debug-Log steht, was läuft und wann sie endet |
+| Alles zurücksetzen | Datenbank-Datei löschen (Historie weg), Server neu starten |
+| Werte sehen verkehrt aus (Futter statt Hunger) | Alte Datenbank von vor der Wertumkehr: Datei löschen. Die Migration dreht alte Werte, aber alte Glaubenssätze sind inhaltlich falsch und werden verworfen |
+| `node -v` zu alt | Node ≥ 22.5 nötig, sonst fehlt `node:sqlite` |
+
+## Tests
+
+```
+cd "<Vault>/Seb Privat Stuff/aiquarium/app"
+npm test          # 52 Tests
+npm run check     # Syntaxprüfung aller Module
+```

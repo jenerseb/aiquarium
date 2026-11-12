@@ -1,0 +1,82 @@
+---
+typ: plan
+status: entwurf
+stand: 2026-11-12
+projekt: AIquarium
+tags: [aiquarium, bruchpilot, node, sqlite, llm]
+---
+
+# AIquarium — v0.1 Wochenende 1: Takt, der nicht stirbt
+
+Bauplan und Stand des Kerns. Fachliche Grundlage ist der Vault-Plan
+`vault-privat/Seb Privat Stuff/ai-terrarium/master_implementation_roadmap.md`.
+
+## Was hier schon läuft
+
+- [x] SQLite-Schema nach §7 des Vault-Plans (`world_state`, `pilots`, `pilot_mind`, `world_entities`, `events`, `nerve_events`, `thoughts`, `names_used`)
+- [x] Tick-Worker 1 Hz, sequenziell (kein überlappender Tick, kein paralleler Modellaufruf)
+- [x] Catch-up nach Ausfall, gekappt auf 12 h, idempotent, mit `offline`-Ereignis
+- [x] Entscheidungs-Loop: Prompt-Bau, Modellaufruf mit 30 s Timeout, Validierung, ein Retry bei Temperatur −0,3
+- [x] Post-Checks: JSON, Whitelist, 14 Wörter, CJK, englische Stoppwörter, Jaccard 0,65, Ausruf-Bremse
+- [x] Stale-Pfad: bei Modellausfall deterministische Ersatzaktion, kein stiller Stillstand
+- [x] Werte Hunger, Erschöpfung, Stress (0 = gesund, 100 = tot bzw. durchgedreht) mit Effekten pro Aktion, Erschöpfung steigt beim Laufen 1,5×
+- [x] Tod (Hunger 100 = Verhungern, Erschöpfung 100 = Zusammenbruch), 10 Minuten Totzeit, Neustart mit Namenskomposit und römischer Ziffer
+- [x] Stupor und Wahn nach Auslöserart, Whitelist schrumpft, erzwungener Schlaf
+- [x] Anti-Loop: dreimal dieselbe Aktion sperrt sie und kostet Nerven
+- [x] Zustandsabhängige Wirkungen (`effectFor`): Sitzen hilft nur bei Erschöpfung, sonst Langeweile-Stress; unter Hunger 5 passt nichts mehr rein
+- [x] Optionen erscheinen nur, wenn der Körper sie braucht (`AVAIL`): Sitzen ab Erschöpfung > 35 oder Stress > 45, Schlafen ab Erschöpfung > 45 oder Stress > 55, Fressen ab Hunger > 25, Erde-Schauen ab Stress > 30
+- [x] Somatic Theories: die Engine misst `sanity_delta`, ab 3 Wiederholungen und Delta ≥ 0,2 **formuliert die Figur den Satz selbst** (Modellaufruf, ~$0,000017), Notausgang nach 3 Fehlversuchen
+- [x] Glaubenssätze erscheinen als eigenes Feed-Ereignis und im Frontend unter „Was er glaubt"
+- [x] Fünf Zusatzaktionen (Wrack durchwühlen mit Fund, Zettel entziffern mit Fetzen, Vorrat prüfen mit Durchhalte-Schätzung, Beet pflegen mit Sättigung, Notruf als bewusst schlechte Option) plus Gewächskuppel und Notfunkbake als neue Orte
+- [x] SSE mit zwei Nachrichtenarten: `state` jede Sekunde, `feed` sofort nach der Entscheidung
+- [x] Tick läuft an der Wanduhr (verpasste Ticks werden nachgezogen, kein Drift durch Modellaufrufe)
+- [x] Tageszähler pro Pilot (`clock.day`), Uhr-Skew wird als `clock_skew` erkannt und protokolliert
+- [x] SSE `/api/stream` + `/api/state` + `/api/feed`
+- [x] **3D-Mockup** (WE 2, grob): Kugel mit sechs Orten aus Primitiven, Figur mit Helm, Watschel-Animation, zwei Kameras (Charakter/Planet mit Pin), HUD mit Werten, Feed und Sprechblase am Kopf. Die Kapsel hat ein transparentes Fensterband mit Sprossen und einen eingerichteten Innenraum (Boden, Konsole, Liege, warmes Licht). Three.js r169 liegt lokal unter `public/engine/` — kein CDN-Aufruf, also keine dritte Partei im Browser.
+
+## Noch offen (bewusst)
+
+- [ ] **24-h-Dauerlauf** auf dem Zielsystem — nur dort sinnvoll, hier nicht durchführbar
+- [x] Gedanken/Aktion-Abgleich: `aktionsmismatch`-Check verwirft Gedanken mit dem Verb einer anderen angebotenen Aktion und fragt neu (2026-11-12)
+- [ ] Tagebuch und Nachruf über MiMo (WE 3)
+- [ ] Kamera-Stapel und Sprungmarken aus dem Feed (die zwei Ansichten stehen, der Sprung fehlt)
+- [ ] Echte GLB-Modelle statt Platzhalter (Pilot, Kapsel, Wrack, Karotten, Mast, Notiz)
+- [ ] Nachtseite / Lichtkante, Tag-Nacht-Rhythmus — bewusst nicht in v0.1
+- [ ] „Seit deinem letzten Besuch" im Frontend (WE 2)
+- [ ] Impressum, KI-Hinweis, Subdomain (WE 4)
+- [ ] Ehrliche Todesrate kalibrieren: aktuell sterben Piloten an Hunger nach ~11 h ohne Fressen — Zielwert ~50 % bei Zusammenbruch erst messen
+
+## Beobachtungen aus den Messläufen (2026-11-12)
+
+- Modellantwort in 1,3 s, $0,000054 pro Entscheidung, Deutsch, im Charakter, alle Checks grün.
+- **`sit_shade` war das Kernproblem.** Messung 1 (nur Prompt-Gewicht, keine Barrieren): 8 Entscheidungen, davon 4× `sit_shade` — auch bei vollen Werten, mit Sätzen wie *„Ich bin hellwach und will mich bewegen"* **für** Sitzen. Anreize allein reichen bei diesem Modell nicht.
+- Messung 2 (Sättigung + Unruhe + Instinct als Gewicht): noch 2×, aber nur an plausiblen Stellen — und 4× `eat`, weil der Sensory-Text *„keinen Vorrat im Bauch"* als Hunger gelesen wurde.
+- Messung 3 (plus `AVAIL`: Option nur bei Bedarf): `look_earth` 3, `eat` 2, `sit_shade` 3 — jeder Fall begründbar. Rested cases → `look_earth`; der Anti-Loop-Filter greift nach dem dritten Mal.
+- **Lehre:** bei kleinen Modellen entscheidet die Optionsliste stärker als jede Formulierung. Erst die Wirkung unattraktiv machen, dann die Option an den Bedarf binden — und beides mit einer Messreihe belegen, nicht mit einer Vermutung.
+- Catch-up im Ernstfall geprüft: 45 min Ausfall → 2.702 Ticks nachgerechnet, Tickzähler lückenlos (157 → 2859), Pilot hatte danach gegessen (Futter 69,6 → 99,5), kein Tod.
+
+## Tests, die laufen
+
+```
+npm test        # 52 Tests
+npm run check   # Syntaxprüfung aller Module
+```
+
+Was die Tests abdecken: jeder Post-Check einzeln (inkl. `aktionsmismatch` und Motiv-Quota), Musing-Trennung im Feed-Ereignis, Kollisionsnamen bis III, Whitelist-Sperren bei
+Stupor/Wahn/Gereiztheit, Tod → Neustart inkl. Ereignis, Monotonie genau einmal pro Abschluss,
+Catch-up über 6 h inkl. Idempotenz und lückenlosem Tickzähler, Kappung bei 40 h, Modellantwort
+gültig/ungültig/HTTP 500.
+
+## Betrieb
+
+```
+cp .env.example .env      # OPENROUTER_API_KEY eintragen
+# .env wird beim Start automatisch geladen (src/env.js, ohne npm-Paket);
+# vorhandene Umgebungsvariablen haben Vorrang.
+npm start                 # http://127.0.0.1:3077
+```
+
+Datenbank: `~/.local/share/aiquarium/world.sqlite` (per `AIQUARIUM_DB` überschreibbar), bewusst
+**außerhalb** des Projektordners — der Ordner liegt im Syncthing-Vault, und eine lebende
+SQLite-Datei im Sync würde Konflikte und kaputte Datenbanken erzeugen. Keine npm-Abhängigkeiten —
+`node:sqlite` und `node:http` reichen. Node ≥ 22.5 nötig.
