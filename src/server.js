@@ -17,9 +17,23 @@ const { open, logEvent } = require('./db');
 const { Engine } = require('./engine');
 const { TICK_MS } = require('./config');
 const PORT = Number(process.env.PORT || 3077);
+// Proxy-Härtung (Hermes-VPS, Caddy davor): nur localhost binden — sonst ist der
+// Port am Proxy vorbei direkt erreichbar. HOST per Env überschreibbar.
+const HOST = process.env.HOST || '127.0.0.1';
 // Dev-Zeitraffer: wie viele Simulationssekunden pro echter Sekunde laufen
 let speed = Math.max(1, Math.min(20, Number(process.env.AIQUARIUM_SPEED || 1) || 1));
-const IST_LOKAL = (req) => ['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(req.socket.remoteAddress);
+// Proxy-sicher: hinter Caddy ist remoteAddress IMMER 127.0.0.1 — der Aufrufer steht
+// in X-Real-IP (Caddy setzt den Header, Header vom Client werden überschrieben).
+// Entscheidend: der Header zählt nur, wenn die TCP-Verbindung von localhost kommt
+// (also vom Proxy). Direkter Zugriff ohne Proxy: wie bisher Socket prüfen.
+function istLokal(req) {
+  const sock = req.socket.remoteAddress;
+  const vonProxy = ['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(sock);
+  if (!vonProxy) return false;
+  const real = (req.headers['x-real-ip'] || '').trim();
+  if (!real) return true;   // kein Proxy-Header = direkter localhost-Zugriff
+  return ['127.0.0.1', '::1'].includes(real);
+}
 const ROOT = path.join(__dirname, '..');
 const PUBLIC = path.join(ROOT, 'public');
 // Die Datenbank liegt bewusst AUSSERHALB des Projektordners: der Ordner wird über
@@ -67,6 +81,17 @@ const server = http.createServer((req, res) => {
     return r.ok ? sendJson(res, 200, { ...r.snap, speed }) : sendJson(res, 500, r);
   }
 
+  // Healthcheck für systemd/Hermes: kein Auth, kein Modellaufruf, kein Snapshot.
+  // systemd sagt "active" auch bei hängendem Event-Loop — /api/health antwortet
+  // nur, wenn der Loop lebt (setzt lastBeat jede Sekunde). Hinter Caddy öffentlich
+  // erreichbar lassen (keine Secrets darin) oder im Caddy auf localhost begrenzen.
+  if (url.pathname === '/api/health') {
+    const frisch = Date.now() - lastBeat < 2 * TICK_MS + 5000;
+    return frisch
+      ? sendJson(res, 200, { ok: true })
+      : sendJson(res, 500, { ok: false, fehler: 'loop hängt' });
+  }
+
   if (url.pathname === '/api/feed') {
     const limit = Math.min(Number(url.searchParams.get('limit') || 50), 200);
     const r = snapshotSicher();
@@ -75,7 +100,7 @@ const server = http.createServer((req, res) => {
 
   // Dev: Zeitfaktor und Werte setzen — nur von localhost, jede Änderung wird protokolliert
   if (url.pathname.startsWith('/api/dev/')) {
-    if (!IST_LOKAL(req)) return sendJson(res, 403, { error: 'dev nur von localhost' });
+    if (!istLokal(req)) return sendJson(res, 403, { error: 'dev nur von localhost' });
 
     if (url.pathname === '/api/dev/speed') {
       const x = Number(url.searchParams.get('x') || 1);
@@ -163,6 +188,9 @@ function broadcastFeed() {
 }
 
 let running = true;
+// Heartbeat für /api/health: wird jede Loop-Runde gesetzt. Bleibt der Event-Loop
+// stehen (hängender Modellaufruf o. Ä.), meldet health 500 statt 200.
+let lastBeat = Date.now();
 
 async function loop() {
   engine.prune();
@@ -178,6 +206,7 @@ async function loop() {
   // Damit verliert ein 1,3-s-Modellaufruf keine Simulationszeit mehr.
   let next = Date.now() + TICK_MS;
   while (running) {
+    lastBeat = Date.now();
     const now = Date.now();
     let steps = 0;
     let last = null;
@@ -217,8 +246,8 @@ async function loop() {
   }
 }
 
-server.listen(PORT, () => {
-  console.log(`AIquarium läuft auf http://127.0.0.1:${PORT} (DB: ${DB_FILE})`);
+server.listen(PORT, HOST, () => {
+  console.log(`AIquarium läuft auf http://${HOST}:${PORT} (DB: ${DB_FILE})`);
   loop().catch((e) => { console.error('Schleife gestorben:', e); process.exit(1); });
 });
 

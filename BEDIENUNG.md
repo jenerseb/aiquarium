@@ -1,6 +1,6 @@
 # AIquarium — Bedienung
 
-Kurz und praktisch. Das Programm liegt in diesem Ordner (`app/`), die Datenbank **außerhalb**, damit Syncthing sie nicht anfasst.
+Kurz und praktisch. Das Repo liegt in `aiquarium-app/`, die Datenbank **außerhalb**, damit Sync sie nicht anfasst.
 
 **Container-Pfad (seb-dev):** vor jedem `node`/`npm`-Befehl:
 

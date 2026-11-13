@@ -1332,3 +1332,16 @@ test('config: Cluster hängt an der oberen Hemisphäre, fernab beider Pole', () 
   assert.ok(d < 1, `Spawn nicht an der Kapsel: ${d} m daneben`);
 });
 
+
+
+// Proxy-Härtung + Healthcheck (Hermes-VPS, 2026-11-14): kein Modellaufruf,
+// keine DB — nur Loop-Leben, Bind-Host und (hier) Header-Logik prüfen.
+test('server: host bindet localhost, health meldet ok, dev hinter proxy sicher', () => {
+  const src = require('node:fs').readFileSync(require('node:path').join(__dirname, '..', 'src', 'server.js'), 'utf8');
+  assert.ok(/const HOST = process\.env\.HOST \|\| '127\.0\.0\.1'/.test(src), 'HOST-Default fehlt');
+  assert.ok(/server\.listen\(PORT, HOST/.test(src), 'listen bindet nicht auf HOST');
+  assert.ok(/url\.pathname === '\/api\/health'/.test(src), '/api/health fehlt');
+  assert.ok(/lastBeat/.test(src), 'Heartbeat fehlt');
+  assert.ok(/x-real-ip/.test(src), 'X-Real-IP-Prüfung fehlt');
+  assert.ok(!/IST_LOKAL\(req\)/.test(src), 'alter IST_LOKAL-Aufruf übrig');
+});
