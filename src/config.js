@@ -490,7 +490,7 @@ function modellKurz(name = MODEL.name) {
 const WORLD_RADIUS = 120;   // die GESAMTE Kugel ist begehbar (kein Polkappen-Ausschnitt mehr)
 const PLANET_R = 120;      // Anzeige-Radius; 1 Weltmeter bleibt 1 Meter (Bogenlänge)
 
-// Acht Orte (v0.1). Lokale Cluster-Koordinaten in Metern, Kapsel im Ursprung.
+// Acht Orte (v0.1).
 // Das Cluster hängt an CLUSTER (obere Hemisphäre, fernab beider Pole) —
 // clusterPos() projiziert lokal → Kugel, vec3()/db.seed() nutzen das.
 // Abstände bewusst groß (≥ 25 m): Wege sind Teil des Spiels (Vorhaben).
@@ -531,6 +531,26 @@ function ankerPos(e) {
   return { pos_x: n.x * WORLD_RADIUS, pos_y: n.y * WORLD_RADIUS, pos_z: n.z * WORLD_RADIUS };
 }
 
+// Spawn: 10 m östlich der Kapsel-Logikposition (Bogenlänge), nicht exakt drauf —
+// sonst klebt die Figur im Kapsel-Anker (Versatz 3,4/3,0 ≈ 4,5 m + Nahkreis).
+// Muss nach clusterPos/tangentialRahmen/norm3 stehen.
+const SPAWN_ABSTAND_M = 10;
+function spawnPos() {
+  const mitte = clusterPos(0, 0);
+  const { ost } = tangentialRahmen(mitte);
+  const winkel = SPAWN_ABSTAND_M / WORLD_RADIUS;   // Bogenlänge → Winkel
+  const cos = Math.cos(winkel), sin = Math.sin(winkel);
+  const n = norm3(mitte);
+  // Rodrigues-Rotation von mitte um Achse (n × ost) — bleibt exakt auf der Kugel
+  const ax = n.y * ost.z - n.z * ost.y;
+  const ay = n.z * ost.x - n.x * ost.z;
+  const az = n.x * ost.y - n.y * ost.x;
+  const px = mitte.x * cos + (ay * mitte.z - az * mitte.y) * sin;
+  const py = mitte.y * cos + (az * mitte.x - ax * mitte.z) * sin;
+  const pz = mitte.z * cos + (ax * mitte.y - ay * mitte.x) * sin;
+  return { pos_x: px, pos_y: py, pos_z: pz };
+}
+
 // Gedanken-Impulse: Die Engine würfelt pro Modellaufruf einen stilistischen
 // Impuls (Gewichte hier, Texte in prompt.js) — Variation von innen, kein Retry.
 const IMPULS_WAHL = [
@@ -558,5 +578,5 @@ module.exports = {
   erdeSichtbarVon, TAG, ERDE, ERDE_HORIZONT, FINSTERNIS, finsternisStufe,
   ankerPos, VERSATZ, STUFE_RANG, entityLabel, haltAbstand, wuerfelImpuls, IMPULS_WAHL,
   RESPAWN_DELAY_S, START, MODEL, modellKurz, WORLD_RADIUS, PLANET_R, ENTITIES,
-  CLUSTER, CLUSTER_R, clusterPos,
+  CLUSTER, CLUSTER_R, clusterPos, SPAWN_ABSTAND_M, spawnPos,
 };

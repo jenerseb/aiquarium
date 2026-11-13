@@ -5,7 +5,7 @@ const {
   DRAIN, MOVE_COST, effectFor, ACTIONS, WALK_SPEED, PSYCHE, MANIA, TREIBER, VORHABEN, START, NOVELTY, SATT, NOTEN,
   CATCHUP_WRITE_EVERY, FREEZE_S, RESPAWN_DELAY_S, MODEL, SICHT, sichtStufe, ankerPos,
   STUFE_RANG, entityLabel, haltAbstand, dist3, vec3, norm3, wuerfelImpuls, WORLD_RADIUS, modellKurz,
-  TAG, sonnenVektor, lichtAn, lichtPhase, tagesNummer, erdeSichtbarVon, clusterPos,
+  TAG, sonnenVektor, lichtAn, lichtPhase, tagesNummer, erdeSichtbarVon, clusterPos, spawnPos,
   ERDE, FINSTERNIS, finsternisStufe,
 } = require('./config');
 const { q, logEvent } = require('./db');
@@ -598,7 +598,7 @@ function spawn(state, tick, previous) {
   const name = uniqueName(existing);
   state.allNames = [...existing, name];
   state.novelty = {};                  // Neugier beginnt bei jedem Piloten neu
-  const kapsel = clusterPos(0, 0);     // Spawn an der Kapsel (Cluster-Mitte)
+  const start = spawnPos();          // 10 m neben der Kapsel, nicht im Anker
   return {
     id: null,
     cycle_num: (previous?.cycle_num || 0) + 1,
@@ -612,9 +612,9 @@ function spawn(state, tick, previous) {
     drang: 10.0,
     halt: 80.0,
     vorhaben_json: '',
-    pos_x: kapsel.x,
-    pos_y: kapsel.y,
-    pos_z: kapsel.z,
+    pos_x: start.pos_x,
+    pos_y: start.pos_y,
+    pos_z: start.pos_z,
     heading: null,
     mania_until_tick: null,
     accent_hue: nextHue(previous?.accent_hue ?? null),
