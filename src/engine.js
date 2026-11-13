@@ -847,12 +847,14 @@ class Engine {
           reason: res.reason, failures: res.failures,
           roh: typeof res.raw === 'string' ? res.raw.slice(0, 300) : null,
           ms: res.latencyMs ?? null, versuche: res.calls ?? null,
+          finish: res.finish ?? null, usage: res.usage ?? null,
         }, false);
         const fallback = this.fallbackAction(s, whitelist);
         this.applyAction(s, fallback, null, tick, 'fallback', whitelist, null,
           { ms: res.latencyMs ?? null, versuche: res.calls ?? null });
         console.error(`[stale] tick ${tick}: ${res.reason} [${(res.failures || []).join(',')}]`
           + ` ms=${res.latencyMs ?? '?'} versuche=${res.calls ?? '?'}`
+          + ` finish=${res.finish ?? '?'} tok=${JSON.stringify(res.usage ?? {})}`
           + ` roh=${(res.raw || '').slice(0, 300)}`);
         return { ...res, fallback };
       }

@@ -14,7 +14,8 @@ async function callModel({ prompt, apiKey, baseUrl = MODEL.baseUrl, model = MODE
     body: JSON.stringify({
       model,
       temperature,
-      max_tokens: 200,
+      max_tokens: MODEL.maxTokens,
+      ...(MODEL.reasoningExclude ? { reasoning: { exclude: true } } : {}),
       response_format: { type: 'json_object' },
       messages: [{ role: 'user', content: prompt }],
     }),
@@ -24,8 +25,9 @@ async function callModel({ prompt, apiKey, baseUrl = MODEL.baseUrl, model = MODE
   const data = await res.json();
   const content = data?.choices?.[0]?.message?.content ?? '';
   const usage = data?.usage || {};
+  const finish = data?.choices?.[0]?.finish_reason ?? data?.choices?.[0]?.native_finish_reason ?? null;
   const cost = (usage.prompt_tokens || 0) * PRICE.in + (usage.completion_tokens || 0) * PRICE.out;
-  return { content, usage, cost, latencyMs: Date.now() - started };
+  return { content, usage, cost, latencyMs: Date.now() - started, finish };
 }
 
 /**
@@ -47,12 +49,14 @@ async function decide(opts) {
 
   for (const a of attempts) {
     let raw;
+    let info = {};
     try {
       const r = await callModel({ ...opts, temperature: a.temperature });
       total.latencyMs += r.latencyMs;
       total.cost += r.cost;
       total.calls += 1;
       raw = r.content;
+      info = { usage: r.usage, finish: r.finish };
     } catch (err) {
       last = { ok: false, stale: true, reason: `request: ${err.message}`, failures: ['request'] };
       continue;
@@ -71,7 +75,7 @@ async function decide(opts) {
     if (v.ok) return { ...v, stale: false, raw, ...total };
     // Leere Antwort eigens benennen: „Modell schweigt" ist etwas anderes als Kauderwelsch
     const leer = !raw || !raw.trim();
-    last = { ...v, stale: true, reason: `checks: ${leer ? 'json_leer' : v.failures.join(',')}`, raw };
+    last = { ...v, stale: true, reason: `checks: ${leer ? 'json_leer' : v.failures.join(',')}`, raw, ...info };
   }
   return { ...(last || { ok: false, stale: true, failures: ['unknown'] }), ...total };
 }

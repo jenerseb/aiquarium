@@ -74,7 +74,8 @@ Antworte STRIKT in diesem JSON, nichts davor, nichts danach:
       body: JSON.stringify({
         model: model || MODEL.name,
         temperature: 0.8,
-        max_tokens: 120,
+        max_tokens: MODEL.maxTokensBelief,
+        ...(MODEL.reasoningExclude ? { reasoning: { exclude: true } } : {}),
         response_format: { type: 'json_object' },
         messages: [{ role: 'user', content: prompt }],
       }),

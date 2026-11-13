@@ -470,6 +470,9 @@ const MODEL = {
   timeoutMs: 30000,
   temperature: 0.85,
   retryTemperature: 0.55,
+  maxTokens: 800,         // Entscheidung: Reasoning frisst Budget (super-vl: ~110 Tokens bei Miniprompt)
+  maxTokensBelief: 400,   // Glaubenssatz: dito, kleinerer Prompt
+  reasoningExclude: true, // Reasoning aus content halten (OpenRouter: reasoning.exclude)
   maxWords: 20,          // Gedanken: höchstens 20 Wörter, 1–2 Sätze
   maxWordsMusing: 10,
   maxBeliefs: 3,
