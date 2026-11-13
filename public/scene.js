@@ -1010,7 +1010,11 @@ function tangentialBasis(n) {
   if (_tanH.lengthSq() < 1e-6) _tanH.set(1, 0, 0).addScaledVector(n, -n.x);
   if (_tanH.lengthSq() < 1e-6) _tanH.set(0, 0, 1).addScaledVector(n, -n.z);
   _tanA.copy(_tanH.normalize());
-  _tanB.crossVectors(n, _tanA);
+  // Rechtssystem: _tanB = _tanA × N (NICHT N × _tanA) — sonst misst
+  // atan2(wunsch·_tanB, wunsch·_tanA) den Winkel andersherum als die
+  // Positionsformel _tanA·cos(yaw) + _tanB·sin(yaw) ihn aufbaut, und die
+  // Kamera landet auf der gespiegelten Seite. BITTE NICHT „AUFRÄUMEN".
+  _tanB.crossVectors(_tanA, n);
 }
 
 function setzeModus(neu) {
