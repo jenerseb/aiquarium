@@ -86,12 +86,14 @@ const server = http.createServer((req, res) => {
 
     if (url.pathname === '/api/dev/set') {
       const s = engine.state();
-      const felder = ['hunger', 'exhaustion', 'stress'];
+      // Paket K: alle sechs Werte setzbar (Kerne + Treiber)
+      const felder = { body: [0, 100], psyche: [-100, 100],
+        hunger: [0, 100], thermo: [-100, 100], drang: [-100, 100], halt: [0, 100] };
       const aenderung = {};
-      for (const f of felder) {
+      for (const [f, [lo, hi]] of Object.entries(felder)) {
         const v = url.searchParams.get(f);
         if (v === null) continue;
-        const zahl = Math.max(0, Math.min(100, Number(v)));
+        const zahl = Math.max(lo, Math.min(hi, Number(v)));
         if (!Number.isFinite(zahl)) continue;
         aenderung[f] = zahl;
       }
@@ -148,7 +150,7 @@ const server = http.createServer((req, res) => {
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 // Ereignisse, die im Feed sofort erscheinen müssen (nicht erst im Minutentakt)
-const FEED_TYPES = new Set(['thought', 'death', 'spawn', 'discovery', 'mind', 'belief']);
+const FEED_TYPES = new Set(['thought', 'death', 'spawn', 'discovery', 'mind', 'belief', 'reboot']);
 
 function broadcastState() {
   const r = snapshotSicher();
@@ -163,9 +165,12 @@ function broadcastFeed() {
 let running = true;
 
 async function loop() {
+  engine.prune();
   const cu = engine.catchup();
-  if (cu.missed) {
-    console.log(`[catchup] ${Math.round(cu.missed / 60)} min nachsimuliert, Tode: ${cu.deaths}, Neustarts: ${cu.spawned}`);
+  if (cu.reboot) {
+    console.log(`[reboot] ${cu.minutes} min Kälteschlaf — Werte eingefroren, Filmriss im Feed`);
+  } else if (cu.missed > 0) {
+    console.log(`[catchup] ${Math.round(cu.missed / 60)} min nachsimuliert`);
   }
   if (cu.skew) console.warn(`[clock] Uhr stand ${cu.skew}s in der Zukunft — korrigiert`);
 

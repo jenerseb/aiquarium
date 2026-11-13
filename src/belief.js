@@ -56,7 +56,7 @@ async function phraseBelief(opts) {
   const besser = avgDelta > 0;
   const prompt = `Du bist ein rundliches Wesen im Raumanzug auf einem kleinen Mond. Du sprichst nie in Zahlen.
 
-Du hast gerade bemerkt: Wenn du ${HANDLUNG[action] || action}, geht es deinen Nerven danach ${besser ? 'besser' : 'schlechter'}. Du hast es ${runs} Mal erlebt.
+Du hast gerade bemerkt: Wenn du ${HANDLUNG[action] || action}, geht es dir danach ${besser ? 'besser' : 'schlechter'}. Du hast es ${runs} Mal erlebt.
 
 Deine letzten Gedanken waren:
 ${recentThoughts.slice(0, 3).map((t) => `- ${t}`).join('\n') || '- noch keine'}

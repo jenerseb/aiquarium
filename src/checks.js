@@ -48,61 +48,60 @@ function hasRecentExclamation(recent = [], window = 5) {
   return recent.slice(0, window).some((t) => String(t).includes('!'));
 }
 
-// Welche der verbotenen Motive stecken im Text?
-function motivTreffer(text, motive = []) {
-  const t = String(text || '').toLowerCase();
-  return motive.filter((m) => t.includes(m));
+// Paket A: Bedürfnis-Bremse — benennt der Gedanke nur das laufende Bedürfnis
+// („der Körper ist leer", „ich muss schlafen"), während ein Vorhaben dazu
+// aktiv ist, wird verworfen und neu gefragt. Das Vorhaben steht, der Weg zählt.
+const BEDUERFNIS_SAETZE = [
+  'körper ist leer', 'magen ist leer', 'bauch ist leer', 'muss essen',
+  'muss etwas essen', 'muss schlafen', 'muss mich ausruhen', 'bin müde',
+  'bin so müde', 'brauche schlaf', 'brauche ruhe', 'körper braucht',
+];
+
+function benenntNurBeduerfnis(thought) {
+  // Umlaute normalisieren (oe→ö etc.), damit „Koerper" und „Körper" matchen
+  const t = String(thought || '').toLowerCase()
+    .replace(/ae/g, 'ä').replace(/oe/g, 'ö').replace(/ue/g, 'ü');
+  return BEDUERFNIS_SAETZE.some((s) => t.includes(s));
+}
+// Paket B-Rest: Musterbremse „Objekt-Eröffnung" — beginnt der Gedanke mit
+// einem Ortsnamen (aus OBJECT_HINTS) und war das in 3 der letzten 4 Gedanken
+// auch so, wird verworfen. Fängt die Schablone „Das X …" von innen.
+function beginntMitOrt(thought, orte = []) {
+  const worte = words(thought).slice(0, 3).map((w) => w.toLowerCase());
+  return orte.some((o) => {
+    const oName = String(o || '').toLowerCase();
+    return oName && worte.some((w) => w.startsWith(oName.slice(0, 4)) || oName.startsWith(w));
+  });
 }
 
-// Tunwörter je Aktion (Wortanfänge, kleingeschrieben). Absichtlich nur echte
-// Verben, keine Orte oder Zustände — sonst hagelt es Fehlalarme
-// („Karottenfeld" ist kein Fressen, „Schatten" kein Sitzen).
-const AKTIONSVERBEN = {
-  eat: ['ess', 'iss', 'friss', 'fress', 'kau', 'beiss', 'beiß', 'schling', 'knabb', 'nasch'],
-  sleep: ['schlaf', 'schlumm', 'penn', 'nick', 'hinleg', 'traum', 'dös', 'does'],
-  sit_shade: ['sitz', 'ausruh', 'rast', 'verschnauf', 'faulenz', 'hock', 'setz'],
-  inspect: ['untersuch', 'inspiz', 'betracht', 'beobacht'],
-  search_wrack: ['wühl', 'wuehl', 'durchsuch', 'stöber', 'stoeb', 'kram', 'plünder', 'pluender'],
-  read_note: ['les', 'entziffer', 'buchstab', 'enträtsel', 'entraetsel'],
-  check_stock: ['prüf', 'pruef', 'zähl', 'zaehl', 'inventur'],
-  tend_dome: ['pfleg', 'gieß', 'giess', 'jät', 'jaet', 'pflanz', 'umtopf'],
-  call_bake: ['funk', 'notruf', 'bake', 'mors', 'send'],
-  streifen: ['streif', 'wander', 'spazier', 'bummel', 'schweif', 'schlender', 'stromer', 'schlend'],
-  sinnieren: ['sinnier', 'denk', 'grübel', 'gruebel', 'philosophier', 'nachdenk'],
-  look_earth: ['erd', 'himmel', 'stern', 'heimat'],
-  dig: ['grab', 'gräb', 'graeb', 'buddel', 'schaufel'],
-  run_wild: ['renn', 'flieh', 'flücht', 'fluecht', 'sprint', 'tob'],
-};
-
-/**
- * Findet das Verb einer *anderen* angebotenen Aktion im Gedanken.
- * Gibt den fremden Aktions-Schlüssel zurück oder null. Das eigene Verb zählt
- * nie als Treffer — „Ich schaue zur Erde" ist für look_earth in Ordnung,
- * für inspect ein Fehlgriff.
- */
-function fremdesAktionsverb(text, aktion, whitelist = []) {
-  const woerter = words(text);
-  const treffer = Object.keys(AKTIONSVERBEN).filter((a) =>
-    woerter.some((w) => AKTIONSVERBEN[a].some((s) => w.startsWith(s))));
-  return treffer.find((a) => a !== aktion && whitelist.includes(a)) || null;
+function hatObjektEroeffnung(thought, recent = [], orte = []) {
+  if (!beginntMitOrt(thought, orte)) return false;
+  const letzte4 = recent.slice(0, 4);
+  if (letzte4.length < 3) return false;
+  const mitOrt = letzte4.filter((t) => beginntMitOrt(t, orte)).length;
+  return mitOrt >= 3;
 }
 
 /**
  * Prüft eine Modell-Antwort.
+ * Checkliste: JSON, Whitelist, Wörter, CJK/Englisch, Jaccard, Ausruf,
+ *       Objekt-Eröffnung (B-Rest), Bedürfnis bei Vorhaben (A).
  * opts: whitelist, recentThoughts, maxWords, maxWordsMusing, jaccardMax,
- *       exclamationWindow, motive[], musing (bool)
+ *       exclamationWindow, musing (bool), orte (für Musterbremse, Paket B-Rest),
+ *       vorhabenAktiv (für Bedürfnis-Bremse, Paket A)
  * Gibt { ok, action, thought, musing, failures[] } zurück.
  */
 function validateDecision(raw, opts = {}) {
   const {
     whitelist = [],
     recentThoughts = [],
-    maxWords = 14,
+    maxWords = 20,
     maxWordsMusing = 10,
     jaccardMax = 0.65,
     exclamationWindow = 5,
-    motive = [],
     musing: willMusing = false,
+    orte = [],
+    vorhabenAktiv = false,
   } = opts;
 
   const failures = [];
@@ -135,15 +134,20 @@ function validateDecision(raw, opts = {}) {
   if (thought.includes('!') && hasRecentExclamation(recentThoughts, exclamationWindow)) {
     failures.push('exclamation');
   }
-  if (motivTreffer(thought, motive).length) failures.push('motiv');
-  if (fremdesAktionsverb(thought, action, whitelist)) failures.push('aktionsmismatch');
+  // Paket B-Rest: Musterbremse Objekt-Eröffnung
+  if (orte.length && hatObjektEroeffnung(thought, recentThoughts, orte)) {
+    failures.push('eroeffnung_objekt');
+  }
+  // Paket A: Bedürfnis-Bremse — Vorhaben steht, Bedürfnis-Satz fliegt raus
+  if (vorhabenAktiv && benenntNurBeduerfnis(thought)) {
+    failures.push('wiederholung_beduerfnis');
+  }
 
   if (willMusing) {
     if (!musing) failures.push('musing_fehlt');
     else {
       if (wordCount(musing) > maxWordsMusing) failures.push('musing_lang');
       if (/\d/.test(musing)) failures.push('musing_zahl');
-      if (motivTreffer(musing, motive).length) failures.push('motive_motiv');
       if (maxSimilarity(musing, recentThoughts) >= jaccardMax) failures.push('musing_wiederholung');
     }
   }
@@ -153,6 +157,6 @@ function validateDecision(raw, opts = {}) {
 
 module.exports = {
   validateDecision, jaccard, maxSimilarity, wordCount, words,
-  hasCJK, englishHits, hasRecentExclamation, motivTreffer,
-  AKTIONSVERBEN, fremdesAktionsverb,
+  hasCJK, englishHits, hasRecentExclamation, beginntMitOrt, hatObjektEroeffnung,
+  benenntNurBeduerfnis,
 };

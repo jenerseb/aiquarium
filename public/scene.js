@@ -81,11 +81,20 @@ function placeOnPlanet(x, z, out = new THREE.Vector3()) {
   return out.set((x / r) * s * R, c * R, (z / r) * s * R);
 }
 
-// Objekt auf die Oberfläche setzen und nach oben ausrichten
+// Objekt auf die Oberfläche setzen und nach oben ausrichten (flache x,z-Welt: Deko)
 function aufOberflaeche(obj, x, z) {
   placeOnPlanet(x, z, _v);
   obj.position.copy(_v);
   obj.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), _v.clone().normalize());
+}
+
+// ... und dasselbe direkt aus 3D-Koordinaten (Engine sendet Kugelvektoren)
+function aufKugelVec(obj, x, y, z) {
+  _v.set(x, y, z);
+  const l = _v.length() || 1;
+  _v.multiplyScalar(R / l);
+  obj.position.copy(_v);
+  obj.quaternion.setFromUnitVectors(HOCH, _v.clone().normalize());
 }
 
 // ---------------------------------------------------------------- Orte
@@ -369,8 +378,8 @@ function syncOrte(entities) {
       scene.add(g);
       g.traverse((o) => { if (o.isMesh) { o.castShadow = true; o.receiveShadow = true; } });
     }
-    // e.x/e.z sind bereits Ankerkoordinaten (sichtbares Bauwerk, siehe config.js)
-    aufOberflaeche(g, e.x, e.z);
+    // e.x/e.y/e.z sind Anker-Koordinaten (sichtbares Bauwerk, siehe config.js)
+    aufKugelVec(g, e.x, e.y, e.z);
     // Schild folgt dem Entdeckungsgrad (? → Silhouette → Name), nicht der DB-Flagge
     const txt = e.label || null;
     if (g.userData.schildText !== txt) {
@@ -397,6 +406,7 @@ function syncOrte(entities) {
 }
 
 // ---------------------------------------------------------------- Figur
+const FIGUR_SKALA = 0.5;   // Figur ist halb so groß wie die Welt um sie herum
 const figur = new THREE.Group();
 const korperMat = new THREE.MeshStandardMaterial({ color: 0xd9c9a8, roughness: 0.85 });
 const korper = new THREE.Mesh(new THREE.CapsuleGeometry(1.15, 1.5, 8, 16), korperMat);
@@ -432,8 +442,8 @@ if (DEV) {
   scene.add(kegel);
 }
 
-// Dev-Grid (Taste G, nur ?mode=dev): Polarkoordinaten auf der Kugel — Ringe alle
-// 10 m mit Meter-Angabe, 12 Speichen mit Winkel. Zum Prüfen, wo was steht.
+// Dev-Grid (Taste G, nur ?mode=dev): Breiten- und Längenkreise der Kugel.
+// Zum Prüfen, wo was steht — funktioniert überall, nicht nur an der Polkappe.
 const gridGruppe = new THREE.Group();
 gridGruppe.visible = false;
 scene.add(gridGruppe);
@@ -441,28 +451,35 @@ let gridGebaut = false;
 function baueGrid() {
   const mat = new THREE.LineBasicMaterial({ color: 0x38bdf8, transparent: true, opacity: 0.3 });
   const pts = [];
-  const lift = (R + 0.4) / R;
-  const bahn = (x, z) => {
-    placeOnPlanet(x, z, _v);
-    return [_v.x * lift, _v.y * lift, _v.z * lift];
-  };
-  for (let r = 10; r <= 110; r += 10) {
-    for (let a = 0; a < 48; a += 1) {
-      const t0 = (a / 48) * Math.PI * 2, t1 = ((a + 1) / 48) * Math.PI * 2;
-      pts.push(...bahn(Math.cos(t0) * r, Math.sin(t0) * r), ...bahn(Math.cos(t1) * r, Math.sin(t1) * r));
+  const ring = (ptsArr) => { for (let i = 0; i < ptsArr.length - 1; i += 1) pts.push(...ptsArr[i], ...ptsArr[i + 1]); };
+  // Breitenkreise alle 15° (Paket A: verdoppelt, vorher 30°)
+  for (let b = -75; b <= 75; b += 15) {
+    const phi = (90 - b) * Math.PI / 180;
+    const kr = [];
+    for (let a = 0; a <= 48; a += 1) {
+      const t = (a / 48) * Math.PI * 2;
+      kr.push([Math.sin(phi) * Math.cos(t) * (R + 0.4), Math.cos(phi) * (R + 0.4), Math.sin(phi) * Math.sin(t) * (R + 0.4)]);
     }
-    const s = label(`${r} m`);
-    const p = bahn(r, 0);
-    s.position.set(p[0], p[1] + 1.2, p[2]);
+    ring(kr);
+    const s = label(`${b}°`);
+    const t0 = 0;
+    s.position.set(Math.sin(phi) * Math.cos(t0) * (R + 1.6), Math.cos(phi) * (R + 1.6) + 1.2, Math.sin(phi) * Math.sin(t0) * (R + 1.6));
     gridGruppe.add(s);
   }
-  for (let k = 0; k < 12; k += 1) {
-    const t = (k / 12) * Math.PI * 2;
-    pts.push(...bahn(Math.cos(t) * 10, Math.sin(t) * 10), ...bahn(Math.cos(t) * 110, Math.sin(t) * 110));
-    const s = label(`${k * 30}°`);
-    const p = bahn(Math.cos(t) * 114, Math.sin(t) * 114);
-    s.position.set(p[0], p[1] + 1.2, p[2]);
-    gridGruppe.add(s);
+  // Längenkreise alle 15° (Paket A: verdoppelt, vorher 30°) — beschriftet weiter jeder zweite
+  for (let k = 0; k < 24; k += 1) {
+    const t = (k / 24) * Math.PI * 2;
+    const kr = [];
+    for (let a = 0; a <= 48; a += 1) {
+      const phi = (a / 48) * Math.PI;
+      kr.push([Math.sin(phi) * Math.cos(t) * (R + 0.4), Math.cos(phi) * (R + 0.4), Math.sin(phi) * Math.sin(t) * (R + 0.4)]);
+    }
+    ring(kr);
+    if (k % 2 === 0) {
+      const s = label(`${k * 15}°`);
+      s.position.set(Math.cos(t) * (R + 1.6), (R + 1.6) + 1.2, Math.sin(t) * (R + 1.6));
+      gridGruppe.add(s);
+    }
   }
   const geo = new THREE.BufferGeometry();
   geo.setAttribute('position', new THREE.Float32BufferAttribute(pts, 3));
@@ -607,11 +624,40 @@ renderer.domElement.addEventListener('wheel', (e) => {
 // ---------------------------------------------------------------- Daten
 let letzterState = null;
 let letzterGedanke = null;
-const zielXZ = { x: 0, z: 0 };   // wohin die Figur laufen soll
-const istXZ = { x: 0, z: 0 };    // wo sie gerade ist
+const zielP = { x: 0, y: R, z: 0 };   // wohin die Figur laufen soll (Kugelpunkt)
+const istP = { x: 0, y: R, z: 0 };    // wo sie gerade ist
 let laeuft = false;
 let ersterSync = true;           // beim ersten Paket nicht von (0,0) loslaufen
 let letzterPilot = null;         // Name+Zyklus, um einen Respawn zu erkennen
+
+// Treiber (Paket K, gebaut): p.treiber kommt live aus der Engine.
+function treiberAnzeigen(p) {
+  const box = document.getElementById('treiber');
+  const t = (p && p.treiber) || null;
+  if (box) box.classList.toggle('lebt', !!t);
+  const defs = [
+    ['hunger', 0, 100], ['thermo', -100, 100], ['drang', -100, 100], ['halt', 0, 100],
+  ];
+  for (const [f, lo, hi] of defs) {
+    const v = t ? t[f] : null;
+    const balken = document.getElementById(`b-${f}`);
+    const zahl = document.getElementById(`n-${f}`);
+    if (balken) balken.style.width = (v == null ? 0 : ((v - lo) / (hi - lo)) * 100) + '%';
+    if (zahl) zahl.textContent = v == null ? '–'
+      : ((v > 0 && lo < 0 ? '+' : '') + (Math.round(v * 10) / 10).toFixed(1));
+  }
+}
+
+// Inventar: links als Liste mit Fund-Tick (älteste zuerst).
+function inventarAnzeigen(liste) {
+  const ul = document.getElementById('inventar-liste');
+  if (!ul) return;
+  const escInv = (x) => String(x).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  const items = Array.isArray(liste) ? liste : [];
+  ul.innerHTML = items.length
+    ? items.map((f) => `<li><span class="tick">T${f.tick}</span><span>${escInv(String((f && f.text) || (f && f.id) || '?'))}</span></li>`).join('')
+    : '<li class="leer">Noch nichts gefunden.</li>';
+}
 
 function zeichneHud(s) {
   const p = s.pilot;
@@ -621,6 +667,7 @@ function zeichneHud(s) {
     `<b>${p.name}</b> · Zyklus ${p.cycle_num} · Tag ${c.day} · seit ${h}`;
   const hinweise = [`Tick ${s.world.tick}`, AKTION[p.current_action] || p.current_action];
   if (s.speed && s.speed > 1) hinweise.push(`×${s.speed} Zeit`);
+  if (p.mania) hinweise.push('MANIE');
   if (p.mind_state !== 'klar') hinweise.push(p.mind_state.toUpperCase());
   if (p.status === 'dead') hinweise.push('TOT');
   if (s.stale) hinweise.push(`Modell still (${s.staleMinutes} min)`);
@@ -628,28 +675,28 @@ function zeichneHud(s) {
     .map((t) => (/^[A-Z]{3,}|Modell/.test(t) ? `<span class="warn">${t}</span>` : t))
     .join(' · ');
 
-  document.getElementById('b-hunger').style.width = p.hunger + '%';
-  document.getElementById('b-exhaustion').style.width = p.exhaustion + '%';
-  document.getElementById('b-stress').style.width = p.stress + '%';
-  document.getElementById('n-hunger').textContent = (Math.round(p.hunger * 10) / 10).toFixed(1);
-  document.getElementById('n-exhaustion').textContent = (Math.round(p.exhaustion * 10) / 10).toFixed(1);
-  document.getElementById('n-stress').textContent = (Math.round(p.stress * 10) / 10).toFixed(1);
+  document.getElementById('b-body').style.width = p.body + '%';
+  document.getElementById('b-psyche').style.width = ((p.psyche + 100) / 2) + '%';
+  document.getElementById('n-body').textContent = (Math.round(p.body * 10) / 10).toFixed(1);
+  const psy = Math.round(p.psyche * 10) / 10;
+  document.getElementById('n-psyche').textContent = (psy > 0 ? '+' : '') + psy.toFixed(1);
+  treiberAnzeigen(p);
+  inventarAnzeigen(s.inventar);
   if (DEV) devWerteSpiegeln(p);
 
   korperMat.color.setHSL(((p.accent_hue || 200) / 360) * 0.35 + 0.09, 0.35, 0.72);
   const neuerPilot = letzterPilot && (letzterPilot.name !== p.name || letzterPilot.cycle !== p.cycle_num);
   letzterPilot = { name: p.name, cycle: p.cycle_num };
-  zielXZ.x = p.x; zielXZ.z = p.z;
-  if (neuerPilot) { istXZ.x = p.x; istXZ.z = p.z; }   // Nachfolger erscheint am Startpunkt, kein Gleiten
+  zielP.x = p.x; zielP.y = p.y; zielP.z = p.z;
+  if (neuerPilot) { istP.x = p.x; istP.y = p.y; istP.z = p.z; }   // Nachfolger erscheint am Startpunkt, kein Gleiten
   if (ersterSync) {
     // Beim Laden steht die Figur schon da, wo die Engine sie hat — kein Wanderlauf
-    istXZ.x = p.x;
-    istXZ.z = p.z;
+    istP.x = p.x; istP.y = p.y; istP.z = p.z;
     ersterSync = false;
   }
   figur.visible = p.status !== 'dead';
   grab.visible = p.status === 'dead';
-  aufOberflaeche(grab, p.x, p.z);
+  aufKugelVec(grab, p.x, p.y, p.z);
 }
 
 const AKTION = {
@@ -657,10 +704,11 @@ const AKTION = {
   search_wrack: 'durchwühlt das Wrack', read_note: 'liest den Zettel', check_stock: 'prüft den Vorrat',
   tend_dome: 'pflegt das Beet', call_bake: 'sendet einen Notruf',
   streifen: 'streift umher', sinnieren: 'sinnt vor sich hin',
-  look_earth: 'schaut zur Erde', dig: 'gräbt', run_wild: 'rennt', idle: 'steht',
+  look_earth: 'schaut zur Erde', dig: 'gräbt', run_wild: 'rennt',
+  hide_capsule: 'flüchtet in die Kapsel', idle: 'steht',
 };
 
-const NAMEN = { hunger: 'Hunger', heatstroke: 'Hitzschlag' };
+const NAMEN = { body: 'Körper' };
 function feedText(e) {
   let t = {};
   try { t = JSON.parse(e.payload_json); } catch { /* egal */ }
@@ -673,6 +721,7 @@ function feedText(e) {
     case 'find': return `Fund: ${t.text || 'Schrott'}`;
     case 'note': return `Zettel: „${t.text}“`;
     case 'bake': return 'Notruf gesendet — nur Rauschen.';
+    case 'reboot': return `Bruchpilot OS: System-Neustart nach ${t.minuten} Minuten Kälteschlaf — Filmriss.`;
     case 'mind': return `Zustand: ${t.state}`;
     case 'belief': return `Gelernt: ${t.text}`;
     default: return e.type;
@@ -743,13 +792,16 @@ const KURZ = {
 function dbgText(e) {
   let t = {};
   try { t = JSON.parse(e.payload_json); } catch { /* egal */ }
+  const esc = (x) => String(x).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
   const z = `<span class="t">${e.tick}</span>`;
+  const tempo = (typeof t.ms === 'number' && typeof t.versuche === 'number')
+    ? ` · ${Math.round(t.ms)}ms/${t.versuche}V` : '';
   switch (e.type) {
     case 'decision':
       return `${z} → <b>${KURZ[t.action] || t.action}</b>`
         + (t.target ? ` @ ${t.target}` : '')
         + (t.dur ? ` · ${t.dur}s` : '')
-        + ` · ${t.source}${t.source === 'fallback' ? ' <span class="w">(Ersatz)</span>' : ''}`
+        + ` · ${t.source}${t.source === 'fallback' ? ' <span class="w">(Ersatz)</span>' : ''}${tempo}`
         + ` · Auswahl ${t.auswahl}`
         + (t.source === 'model' ? ` [${(t.whitelist || []).join(', ')}]` : '')
         + (typeof t.hunger === 'number'
@@ -761,7 +813,9 @@ function dbgText(e) {
         + (typeof t.stress_delta === 'number'
           ? ` · Stress ${t.stress_delta > 0 ? '+' : ''}${Math.round(t.stress_delta * 10) / 10}` : '');
     case 'stale':
-      return `${z} <span class="w">Modell still</span>: ${t.reason || ''}`;
+      return `${z} <span class="w">Modell still</span>: ${t.reason || ''}`
+        + (t.failures ? ` [${t.failures.join(',')}]` : '') + tempo
+        + (t.roh ? `<br>↳ <code>${esc(t.roh)}</code>` : '');
     case 'mind':
       return `${z} ~ Zustand: <b>${t.state}</b>`;
     case 'belief':
@@ -807,27 +861,35 @@ async function dbgHole() {
 }
 
 // --- Dev: Werte-Slider und Zeitfaktor -------------------------------------
-const slider = { hunger: null, exhaustion: null, stress: null };
+// Paket K: alle sechs Werte (Kerne + Treiber) per Schieber setzbar.
+const slider = { body: null, psyche: null, hunger: null, thermo: null, drang: null, halt: null };
 let sliderAktiv = false;
+
+function treiberWert(p, f) {
+  if (f === 'body' || f === 'psyche') return p[f];
+  return p.treiber ? p.treiber[f] : null;
+}
 
 function devWerteSpiegeln(p) {
   if (sliderAktiv) return;
-  for (const f of ['hunger', 'exhaustion', 'stress']) {
+  for (const f of ['body', 'psyche', 'hunger', 'thermo', 'drang', 'halt']) {
     const el = document.getElementById(`s-${f}`);
     if (!el) continue;
-    el.value = Math.round(p[f]);
-    document.getElementById(`v-${f}`).textContent = Math.round(p[f]);
+    const v = treiberWert(p, f);
+    if (v == null) continue;
+    el.value = Math.round(v);
+    document.getElementById(`v-${f}`).textContent = Math.round(v);
   }
 }
 
 function devSetzen() {
-  const q = ['hunger', 'exhaustion', 'stress']
+  const q = ['body', 'psyche', 'hunger', 'thermo', 'drang', 'halt']
     .map((f) => `${f}=${document.getElementById(`s-${f}`).value}`).join('&');
   fetch(`/api/dev/set?${q}`).catch(() => {});
 }
 
 if (DEV) {
-  for (const f of ['hunger', 'exhaustion', 'stress']) {
+  for (const f of ['body', 'psyche', 'hunger', 'thermo', 'drang', 'halt']) {
     const el = document.getElementById(`s-${f}`);
     if (!el) continue;
     el.addEventListener('pointerdown', () => { sliderAktiv = true; });
@@ -869,32 +931,34 @@ function tick() {
   const dt = Math.min(uhr.getDelta(), 0.1);
   const t = uhr.elapsedTime;
 
-  // Figur weich zum Ziel bewegen
-  const dx = zielXZ.x - istXZ.x;
-  const dz = zielXZ.z - istXZ.z;
-  const weg = Math.hypot(dx, dz);
+  // Figur weich zum Ziel bewegen (Sehne, danach auf die Kugel zurück)
+  const dx = zielP.x - istP.x;
+  const dy = zielP.y - istP.y;
+  const dz = zielP.z - istP.z;
+  const weg = Math.hypot(dx, dy, dz);
   if (weg > 80) {
     // Nur bei unmöglichen Sprüngen (Datenfehler) hart setzen
-    istXZ.x = zielXZ.x;
-    istXZ.z = zielXZ.z;
+    istP.x = zielP.x; istP.y = zielP.y; istP.z = zielP.z;
     laeuft = false;
   } else if (weg > 0.05) {
     const schritt = Math.min(weg, dt * 3.5);
-    istXZ.x += (dx / weg) * schritt;
-    istXZ.z += (dz / weg) * schritt;
+    istP.x += (dx / weg) * schritt;
+    istP.y += (dy / weg) * schritt;
+    istP.z += (dz / weg) * schritt;
+    const nl = Math.hypot(istP.x, istP.y, istP.z) || 1;
+    istP.x = (istP.x / nl) * R; istP.y = (istP.y / nl) * R; istP.z = (istP.z / nl) * R;
     laeuft = true;
   } else {
     laeuft = false;
   }
 
-  placeOnPlanet(istXZ.x, istXZ.z, _v);
-  figur.position.copy(_v);
-  const normal = _v.clone().normalize();
+  figur.position.set(istP.x, istP.y, istP.z);
+  const normal = _v.set(istP.x, istP.y, istP.z).normalize().clone();
   // Figur schaut in Engine-Blickrichtung: Beim Hinlaufen zum Ziel gedreht,
   // beim Handeln davor stehen geblieben — sie schaut an, womit sie interagiert
   const hFig = letzterState && letzterState.pilot ? letzterState.pilot.heading : null;
-  if (hFig != null) {
-    _fwd.set(Math.sin(hFig), 0, Math.cos(hFig));
+  if (Array.isArray(hFig)) {
+    _fwd.set(hFig[0], hFig[1], hFig[2]);
     _fwd.addScaledVector(normal, -_fwd.dot(normal));
     if (_fwd.lengthSq() > 1e-6) _blick.lerp(_fwd.normalize(), Math.min(1, dt * 4)).normalize();
   }
@@ -912,16 +976,16 @@ function tick() {
     w.gruppe.quaternion.setFromUnitVectors(HOCH, _wolkN);
   }
 
-  // Dev-Sichtkegel an Figur + Engine-Heading hängen (Paket I)
+  // Kegel an Figur + Engine-Heading hängen (Vektor, keine Gradzahl)
   if (kegel) {
     syncKegel(letzterState && letzterState.sicht);
     const h = letzterState && letzterState.pilot ? letzterState.pilot.heading : null;
-    if (h == null || mode === 'planet') {
+    if (!Array.isArray(h) || mode === 'planet') {
       kegel.visible = false;
     } else {
       kegel.visible = true;
       kegel.position.copy(figur.position).addScaledVector(normal, 0.4);
-      _fwd.set(Math.sin(h), 0, Math.cos(h));
+      _fwd.set(h[0], h[1], h[2]);
       _fwd.addScaledVector(normal, -_fwd.dot(normal));
       if (_fwd.lengthSq() < 1e-6) _fwd.set(0, 0, 1);
       _fwd.normalize();
@@ -938,7 +1002,11 @@ function tick() {
   const f = laeuft ? 9 : (handelt ? 3.4 : 2.2);
   const amp = laeuft ? 0.12 : (handelt ? 0.07 : 0.04);
   const w = Math.sin(t * f);
-  figur.scale.set(1 - w * amp * 0.6, 1 + w * amp, 1 - w * amp * 0.6);
+  figur.scale.set(
+    (1 - w * amp * 0.6) * FIGUR_SKALA,
+    (1 + w * amp) * FIGUR_SKALA,
+    (1 - w * amp * 0.6) * FIGUR_SKALA,
+  );
   const rollAmp = laeuft ? 0.10 : (handelt ? 0.07 : 0.015);
   _rolle.setFromAxisAngle(_vorwaerts, Math.sin(t * f * 0.5 + 1) * rollAmp);
   figur.quaternion.multiply(_rolle);
@@ -984,7 +1052,7 @@ function tick() {
 
   // Sprechblase an den Kopf projizieren
   if (letzterGedanke && figur.visible && mode !== 'planet') {
-    kopfWelt.copy(figur.position).addScaledVector(normal, 5.6);
+    kopfWelt.copy(figur.position).addScaledVector(normal, 5.6 * FIGUR_SKALA);
     blick.copy(kopfWelt).project(camera);
     const sichtbar = blick.z < 1;
     const x = (blick.x * 0.5 + 0.5) * innerWidth;
@@ -1019,11 +1087,11 @@ window.__aq = {
   get mode() { return mode; },
   get cam() { return { ...cam }; },
   get figur() { return figur.position.toArray(); },
-  get istXZ() { return { ...istXZ }; },
-  get zielXZ() { return { ...zielXZ }; },
+  get istP() { return { ...istP }; },
+  get zielP() { return { ...zielP }; },
   get orte() { return orte.size; },
   // Nur für Tests: Ziel von Hand setzen, um das Nachziehen zu prüfen
-  setZiel(x, z) { zielXZ.x = x; zielXZ.z = z; },
+  setZiel(x, y, z) { zielP.x = x; zielP.y = y; zielP.z = z; },
   stopStream() { es.close(); },
   get renderer() { return renderer.info.render; },
 };

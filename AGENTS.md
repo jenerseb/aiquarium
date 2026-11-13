@@ -25,7 +25,7 @@ Kurz und verbindlich. Bei Konflikt gilt diese Datei, nicht der Sprachgebrauch.
 
 ## Qualität
 
-- Vor jedem Commit: `npm test` (52 Tests, alle grün) und `npm run check`.
+- Vor jedem Commit: `npm test` (79 Tests, alle grün) und `npm run check`.
 - Neue Regel = neuer Test. Kein Feature ohne Test, das im Vault-Plan als Pflicht markiert ist.
 - Zahlen (Verbrauch, Schwellen) nur in `src/config.js`.
 - Keine stillen Fehler: Modellfehler werden geloggt und im Zustand sichtbar gemacht.

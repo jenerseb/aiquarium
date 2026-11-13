@@ -1,12 +1,12 @@
 'use strict';
 // Prompt-Bau: Wesen (Gewichte), Körpergefühl, Glaube, Objekte, Whitelist, Musings.
-const { ACTIONS, STRESS, NOVELTY, VAGUE_HINTS, sichtStufe, richtungWort, ankerPos } = require('./config');
+const { ACTIONS, PSYCHE, NOVELTY, VAGUE_HINTS, dist3, sichtStufe, richtungWort, ankerPos } = require('./config');
 
 const INSTINCTS = [
-  'Sitzen hilft nur, wenn du erschöpft bist. Bist du ausgeruht, wird dir langweilig und der Stress steigt.',
-  'Stille und unregelmäßiges Klopfen treiben deinen Stress hoch. Etwas Neues senkt ihn.',
-  'Ab Hunger 60 denkst du an wenig anderes; ab 80 nur noch ans Fressen.',
-  'Ab Erschöpfung 70 wird jeder Schritt doppelt so teuer.',
+  'Sitzen hilft nur, wenn der Körper Ruhe braucht. Bist du fit, wird dir langweilig und die Stimmung sinkt.',
+  'Stille und unregelmäßiges Klopfen ziehen dich runter. Etwas Neues hebt dich.',
+  'Bei leerem Körper denkst du an wenig anderes; unter 25 nur noch ans Fressen.',
+  'Jeder Schritt kostet Körper; wer rennt, zahlt anderthalb.',
   'Dreimal dieselbe Handlung hintereinander macht dich gereizt.',
   'Ordnung beruhigt dich: etwas an seinen Platz legen hilft.',
   'Geräusche im Funk machen dich neugierig, nicht ängstlich.',
@@ -14,9 +14,9 @@ const INSTINCTS = [
   'Du sammelst, was klein ist und in eine Tasche passt.',
   'Wenn du lange allein bist, redest du mit Gegenständen.',
   'Du magst die Kapsel, weil sie schattig ist, nicht weil sie sicher ist.',
-  'Wenn der Stress steigt, zählst du Dinge: Muttern, Schritte, Atemzüge.',
+  'Wenn die Stimmung sinkt, zählst du Dinge: Muttern, Schritte, Atemzüge.',
   'Die Erde am Himmel ist für dich kein Ort, sondern ein Versprechen.',
-  'Du isst, wenn du Futter siehst, nicht wenn du Hunger hast.',
+  'Du isst, wenn du Futter siehst, nicht erst wenn der Körper leer ist.',
   'Nach drei Fehlversuchen gibst du auf — aber erst nach dem dritten.',
 ];
 
@@ -31,44 +31,51 @@ const OBJECT_HINTS = {
   bake: 'Eine Notfunkbake. Sie rauscht nur.',
 };
 
-// Motive, die sich in Gedanken zu leicht wiederholen
-const MOTIVE = ['kopf', 'erde', 'schatten', 'wrack', 'glänzt', 'leicht', 'schwer',
-  'bauch', 'öl', 'blau', 'still', 'kalt'];
-
-// Werte -> Körpersprache. Hoch = schlecht.
+// Körpergefühl in Worten: Körper (0..100, hoch = gut), Psyche (-100..+100).
+// Paket K: Treiber-Symptome — der Pilot spürt Hunger/Thermo/Drang/Halt,
+// nicht Zahlen. Keine Prozentwerte, keine Werte-Namen im Text.
 function sensory(pilot) {
   const out = [];
-  if (pilot.hunger > 80) out.push('Dein Magen brennt. Du schwankst beim Gehen.');
-  else if (pilot.hunger > 60) out.push('Dein Magen knurrt laut.');
-  else if (pilot.hunger > 40) out.push('Du hast Hunger, aber es ist auszuhalten.');
-  else out.push('Du hast keinen Hunger.');
+  if (pilot.body > 80) out.push('Du strotzt vor Kraft.');
+  else if (pilot.body > 60) out.push('Dein Körper trägt dich.');
+  else if (pilot.body > 40) out.push('Du spürst deine Beine.');
+  else if (pilot.body > 25) out.push('Jeder Schritt kostet dich.');
+  else out.push('Du schwankst. Dein Körper ist am Ende.');
 
-  if (pilot.exhaustion > 80) out.push('Deine Beine zittern. Du musst dich hinlegen.');
-  else if (pilot.exhaustion > 60) out.push('Deine Pfoten sind schwer wie Blei.');
-  else if (pilot.exhaustion > 40) out.push('Du bist ein wenig müde.');
-  else out.push('Du bist ausgeruht.');
+  const hunger = pilot.hunger ?? 15;
+  if (hunger > 80) out.push('Dein Bauch brennt vor Leere.');
+  else if (hunger > 50) out.push('Dein Magen knurrt.');
+  else if (hunger > 35) out.push('Du könntest etwas vertragen.');
 
-  if (pilot.stress > 80) out.push('Alles klingt zu laut. Du zählst schon wieder.');
-  else if (pilot.stress > 60) out.push('Du bist gereizt und müde im Kopf.');
-  else if (pilot.stress > 40) out.push('Etwas nagt an dir, du weißt nicht was.');
-  else out.push('Du bist ruhig und klar im Kopf.');
+  const thermo = pilot.thermo ?? 0;
+  if (thermo > 75) out.push('Die Hitze flimmert im Anzug.');
+  else if (thermo > 40) out.push('Dir ist zu warm.');
+  else if (thermo < -75) out.push('Die Kälte kriecht durch jede Naht.');
+  else if (thermo < -40) out.push('Du fröstelst.');
+
+  if (pilot.psyche > 60) out.push('Alles glänzt verheißungsvoll.');
+  else if (pilot.psyche > 20) out.push('Du bist guter Dinge.');
+  else if (pilot.psyche > -20) out.push('Du bist ruhig und klar im Kopf.');
+  else if (pilot.psyche > -60) out.push('Etwas nagt an dir, du weißt nicht was.');
+  else out.push('Alles ist grau und zu schwer.');
 
   return out.join(' ');
 }
 
 // Wann eine Aktion angeboten wird: nur wenn der Körper sie braucht.
+// Paket K: eat/sleep/sit_shade/look_earth lesen Treiber, nicht mehr body/psyche direkt.
 const AVAIL = {
-  eat: (p) => p.hunger > 25,
-  // Sitzen ist keine Freizeitbeschäftigung: erst wenn die Beine schwer sind
-  sit_shade: (p) => p.exhaustion > 35 || p.stress > 45,
-  sleep: (p) => p.exhaustion > 45 || p.stress > 55,
-  look_earth: (p) => p.stress > 30,
+  eat: (p) => (p.hunger ?? 15) > 45,
+  // Sitzen ist keine Freizeitbeschäftigung: erst wenn der Körper Ruhe braucht
+  sit_shade: (p) => p.body < 70 || (p.drang ?? 10) < -30 || (p.halt ?? 80) < 40,
+  sleep: (p) => p.body < 60 || (p.drang ?? 10) < -40 || (p.halt ?? 80) < 40,
+  look_earth: (p) => (p.halt ?? 80) < 60,
   inspect: () => true,
   dig: () => true,
   search_wrack: () => true,
-  read_note: (p) => p.stress > 35,
-  check_stock: (p) => p.hunger > 35,
-  tend_dome: (p) => p.hunger > 25 || p.stress > 40,
+  read_note: (p) => p.psyche < -15,
+  check_stock: (p) => p.body < 65,
+  tend_dome: (p) => p.body < 75 || p.psyche > 20,
   call_bake: () => true,   // die schlechte Option bleibt absichtlich wählbar
   streifen: () => true,    // ehrliche Alternative bei Langeweile: kostet Beine, bringt Neuigkeit
   sinnieren: () => true,   // freies Denken, jederzeit; Monotonie-Bremse fängt Spam
@@ -78,11 +85,29 @@ const RUHE = ['sit_shade', 'look_earth', 'sinnieren'];
 
 function whitelistFor(pilot, opts = {}) {
   const { recentActions = [] } = opts;
+  const manieAktiv = pilot.mania_until_tick != null;
   let list;
   if (pilot.mind_state === 'stupor') list = ['sit_shade', 'sleep'];
-  else if (pilot.mind_state === 'wahn') list = ['run_wild', 'sleep'];
-  else if (pilot.stress > STRESS.low) list = ['eat', 'sleep', 'sit_shade', 'inspect'];
-  else list = Object.keys(ACTIONS).filter((k) => k !== 'run_wild');
+  // Wahn: hide_capsule = Rückzug in die Kapsel (sicherer Ort, Gegenstück zum
+  // Wegrennen); run_wild = blind wegrennen. sleep bleibt als Notausgang.
+  // body-Verbrauch ×1,5 (Startwert, Spec 2026-11-13) steht in der Engine.
+  else if (pilot.mind_state === 'wahn') list = ['run_wild', 'hide_capsule', 'sleep'];
+  else if (pilot.psyche <= PSYCHE.low) list = ['eat', 'sleep', 'sit_shade', 'inspect'];
+  else list = Object.keys(ACTIONS).filter((k) => k !== 'run_wild' && k !== 'hide_capsule');
+
+  // Manie: alle Ruhe-Aktionen gesperrt (Gefahr der Selbsterschöpfung).
+  // Entschieden 2026-11-13: Manie hat höhere Prio als der Notfall-Instinkt —
+  // der Notfall sticht die Manie NICHT aus (Manie ist temporär, läuft aus).
+  // eat fliegt in der Manie ebenfalls raus — sonst kommt es über AVAIL wieder rein.
+  if (manieAktiv) {
+    list = list.filter((a) => a !== 'sleep' && a !== 'sit_shade' && a !== 'eat');
+  }
+
+  // Notfall-Instinkt: Bei fast leerem Körper durchbricht Überleben die Sperre —
+  // auch depressiv/stuporös wird noch gefressen. Gilt NICHT während Manie.
+  if (!manieAktiv && pilot.mind_state !== 'klar' && pilot.body < 25 && !list.includes('eat')) {
+    list = [...list, 'eat'];
+  }
 
   if (pilot.mind_state === 'klar') {
     const gefiltert = list.filter((a) => !AVAIL[a] || AVAIL[a](pilot));
@@ -105,10 +130,10 @@ function whitelistFor(pilot, opts = {}) {
 
     // Zickzack-Bremse: A,B,A,B in den letzten vier -> A setzt eine Runde aus.
     // Fängt das Pendel, das die Wiederholungs-Bremse erzeugt (sie sperrt nur B).
-    // Nicht im Notfall: Hunger/Exhaustion > 80 könnten sonst Fressen/Schlafen sperren.
+    // Nicht im Notfall: Bei fast leerem Körper könnten sonst Fressen/Schlafen sperren.
     const letzte4 = recentActions.slice(-4);
     if (letzte4.length === 4 && letzte4[0] === letzte4[2] && letzte4[1] === letzte4[3]
-        && letzte4[0] !== letzte4[1] && pilot.hunger <= 80 && pilot.exhaustion <= 80) {
+        && letzte4[0] !== letzte4[1] && pilot.body >= 20) {
       const ohneZick = list.filter((a) => a !== letzte4[0]);
       if (ohneZick.length) list = ohneZick;
     }
@@ -123,16 +148,10 @@ function whitelistFor(pilot, opts = {}) {
   return list.length ? list : ['sleep'];
 }
 
-// Welche Motive in den letzten Gedanken zu oft vorkamen
-function uebernutzteMotive(recentThoughts = [], grenze = 3) {
-  const text = recentThoughts.slice(0, 12).join(' ').toLowerCase();
-  return MOTIVE.filter((m) => (text.split(m).length - 1) >= grenze);
-}
-
 function nearbyObjects(pilot, entities, max = 5) {
   return entities
     .map((e) => ({ ...e, ...ankerPos(e) }))   // Entfernungen zum sichtbaren Bauwerk, nicht zum Logikpunkt
-    .map((e) => ({ ...e, dist: Math.hypot(e.pos_x - pilot.pos_x, e.pos_z - pilot.pos_z) }))
+    .map((e) => ({ ...e, dist: dist3(pilot, e) }))
     .map((e) => ({ ...e, stufe: sichtStufe(pilot, e) }))
     .filter((e) => e.stufe !== 'ungesehen')   // Paket I: Ungesehenes fehlt im Prompt
     .sort((a, b) => a.dist - b.dist)
@@ -142,10 +161,10 @@ function nearbyObjects(pilot, entities, max = 5) {
 // Richtung für einen freien Gedanken — nie den Text. Den schreibt das Modell.
 function waehleMusingThema(pilot) {
   const themen = [];
-  if (pilot.hunger > 55) themen.push('Erinnerung ans Essen: Kaffee, Kantine, Vorräte');
-  if (pilot.stress > 60) themen.push('Furcht: Klopfen, wer da draußen ist, das Alleinsein');
-  if (pilot.exhaustion > 55) themen.push('Müdigkeit: Schlafplätze, Träume, wie sich Wärme anfühlt');
-  if (pilot.stress < NOVELTY.boredBelow) {
+  if (pilot.body < 45) themen.push('Erinnerung ans Essen: Kaffee, Kantine, Vorräte');
+  if (pilot.psyche < -20) themen.push('Müdigkeit: Schlafplätze, Träume, wie sich Wärme anfühlt');
+  if (pilot.psyche < -40) themen.push('Furcht: Klopfen, wer da draußen ist, das Alleinsein');
+  if (pilot.psyche > -20) {
     themen.push('Neugier: was auf der Erde wohl gerade los ist');
     themen.push('Einsamkeit: lange keine Tiere mehr gesehen, wie es auf der Akademie war');
     themen.push('Handwerk: was man aus Schrott bauen könnte');
@@ -154,8 +173,21 @@ function waehleMusingThema(pilot) {
   return themen[Math.floor(Math.random() * themen.length)];
 }
 
+// Gedanken-Impulse (Paket B): stilistische Richtung pro Modellaufruf.
+// Gewichte in config.js, Texte hier — der Gedanke selbst bleibt Modell-Sache.
+const IMPULS_TEXTE = {
+  selbstgespraech: 'Stelle dir eine offene Frage oder sprich mit dir selbst, statt zu berichten.',
+  sinnlich: 'Beginne bei dem, was dein Körper gerade spürt: Geruch, Geräusch, Temperatur, Schwere.',
+  galgen: 'Nimm es mit trockenem Galgenhumor — aber bleib bei dem, was wirklich da ist.',
+  vorhaben: 'Richte den Gedanken auf das, was du gerade tust oder vorhast.',
+};
+function impulsText(id) {
+  return IMPULS_TEXTE[id] || IMPULS_TEXTE.vorhaben;
+}
+
 function buildPrompt(pilot, ctx = {}) {
-  const { entities = [], beliefs = [], whitelist = [], words = [], recentThoughts = [], musing = null, vorrat = null } = ctx;
+  const { entities = [], beliefs = [], whitelist = [], words = [], recentThoughts = [], musing = null, vorrat = null,
+    impuls = 'vorhaben', seit = true, vorhaben = null, weg = null } = ctx;
 
   // Paket I: Klare Orte mit Namen, Vermutete mit „Vermutung: …", Bemerkte nur
   // als „etwas Unbekanntes", Ungesehene fehlen (Filter oben)
@@ -177,14 +209,19 @@ function buildPrompt(pilot, ctx = {}) {
     : '- Noch nichts gelernt.';
 
   const wordLine = words.length ? words.join(', ') : 'keine';
-  const motive = uebernutzteMotive(recentThoughts);
-  const motivZeile = motive.length
-    ? `\nVermeide diese Wörter, sie kamen zuletzt zu oft: ${motive.join(', ')}.`
-    : '';
 
   const musingBlock = musing
     ? `\nZusatz: Du hast gerade einen freien Gedanken. Richtung: ${musing}.\nFormuliere ihn als zweiten, kurzen Satz (höchstens 10 Wörter) im Feld "musing".`
     : '\nLass "musing" weg.';
+
+  const impulsZeile = `\nImpuls: ${impulsText(impuls)}`;
+  const seitZeile = seit ? ''
+    : '\nSeit deinem letzten Gedanken ist nichts geschehen. Fang nicht mit einem Anblick an.';
+  // Paket A: Vorhaben + Weg — steht das Vorhaben, ist „ich muss etwas essen"
+  // erledigt. Erzähl, was auf dem Weg passiert.
+  const vorhabenZeile = vorhaben
+    ? `\n${vorhaben}${weg ? `\n${weg} Steht das Vorhaben, ist der Satz „ich muss etwas essen" erledigt — erzähl, was auf dem Weg passiert.` : ''}`
+    : '';
 
   return `Du bist ein rundliches Wesen im Raumanzug, gestrandet auf einem kleinen Mond. Du weißt nicht, was Prozentwerte sind, und sprichst nie in Zahlen.
 
@@ -192,7 +229,7 @@ Dein Wesen (unveränderlich):
 ${INSTINCTS.map((i) => `- ${i}`).join('\n')}
 
 Körpergefühl: ${sensory(pilot)}
-${vorrat ? `Vorratskontrolle vor ${vorrat.minuten} Minuten: dein Bauch reicht noch für etwa ${vorrat.stunden} Stunden.` : ''}
+${vorrat ? `Vorratskontrolle vor ${vorrat.minuten} Minuten: dein Bauch reicht noch für etwa ${vorrat.stunden} Stunden.` : ''}${vorhabenZeile}
 
 Was du über die Welt glaubst:
 ${beliefLine}
@@ -200,18 +237,18 @@ ${beliefLine}
 In deiner Nähe:
 ${nahBlock}
 
-Wörter, die dir nicht aus dem Kopf gehen: ${wordLine}${motivZeile}
+Wörter, die dir nicht aus dem Kopf gehen: ${wordLine}
 
 Verfügbare Aktionen: ${JSON.stringify(whitelist)}
 
-Schreibe den Gedanken so: erst was du siehst, dann was du fühlst, dann was du tun willst.
-Höchstens 14 Wörter, Deutsch, höchstens ein Ausrufezeichen, keine Emojis, keine Zahlen.${musingBlock}
+${impulsZeile}${seitZeile}
+Schreibe 1–2 Sätze, höchstens 20 Wörter, Deutsch, höchstens ein Ausrufezeichen, keine Emojis, keine Zahlen.${musingBlock}
 
 Antworte STRIKT in diesem JSON, nichts davor, nichts danach:
 {"action": "eine der Aktionen", "thought": "dein Gedanke"${musing ? ', "musing": "dein freier Gedanke"' : ''}}`;
 }
 
 module.exports = {
-  INSTINCTS, OBJECT_HINTS, MOTIVE, AVAIL, sensory, whitelistFor,
-  nearbyObjects, buildPrompt, uebernutzteMotive, waehleMusingThema,
+  INSTINCTS, OBJECT_HINTS, AVAIL, sensory, whitelistFor,
+  nearbyObjects, buildPrompt, waehleMusingThema, impulsText, IMPULS_TEXTE,
 };

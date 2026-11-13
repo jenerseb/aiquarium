@@ -80,15 +80,15 @@ Debug-Log liest `/api/debug` alle zwei Sekunden — der normale Live-Strom bleib
 
 Im Panel rechts unten:
 
-- **Drei Schieber** für Hunger, Erschöpfung und Stress (0–100). Sie setzen den Wert sofort und schreiben ein `dev_set`-Ereignis ins Log.
+- **Sechs Schieber** für Körper (0–100), Psyche (−100…+100) und die vier Treiber Hunger (0–100), Temperatur (−100…+100), Drang (−100…+100), Halt (0–100). Sie setzen den Wert sofort und schreiben ein `dev_set`-Ereignis ins Log.
 - **Zeitraffer** `×1 / ×3 / ×10`: Die Simulationsuhr läuft schneller, alle Aktionen und Bedürfnisse entsprechend auch. Der aktuelle Faktor steht in der Kopfzeile.
 - Jede Entscheidung erscheint mit Aktion, Ziel, Dauer, Auswahlmenü, Werten und Gedanken im gestrichelten Debug-Rahmen.
-- **Taste `G`**: Koordinaten-Grid (Ringe alle 10 m, Speichen alle 30°) auf dem Planeten ein/aus — zum Prüfen, wo Orte und Figur stehen.
+- **Taste `G`**: Kugel-Grid (Breiten-/Längenkreise alle 15°) ein/aus — zum Prüfen, wo Orte und Figur stehen.
 
 Nur von `127.0.0.1` erreichbar; von außen antworten die Endpunkte mit 403:
 
 ```
-curl "http://127.0.0.1:3077/api/dev/set?stress=80"
+curl "http://127.0.0.1:3077/api/dev/set?body=40&psyche=-30"
 curl "http://127.0.0.1:3077/api/dev/speed?x=10"
 ```
 
@@ -102,13 +102,13 @@ Beim Start lässt sich der Faktor auch per Umgebung setzen: `AIQUARIUM_SPEED=10 
 | `EADDRINUSE` | Port belegt: `PORT=3080 node src/server.js` |
 | Figur steht still | normal während einer Aktion (Aktionen haben Dauer); im Debug-Log steht, was läuft und wann sie endet |
 | Alles zurücksetzen | Datenbank-Datei löschen (Historie weg), Server neu starten |
-| Werte sehen verkehrt aus (Futter statt Hunger) | Alte Datenbank von vor der Wertumkehr: Datei löschen. Die Migration dreht alte Werte, aber alte Glaubenssätze sind inhaltlich falsch und werden verworfen |
+| Werte sehen verkehrt aus (Futter statt Körper) | Alte Datenbank von vor dem Werte-Rework: wird beim Öffnen automatisch auf Körper/Psyche abgebildet; alte Glaubenssätze werden dabei verworfen |
 | `node -v` zu alt | Node ≥ 22.5 nötig, sonst fehlt `node:sqlite` |
 
 ## Tests
 
 ```
 cd "<Vault>/Seb Privat Stuff/aiquarium/app"
-npm test          # 52 Tests
+npm test          # 71 Tests
 npm run check     # Syntaxprüfung aller Module
 ```

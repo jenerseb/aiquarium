@@ -1,6 +1,6 @@
 'use strict';
 // Datenbank: node:sqlite (in Node 22+ eingebaut), keine nativen Abhängigkeiten.
-// Werte sind "hoch = schlecht": hunger, exhaustion, stress.
+// Zwei Kernwerte: body (0..100, hoch = gut) und psyche (-100..+100).
 const { DatabaseSync } = require('node:sqlite');
 const fs = require('node:fs');
 const path = require('node:path');
@@ -23,11 +23,19 @@ CREATE TABLE IF NOT EXISTS pilots (
   name TEXT NOT NULL,
   status TEXT DEFAULT 'alive',
   mind_state TEXT DEFAULT 'klar',
-  hunger REAL DEFAULT 30.0,
-  exhaustion REAL DEFAULT 20.0,
-  stress REAL DEFAULT 25.0,
+  body REAL DEFAULT 100.0,
+  psyche REAL DEFAULT 0.0,
+  hunger REAL DEFAULT 15.0,
+  thermo REAL DEFAULT 0.0,
+  drang REAL DEFAULT 10.0,
+  halt REAL DEFAULT 80.0,
   pos_x REAL DEFAULT 0.0,
+  pos_y REAL DEFAULT 120.0,
   pos_z REAL DEFAULT 0.0,
+  heading_x REAL,
+  heading_y REAL,
+  heading_z REAL,
+  mania_until_tick INTEGER,
   accent_hue INTEGER DEFAULT 200,
   current_action TEXT DEFAULT 'idle',
   action_started_tick INTEGER DEFAULT 0,
@@ -38,7 +46,8 @@ CREATE TABLE IF NOT EXISTS pilots (
   epitaph TEXT,
   created_tick INTEGER DEFAULT 0,
   died_tick INTEGER,
-  stress_at_start REAL
+  psyche_at_start REAL,
+  vorhaben_json TEXT DEFAULT ''
 );
 
 CREATE TABLE IF NOT EXISTS pilot_mind (
@@ -47,10 +56,10 @@ CREATE TABLE IF NOT EXISTS pilot_mind (
   layer TEXT NOT NULL,
   action_key TEXT,
   times_borne_out INTEGER DEFAULT 1,
-  avg_stress_delta REAL DEFAULT 0.0,
+  avg_psyche_delta REAL DEFAULT 0.0,
   belief_text TEXT NOT NULL,
   is_locked INTEGER DEFAULT 0,
-  needs_text INTEGER DEFAULT 0,
+  needs_text INTEGER DEFAULT 1,
   text_attempts INTEGER DEFAULT 0
 );
 
@@ -58,7 +67,7 @@ CREATE TABLE IF NOT EXISTS world_entities (
   id TEXT PRIMARY KEY,
   type TEXT NOT NULL,
   name TEXT NOT NULL,
-  pos_x REAL, pos_z REAL,
+  pos_x REAL, pos_y REAL, pos_z REAL,
   physics_traits_json TEXT,
   visual_kit_preset TEXT,
   unfinished_thought TEXT,
@@ -115,7 +124,7 @@ function open(file) {
   const db = new DatabaseSync(file);
   db.exec('PRAGMA journal_mode = WAL;');
   db.exec('PRAGMA foreign_keys = ON;');
-  migrateAlteWerte(db);      // muss vor dem Schema laufen: alte Spalten umbenennen
+  migrateAlteWerte(db);      // muss vor dem Schema laufen: alte Werte auf Körper/Psyche abbilden
   db.exec(SCHEMA);
   migrate(db);
   seed(db);
@@ -128,29 +137,41 @@ function migrateAlteWerte(db) {
   const tabellen = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='pilots'").all();
   if (!tabellen.length) return;
   const haben = new Set(db.prepare('PRAGMA table_info(pilots)').all().map((r) => r.name));
-  const paare = [['food', 'hunger'], ['energy', 'exhaustion'], ['sanity', 'stress'],
-    ['sanity_at_start', 'stress_at_start']];
-  const alt = paare.some(([a]) => haben.has(a));
+  const altSpalten = ['food', 'energy', 'sanity'];
+  const alt = altSpalten.some((a) => haben.has(a));
   if (!alt) return;
 
-  for (const [a, n] of paare) {
-    if (haben.has(a) && !haben.has(n)) db.exec(`ALTER TABLE pilots RENAME COLUMN ${a} TO ${n}`);
-  }
-  // Werte drehen: 100 - alt. Startzustand entsprechend neu setzen.
+  // Alte Drei-Werte-Welt (food/energy/sanity, hoch = gut) auf Körper/Psyche abbilden:
+  // Körper = was vom Leib ist (100 minus der schlechteste alte Verbrauch),
+  // Psyche = alte Ausgeglichenheit, linear auf -100..+100 gestreckt.
+  // Danach alte Spalten entfernen.
+  if (!haben.has('body')) db.exec('ALTER TABLE pilots ADD COLUMN body REAL NOT NULL DEFAULT 100');
+  if (!haben.has('psyche')) db.exec('ALTER TABLE pilots ADD COLUMN psyche REAL NOT NULL DEFAULT 0');
   db.exec(`UPDATE pilots SET
-    hunger = ${100} - hunger,
-    exhaustion = ${100} - exhaustion,
-    stress = ${100} - stress`);
-  if (haben.has('stress_at_start')) {
-    db.exec('UPDATE pilots SET stress_at_start = 100 - stress_at_start WHERE stress_at_start IS NOT NULL');
+    body = 100 - CASE
+      WHEN food IS NULL AND energy IS NULL THEN 0
+      ELSE max(COALESCE(food, 0), COALESCE(energy, 0)) END,
+    psyche = CASE
+      WHEN sanity IS NULL THEN 0
+      ELSE 2 * sanity - 100 END
+    WHERE food IS NOT NULL OR energy IS NOT NULL OR sanity IS NOT NULL`);
+  for (const a of [...altSpalten, 'sanity_at_start']) {
+    if (haben.has(a)) db.exec(`ALTER TABLE pilots DROP COLUMN ${a}`);
+  }
+  // hunger/exhaustion/stress aus einer Zwischenversion ebenfalls entfernen
+  const danach = new Set(db.prepare('PRAGMA table_info(pilots)').all().map((r) => r.name));
+  for (const a of ['hunger', 'exhaustion', 'stress', 'stress_at_start']) {
+    if (danach.has(a)) db.exec(`ALTER TABLE pilots DROP COLUMN ${a}`);
   }
 
   // Beliefs sind inhaltlich falsch geworden (Stress war Nerven) — neu lernen lassen
   const mindTab = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='pilot_mind'").all();
   if (mindTab.length) {
     const mind = db.prepare('PRAGMA table_info(pilot_mind)').all().map((r) => r.name);
-    if (mind.includes('avg_sanity_delta') && !mind.includes('avg_stress_delta')) {
-      db.exec('ALTER TABLE pilot_mind RENAME COLUMN avg_sanity_delta TO avg_stress_delta');
+    if (mind.includes('avg_sanity_delta') && !mind.includes('avg_psyche_delta')) {
+      db.exec('ALTER TABLE pilot_mind RENAME COLUMN avg_sanity_delta TO avg_psyche_delta');
+    } else if (mind.includes('avg_stress_delta') && !mind.includes('avg_psyche_delta')) {
+      db.exec('ALTER TABLE pilot_mind RENAME COLUMN avg_stress_delta TO avg_psyche_delta');
     }
     db.exec("DELETE FROM pilot_mind WHERE layer = 'somatic_theory'");
   }
@@ -163,19 +184,73 @@ function migrate(db) {
   // Welche Orte er gerade berührt: muss den Tick überleben, sonst zählt jeder Tick als Ankunft
   if (!cols('pilots').has('near_json')) db.exec("ALTER TABLE pilots ADD COLUMN near_json TEXT DEFAULT ''");
 
+  // Paket A: aktives Vorhaben als JSON (Ziel, Grund, seit wann) — überlebt Ticks,
+  // wird nicht bei bloßem Aktionswechsel gelöscht
+  if (!cols('pilots').has('vorhaben_json')) db.exec("ALTER TABLE pilots ADD COLUMN vorhaben_json TEXT DEFAULT ''");
+
   const w = cols('world_state');
   if (!w.has('last_novelty_tick')) db.exec('ALTER TABLE world_state ADD COLUMN last_novelty_tick INTEGER DEFAULT 0');
 
+  // Paket K: hunger/exhaustion/stress -> body/psyche, Positionen -> 3D, Blick -> Vektor
   const p = cols('pilots');
-  if (!p.has('stress_at_start')) db.exec('ALTER TABLE pilots ADD COLUMN stress_at_start REAL');
-  if (!p.has('heading')) db.exec('ALTER TABLE pilots ADD COLUMN heading REAL');
+  if (!p.has('body')) {
+    db.exec('ALTER TABLE pilots ADD COLUMN body REAL DEFAULT 100.0');
+    db.exec('ALTER TABLE pilots ADD COLUMN psyche REAL DEFAULT 0.0');
+    if (p.has('hunger') || p.has('exhaustion') || p.has('stress')) {
+      // Körper: der schlechtere der beiden alten Abflüsse regiert; Psyche: Stress gedreht
+      db.exec(`UPDATE pilots SET body = 100 - MAX(
+        COALESCE(hunger, 0), COALESCE(exhaustion, 0)),
+        psyche = -COALESCE(stress, 0)`);
+      db.exec('ALTER TABLE pilots DROP COLUMN hunger');
+      db.exec('ALTER TABLE pilots DROP COLUMN exhaustion');
+      db.exec('ALTER TABLE pilots DROP COLUMN stress');
+    }
+    if (p.has('stress_at_start')) db.exec('ALTER TABLE pilots RENAME COLUMN stress_at_start TO psyche_at_start');
+  }
+  if (!cols('pilots').has('pos_y')) {
+    db.exec('ALTER TABLE pilots ADD COLUMN pos_y REAL DEFAULT 120.0');
+    db.exec(`UPDATE pilots SET pos_y = sqrt(MAX(120.0*120.0 - pos_x*pos_x - pos_z*pos_z, 0.0))
+      WHERE pos_y IS NULL OR pos_y = 120.0`);
+  }
+  if (cols('pilots').has('heading') && !cols('pilots').has('heading_x')) {
+    db.exec('ALTER TABLE pilots DROP COLUMN heading');
+  }
+  if (!cols('pilots').has('heading_x')) {
+    db.exec('ALTER TABLE pilots ADD COLUMN heading_x REAL');
+    db.exec('ALTER TABLE pilots ADD COLUMN heading_y REAL');
+    db.exec('ALTER TABLE pilots ADD COLUMN heading_z REAL');
+  }
+  if (!cols('pilots').has('mania_until_tick')) {
+    db.exec('ALTER TABLE pilots ADD COLUMN mania_until_tick INTEGER');
+  }
+
+  // Paket K: Level-2-Treiber (Startwerte aus TREIBER in config.js).
+  // Bestehende Piloten starten frisch — alte hunger/exhaustion/stress-Spalten
+  // wurden oben bereits entfernt, es gibt nichts zu übernehmen.
+  if (!cols('pilots').has('hunger')) {
+    db.exec('ALTER TABLE pilots ADD COLUMN hunger REAL DEFAULT 15.0');
+    db.exec('ALTER TABLE pilots ADD COLUMN thermo REAL DEFAULT 0.0');
+    db.exec('ALTER TABLE pilots ADD COLUMN drang REAL DEFAULT 10.0');
+    db.exec('ALTER TABLE pilots ADD COLUMN halt REAL DEFAULT 80.0');
+    db.exec(`UPDATE pilots SET hunger = 15.0, thermo = 0.0, drang = 10.0, halt = 80.0
+      WHERE hunger IS NULL`);
+  }
 
   // Erkanntheitsgrad je Ort: wächst nur (0 ungesehen … 3 klar), nie zurück
   const we = cols('world_entities');
   if (!we.has('sicht')) db.exec('ALTER TABLE world_entities ADD COLUMN sicht INTEGER DEFAULT 0');
+  if (!we.has('pos_y')) {
+    db.exec('ALTER TABLE world_entities ADD COLUMN pos_y REAL DEFAULT 120.0');
+    db.exec(`UPDATE world_entities SET pos_y = sqrt(MAX(120.0*120.0 - pos_x*pos_x - pos_z*pos_z, 0.0))
+      WHERE pos_y IS NULL OR pos_y = 120.0`);
+  }
 
   const m = cols('pilot_mind');
-  if (!m.has('needs_text')) db.exec('ALTER TABLE pilot_mind ADD COLUMN needs_text INTEGER DEFAULT 0');
+  if (m.has('avg_stress_delta') && !m.has('avg_psyche_delta')) {
+    db.exec('ALTER TABLE pilot_mind RENAME COLUMN avg_stress_delta TO avg_psyche_delta');
+    db.exec('UPDATE pilot_mind SET avg_psyche_delta = -avg_psyche_delta');   // Vorzeichen dreht mit
+  }
+  if (!m.has('needs_text')) db.exec('ALTER TABLE pilot_mind ADD COLUMN needs_text INTEGER DEFAULT 1');
   if (!m.has('text_attempts')) db.exec('ALTER TABLE pilot_mind ADD COLUMN text_attempts INTEGER DEFAULT 0');
 }
 
@@ -186,18 +261,19 @@ function seed(db) {
     db.prepare('INSERT INTO world_state (id, last_tick_at, last_novelty_tick) VALUES (1, ?, 0)')
       .run(new Date().toISOString());
   }
+  const aufKugel = (x, z) => Math.sqrt(Math.max(120.0 * 120.0 - x * x - z * z, 0));
   const ins = db.prepare(`INSERT OR IGNORE INTO world_entities
-    (id, type, name, pos_x, pos_z, physics_traits_json, visual_kit_preset, discovered)
-    VALUES (?, ?, ?, ?, ?, NULL, ?, 0)`);
-  for (const e of ENTITIES) ins.run(e.id, e.type, e.name, e.x, e.z, e.id);
+    (id, type, name, pos_x, pos_y, pos_z, physics_traits_json, visual_kit_preset, discovered)
+    VALUES (?, ?, ?, ?, ?, ?, NULL, ?, 0)`);
+  for (const e of ENTITIES) ins.run(e.id, e.type, e.name, e.x, aufKugel(e.x, e.z), e.z, e.id);
   // Layout ist code-definiert: bestehende DBs auf die Config-Koordinaten ziehen
-  const lege = db.prepare('UPDATE world_entities SET pos_x=?, pos_z=? WHERE id=?');
-  for (const e of ENTITIES) lege.run(e.x, e.z, e.id);
+  const lege = db.prepare('UPDATE world_entities SET pos_x=?, pos_y=?, pos_z=? WHERE id=?');
+  for (const e of ENTITIES) lege.run(e.x, aufKugel(e.x, e.z), e.z, e.id);
 
   const anzahl = db.prepare('SELECT COUNT(*) c FROM pilots').get().c;
   if (!anzahl) {
-    db.prepare(`INSERT INTO pilots (cycle_num, name, hunger, exhaustion, stress, created_tick)
-      VALUES (1, ?, ?, ?, ?, 0)`).run('Kapitän Meero', START.hunger, START.exhaustion, START.stress);
+    db.prepare(`INSERT INTO pilots (cycle_num, name, body, psyche, created_tick)
+      VALUES (1, ?, ?, ?, 0)`).run('Kapitän Meero', START.body, START.psyche);
   }
 }
 
@@ -219,11 +295,32 @@ const q = {
     db.prepare('SELECT * FROM novelty WHERE pilot_id = ?').all(pilotId),
   lastEvent: (db, type) =>
     db.prepare('SELECT * FROM events WHERE type = ? ORDER BY id DESC LIMIT 1').get(type),
+  lastThoughtTick: (db, pilotId) =>
+    db.prepare('SELECT MAX(tick) AS t FROM thoughts WHERE pilot_id = ?').get(pilotId).t,
+  ereignisseSeit: (db, tick, typen) =>
+    db.prepare(`SELECT type FROM events WHERE tick > ? AND type IN (${typen.map(() => '?').join(',')})`)
+      .all(tick, ...typen).map((r) => r.type),
 };
+
+// Aufräumen für den 24/7-Betrieb: altes Nicht-Feed-Rauschen und alte Gedanken
+// beschneiden (alle 3600 Ticks und einmal beim Serverstart).
+function pruneDB(db) {
+  const alt = db.prepare(`DELETE FROM events
+    WHERE in_feed = 0 AND created_at < datetime('now', '-7 days')`).run();
+  let gedanken = 0;
+  const piloten = db.prepare('SELECT DISTINCT pilot_id FROM thoughts WHERE pilot_id IS NOT NULL').all();
+  for (const { pilot_id } of piloten) {
+    const r = db.prepare(`DELETE FROM thoughts WHERE pilot_id = ?
+      AND id NOT IN (SELECT id FROM thoughts WHERE pilot_id = ? ORDER BY id DESC LIMIT 500)`)
+      .run(pilot_id, pilot_id);
+    gedanken += r.changes;
+  }
+  return { events: alt.changes, gedanken };
+}
 
 function logEvent(db, tick, type, payload = {}, inFeed = false) {
   db.prepare('INSERT INTO events (tick, type, payload_json, in_feed) VALUES (?, ?, ?, ?)')
     .run(tick, type, JSON.stringify(payload), inFeed ? 1 : 0);
 }
 
-module.exports = { open, q, logEvent, seed };
+module.exports = { open, q, logEvent, seed, pruneDB };

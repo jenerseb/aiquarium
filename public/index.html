@@ -30,6 +30,23 @@
   .bar i{display:block;height:100%;border-radius:99px;transition:width .5s ease}
   .num{font-family:var(--mono);text-align:right}
 
+  /* Treiber (Paket K): gesondert unter den Kernen, grau bis Werte da sind */
+  .treiber{margin-top:10px;padding-top:8px;border-top:1px dashed var(--line);display:grid;gap:7px;opacity:.45;filter:grayscale(.7)}
+  .treiber.lebt{opacity:1;filter:none}
+  .treiber .titel{font-size:.62rem;letter-spacing:.1em;text-transform:uppercase;color:var(--mu);display:flex;justify-content:space-between;align-items:center}
+  .treiber .kommt{font-size:.56rem;letter-spacing:.08em;border:1px solid var(--line);border-radius:4px;padding:1px 5px}
+  .treiber.lebt .kommt{display:none}
+  .treiber .note{font-size:.6rem;color:var(--mu);font-family:var(--mono)}
+  .treiber.lebt .note{display:none}
+
+  /* Inventar: links zwischen Name und Balken, Liste mit Fund-Tick */
+  .inventar{left:18px;top:110px;width:262px;max-height:calc(100vh - 400px);min-height:40px;overflow:auto;font-size:.68rem}
+  .inventar h3{font-size:.62rem;letter-spacing:.1em;text-transform:uppercase;color:var(--mu);margin-bottom:4px}
+  .inventar ul{list-style:none;display:grid;gap:3px}
+  .inventar li{background:var(--panel);border:1px solid var(--line);border-radius:6px;padding:3px 7px;display:flex;gap:7px;align-items:baseline}
+  .inventar .tick{font-family:var(--mono);color:var(--mu);font-size:.6rem;white-space:nowrap}
+  .inventar .leer{color:var(--mu);font-family:var(--mono);font-size:.62rem;background:none;border:0;padding:0}
+
   /* Ein Scrollbereich für das ganze Panel — verschachtelte Flex-Höhen waren unzuverlässig */
   .feed{position:fixed;top:16px;right:16px;width:330px;max-height:calc(100% - 140px);
     background:var(--panel);border:1px solid var(--line);border-radius:12px;
@@ -108,9 +125,20 @@
 </div>
 
 <div class="hud bars">
-  <div class="bar"><span>Hunger</span><div class="track"><i id="b-hunger" style="background:var(--food);width:0"></i></div><span class="num" id="n-hunger">–</span></div>
-  <div class="bar"><span>Erschöpfung</span><div class="track"><i id="b-exhaustion" style="background:var(--energy);width:0"></i></div><span class="num" id="n-exhaustion">–</span></div>
-  <div class="bar"><span>Stress</span><div class="track"><i id="b-stress" style="background:var(--sanity);width:0"></i></div><span class="num" id="n-stress">–</span></div>
+  <div class="bar"><span>Körper</span><div class="track"><i id="b-body" style="background:var(--food);width:0"></i></div><span class="num" id="n-body">–</span></div>
+  <div class="bar"><span>Psyche</span><div class="track"><i id="b-psyche" style="background:var(--sanity);width:0"></i></div><span class="num" id="n-psyche">–</span></div>
+  <div class="treiber" id="treiber">
+    <div class="titel">Treiber</div>
+    <div class="bar"><span>Hunger</span><div class="track"><i id="b-hunger" style="background:var(--food);width:0"></i></div><span class="num" id="n-hunger">–</span></div>
+    <div class="bar"><span>Temperatur</span><div class="track"><i id="b-thermo" style="background:var(--warn);width:0"></i></div><span class="num" id="n-thermo">–</span></div>
+    <div class="bar"><span>Drang</span><div class="track"><i id="b-drang" style="background:var(--energy);width:0"></i></div><span class="num" id="n-drang">–</span></div>
+    <div class="bar"><span>Halt</span><div class="track"><i id="b-halt" style="background:var(--accent);width:0"></i></div><span class="num" id="n-halt">–</span></div>
+  </div>
+</div>
+
+<div class="hud inventar" id="inventar">
+  <h3>Inventar</h3>
+  <ul id="inventar-liste"><li class="leer">Noch nichts gefunden.</li></ul>
 </div>
 
 <aside class="feed" id="feedPanel">
@@ -120,9 +148,12 @@
   <div class="debug" id="debug">
     <h3>Debug · Werte &amp; Zeit</h3>
     <div class="devctl">
+      <label>Körper <input type="range" id="s-body" min="0" max="100" step="1"><span id="v-body">–</span></label>
+      <label>Psyche <input type="range" id="s-psyche" min="-100" max="100" step="1"><span id="v-psyche">–</span></label>
       <label>Hunger <input type="range" id="s-hunger" min="0" max="100" step="1"><span id="v-hunger">–</span></label>
-      <label>Erschöpfung <input type="range" id="s-exhaustion" min="0" max="100" step="1"><span id="v-exhaustion">–</span></label>
-      <label>Stress <input type="range" id="s-stress" min="0" max="100" step="1"><span id="v-stress">–</span></label>
+      <label>Temperatur <input type="range" id="s-thermo" min="-100" max="100" step="1"><span id="v-thermo">–</span></label>
+      <label>Drang <input type="range" id="s-drang" min="-100" max="100" step="1"><span id="v-drang">–</span></label>
+      <label>Halt <input type="range" id="s-halt" min="0" max="100" step="1"><span id="v-halt">–</span></label>
       <div class="speed">Zeit
         <button data-speed="1" aria-pressed="true">×1</button>
         <button data-speed="3" aria-pressed="false">×3</button>

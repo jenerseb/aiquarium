@@ -2,7 +2,6 @@
 // Der einzige Ort, an dem das Modell aufgerufen wird. Timeout, Retry, Validierung.
 const { validateDecision } = require('./checks');
 const { MODEL } = require('./config');
-const { uebernutzteMotive } = require('./prompt');
 
 const PRICE = { in: 0.08e-6, out: 0.10e-6 }; // Gemma 4 26B bei OpenRouter, Stand 2026-11-12
 
@@ -34,7 +33,7 @@ async function callModel({ prompt, apiKey, baseUrl = MODEL.baseUrl, model = MODE
  * zurück und die Engine arbeitet mit der letzten Absicht weiter.
  */
 async function decide(opts) {
-  const { prompt, whitelist = [], recentThoughts = [], apiKey, musing = false } = opts;
+  const { prompt, whitelist = [], recentThoughts = [], apiKey, musing = false, orte = [], vorhabenAktiv = false } = opts;
   if (!apiKey) {
     return { ok: false, action: null, thought: '', musing: null, stale: true, reason: 'no_key', failures: ['no_key'] };
   }
@@ -58,7 +57,6 @@ async function decide(opts) {
       last = { ok: false, stale: true, reason: `request: ${err.message}`, failures: ['request'] };
       continue;
     }
-    const motive = uebernutzteMotive(recentThoughts);
     const v = validateDecision(raw, {
       whitelist,
       recentThoughts,
@@ -66,11 +64,14 @@ async function decide(opts) {
       maxWordsMusing: MODEL.maxWordsMusing,
       jaccardMax: MODEL.jaccardMax,
       exclamationWindow: MODEL.exclamationWindow,
-      motive,
       musing,
+      orte,
+      vorhabenAktiv,
     });
     if (v.ok) return { ...v, stale: false, raw, ...total };
-    last = { ...v, stale: true, reason: `checks: ${v.failures.join(',')}`, raw };
+    // Leere Antwort eigens benennen: „Modell schweigt" ist etwas anderes als Kauderwelsch
+    const leer = !raw || !raw.trim();
+    last = { ...v, stale: true, reason: `checks: ${leer ? 'json_leer' : v.failures.join(',')}`, raw };
   }
   return { ...(last || { ok: false, stale: true, failures: ['unknown'] }), ...total };
 }
