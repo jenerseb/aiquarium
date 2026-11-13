@@ -782,10 +782,11 @@ scene.add(grab);
 
 // ---------------------------------------------------------------- Kamera
 // Zwei Modi: Charakter (folgt der Figur) und Planet (frei drehbar, immer auf
-// den Kern zentriert). Im Planet-Modus ist die Neigung frei (Pole erlaubt) —
-// nur der Blickzwang auf den Kern bleibt, sonst verliert man die Kugel.
+// den Kern zentriert). Charakter-Pitch ist die Elevation über der lokalen
+// Tangentialebene (Achse Figur→Mittelpunkt), nicht über Welt-Y — sonst kippt
+// die Cam am Äquator anders als an der Polkappe.
 const MODES = {
-  charakter: { dist: 46, min: 30, max: 80, yaw: 0.7, pitch: 0.52, pitchMin: 0.2, pitchMax: 1.0, target: 'pilot' },
+  charakter: { dist: 13, min: 6, max: 80, yaw: 0.7, pitch: 0.22, pitchMin: -0.1, pitchMax: 1.25, target: 'pilot' },
   // Planet: Pitch bis ±85° (fast Pole, kein Gimbal mehr dank radialem Up).
   planet: { dist: 330, min: 250, max: 430, yaw: 0.6, pitch: 0.85, pitchMin: -1.48, pitchMax: 1.48, target: 'planet' },
 };
@@ -798,13 +799,39 @@ const camPos = new THREE.Vector3();
 const camLook = new THREE.Vector3();
 const zielPunkt = new THREE.Vector3(0, R, 0);
 
+// Radial-Frame der Charakter-Cam: T1/T2 spannen die Tangentialebene (⊥ N).
+// T1 = „Norden" (Meridian-Richtung), T2 = N × T1. Yaw dreht darin, Pitch ist
+// die Elevation darüber — die Kipp-Erlaubnis hängt damit an der Achse
+// Charakter→Mittelpunkt, nicht an Welt-Y.
+const _tanA = new THREE.Vector3(1, 0, 0);
+const _tanB = new THREE.Vector3(0, 0, 1);
+const _tanH = new THREE.Vector3();
+const _wunsch = new THREE.Vector3();
+const _seit = new THREE.Vector3();
+let camStartGesicht = true;   // nächster Tick rahmt das Gesicht ein (30° links)
+const GESICHT_SEITE = Math.PI / 6;  // 30° von der Blickachse zur linken Seite
+function tangentialBasis(n) {
+  _tanH.set(0, 1, 0).addScaledVector(n, -n.y);
+  if (_tanH.lengthSq() < 1e-6) _tanH.set(1, 0, 0).addScaledVector(n, -n.x);
+  if (_tanH.lengthSq() < 1e-6) _tanH.set(0, 0, 1).addScaledVector(n, -n.z);
+  _tanA.copy(_tanH.normalize());
+  _tanB.crossVectors(n, _tanA);
+}
+
 function setzeModus(neu) {
   if (!MODES[neu]) return;
   mode = neu;
   const m = MODES[neu];
-  camZiel.yaw = m.yaw;
-  camZiel.pitch = m.pitch;
-  camZiel.dist = m.dist;
+  if (neu === 'charakter') {
+    // Zurück zur Figur = zurück vors Gesicht (30° links), wie beim Laden.
+    camStartGesicht = true;
+    camZiel.pitch = m.pitch;
+    camZiel.dist = m.dist;
+  } else {
+    camZiel.yaw = m.yaw;
+    camZiel.pitch = m.pitch;
+    camZiel.dist = m.dist;
+  }
   for (const b of document.querySelectorAll('.cam button')) {
     b.setAttribute('aria-pressed', String(b.dataset.mode === neu));
   }
@@ -1307,31 +1334,62 @@ function tick() {
   if (MODES[mode].target === 'planet') {
     zielPunkt.set(0, 0, 0);
   } else {
-    zielPunkt.copy(figur.position).addScaledVector(normal, 3.0);
+    zielPunkt.copy(figur.position).addScaledVector(normal, 2.0);
   }
 
-  // Kamera: Pitch = Höhenwinkel (−80° Südpol … +80° Nordpol). Damit geht
-  // senkrecht unten genauso wie oben — die alten Grenzen (0,05…π−0,05) haben
-  // die Südhalbkugel ausgesperrt. cos(pitch) bleibt positiv, kein Spiegeln.
-  const sp = Math.sin(cam.pitch), cp = Math.cos(cam.pitch);
-  camPos.set(
-    zielPunkt.x + Math.cos(cam.yaw) * cp * cam.dist,
-    zielPunkt.y + sp * cam.dist,
-    zielPunkt.z + Math.sin(cam.yaw) * cp * cam.dist,
-  );
+  // Charakter-Cam im Radial-Frame: Pitch = Elevation über der lokalen
+  // Tangentialebene (Achse Charakter→Mittelpunkt N), Yaw dreht darin.
+  // Planet-Modus bleibt Welt-Y (Kern als Ziel, Pole erlaubt).
+  _kamBlick.subVectors(zielPunkt, camPos);
+  if (_kamBlick.lengthSq() > 1e-12) _kamBlick.normalize();
+  if (mode === 'planet') {
+    const sp = Math.sin(cam.pitch), cp = Math.cos(cam.pitch);
+    camPos.set(
+      zielPunkt.x + Math.cos(cam.yaw) * cp * cam.dist,
+      zielPunkt.y + sp * cam.dist,
+      zielPunkt.z + Math.sin(cam.yaw) * cp * cam.dist,
+    );
+  } else {
+    tangentialBasis(normal);
+    // Start: 30° von der linken Seite auf das Gesicht — die Cam steht vor
+    // der Figur (_blick zeigt dorthin, wo sie hinschaut) und sieht sie
+    // leicht von links. Danach bleibt yaw frei (kein Mitrotieren).
+    if (camStartGesicht && _blick.lengthSq() > 1e-6) {
+      _wunsch.copy(_blick).addScaledVector(normal, -_blick.dot(normal));
+      if (_wunsch.lengthSq() > 1e-6) {
+        _wunsch.normalize();
+        _seit.crossVectors(_wunsch, normal).normalize();  // links der Figur
+        _wunsch.multiplyScalar(Math.cos(GESICHT_SEITE))
+          .addScaledVector(_seit, Math.sin(GESICHT_SEITE));
+        const yawNeu = Math.atan2(_wunsch.dot(_tanB), _wunsch.dot(_tanA));
+        cam.yaw = yawNeu;
+        camZiel.yaw = yawNeu;
+      }
+      camStartGesicht = false;
+    }
+    const sp = Math.sin(cam.pitch), cp = Math.cos(cam.pitch);
+    _tanH.copy(_tanA).multiplyScalar(Math.cos(cam.yaw))
+      .addScaledVector(_tanB, Math.sin(cam.yaw));
+    camPos.copy(zielPunkt)
+      .addScaledVector(_tanH, cp * cam.dist)
+      .addScaledVector(normal, sp * cam.dist);
+    // Unter die Oberfläche tauchen verboten (nahe, flache Cam am Boden).
+    const bodenAb = camPos.length();
+    if (bodenAb < R + 0.6) camPos.multiplyScalar((R + 0.6) / (bodenAb || 1));
+    _kamBlick.subVectors(zielPunkt, camPos).normalize();
+  }
   camera.position.copy(camPos);
-  // Radiales Up gegen den Pol-Flip: Up = Projektion von „oben" auf die
-  // Bildebene. Am Pol zeigt die Kamera senkrecht nach unten, der alte
-  // Welt-Y-Up ist dort parallel zur Blickrichtung → lookAt rollt 90–180°.
-  // Im Charakter-Modus bleibt Welt-Y (Horizont stabil), im Planet-Modus
-  // dreht Up mit (Pole ohne Flip begehbar).
-  _kamBlick.subVectors(zielPunkt, camPos).normalize();
+  // Radiales Up gegen den Pol-Flip: Up = N projiziert auf die Bildebene.
+  // Am Pol ist der Welt-Y-Up parallel zur Blickrichtung → lookAt rollt.
+  // In beiden Modi dreht Up radial mit (Charakter-Horizont = Tangentialebene).
   if (mode === 'planet') {
     _upHilf.set(0, 1, 0).addScaledVector(_kamBlick, -_kamBlick.y);
     if (_upHilf.lengthSq() < 1e-6) _upHilf.set(0, 0, _kamBlick.z >= 0 ? -1 : 1);
     camera.up.copy(_upHilf.normalize());
   } else {
-    camera.up.set(0, 1, 0);
+    _upHilf.copy(normal).addScaledVector(_kamBlick, -_kamBlick.dot(normal));
+    if (_upHilf.lengthSq() < 1e-6) _upHilf.copy(normal);
+    camera.up.copy(_upHilf.normalize());
   }
   camera.lookAt(zielPunkt);
 

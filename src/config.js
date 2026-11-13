@@ -462,9 +462,11 @@ const RESPAWN_DELAY_S = 600;
 const START = { body: 100, psyche: 0 };
 
 // --- Modell ----------------------------------------------------------------
+// Default: Free-Tier-Modell. Gültiges Modell kommt bevorzugt aus der
+// Umgebung (AIQUARIUM_MODEL in der .env überschreibt diesen Default).
 const MODEL = {
   baseUrl: process.env.OPENROUTER_BASE_URL || 'https://openrouter.ai/api/v1/chat/completions',
-  name: process.env.AIQUARIUM_MODEL || 'google/gemma-4-26b-a4b-it',
+  name: process.env.AIQUARIUM_MODEL || 'google/gemma-4-26b-a4b-it:free',
   timeoutMs: 30000,
   temperature: 0.85,
   retryTemperature: 0.55,
