@@ -10,13 +10,25 @@ tags: [aiquarium, bruchpilot, 3d, llm, eigenprojekt]
 
 **Einzige Arbeitsdatei.** Reihenfolge → Pakete → offene Punkte → Messlatte → Anhang (Stimme, Schema). Einstieg und Entscheidungen: [[00 Stand]]. Historie: [[archiv/02-roadmap-2026-11-13]], [[archiv/03-runde3-2026-11-13]], [[archiv/behoben-log-2026-11-13]].
 
-Code: `vault-privat/Seb Privat Stuff/aiquarium/app/`, Start: `npm start` → `http://127.0.0.1:3077`. Nach jedem Paket: `npm test` grün, `npm run check`, echter Messlauf, [[00 Stand]] nachziehen.
+Code: `/workspaces/seb-dev/aiquarium/aiquarium-app/`, Start: `npm start` → `http://127.0.0.1:3077`. Nach jedem Paket: `npm test` grün, `npm run check`, echter Messlauf, [[00 Stand]] nachziehen.
+DB im Container frisch (2026-11-14): alte Windows-Welt nicht mitgezogen, `~/.local/share/aiquarium/` wird beim Start neu angelegt. Für Dauerbetrieb `AIQUARIUM_DB` auf ein Volume legen.
 
 ## Reihenfolge
 
 0. Vorab-Schnitt — **gebaut 2026-11-13**: ganze Kugel begehbar (3D-Einheitsvektoren, Großkreis), Post-Checks entschlackt (B-Schärfung), Catch-up-Freeze mit Reboot-Event, DB-Pruning. **63 Tests grün.**
-1. **K-Umsetzung — gebaut 2026-11-14** → 2. **A — gebaut 2026-11-14** (Vorhaben + Weg, Grid 15°) → 3. **Tag/Nacht — gebaut 2026-11-14** (wandernde Lichtkante, Erde-Tor, 82 Tests) → 4. **C** (Kurzzeit + Ungereimtheit-Zeile) → 5. **D** (`nachdenken` + LTM, regeneriert `halt`) → 6. **E** (Glaubenssätze folgenreich + Zweiteilung) → 7. **F** (Fernziel) → 8. **G** (Fragen) → 9. **H** (`world_belief`). F–H erst nach A–E. **Danach: J–M** (dann v0.2+). B-Rest (Musterbremse) ebenfalls **gebaut 2026-11-14**.
+1. **K-Umsetzung — gebaut 2026-11-14** → 2. **A — gebaut 2026-11-14** (Vorhaben + Weg, Grid 15°) → 3. **Tag/Nacht — gebaut 2026-11-14** (wandernde Lichtkante, Erde-Tor, 82 Tests) → 4. **R** (5 rote Tests aus Container-Umzug, kein neues Feature) → 5. **C** (Kurzzeit + Ungereimtheit-Zeile) → 6. **D** (`nachdenken` + LTM, regeneriert `halt`) → 7. **E** (Glaubenssätze folgenreich + Zweiteilung) → 8. **F** (Fernziel) → 9. **G** (Fragen) → 10. **H** (`world_belief`). F–H erst nach A–E. **Danach: J–M** (dann v0.2+). B-Rest (Musterbremse) ebenfalls **gebaut 2026-11-14**.
 2. Paket I (Sichtstufen) ist **vorgezogen gebaut** — fundiert G.
+
+## Paket R — 5 rote Tests nach Container-Umzug · offen (2026-11-14, kein Feature)
+
+Befund beim Umzug Windows-Vault → Linux/Docker: `node --test test/aiquarium.test.js` → 79/84. Per `git stash` belegt Vorzustand (auch ohne scene.js-Änderung rot) — nicht durch Frontend-Fix verursacht, Engine unberührt. DB im Container frisch angelegt (alte Welt nicht mitgezogen).
+
+- [ ] **Test 12** `whitelist: ausgeruhte Figur bekommt nur Arbeit` — `sleep` bei Licht draußen in der Whitelist (`sleep,sit_shade,inspect,…`), erwartet: kein `sleep`. Vermutung: Schlaf-Regel in `AVAIL.sleep` prüft `nah`/`phase` falsch (Kapsel-Fallback?).
+- [ ] **Test 77** `engine: Weg-Text ohne Himmelsrichtungen` — `27 Schritte` fehlt im Prompt. Vermutung: `vorhaben`/`weg`-Übergabe an `buildPrompt` geändert oder Weg-Text-Format gedreht.
+- [ ] **Test 80** `tag/nacht: Erde-Tor` — `call_bake` bei untergegangener Erde angeboten. Vermutung: `AVAIL.call_bake`-Tor prüft `erde`-Flag nicht mehr.
+- [ ] **Test 82** `finsternis: 4 Stufen` — `lichtFaktorAusPhase is not a function`. Vermutung: Export in `src/prompt.js` umbenannt/entfernt, Test nicht nachgezogen.
+- [ ] **Test 83** `tag/nacht: Schlaf bei Licht nur im Schutz` — `AVAIL.sleep(muede, {phase:'licht', nah:[]})` erlaubt. Gleicher Kandidat wie Test 12.
+- [ ] **Abnahme:** `npm test` 84/84 grün, `npm run check` grün.
 
 ## Paket A — Vorhaben und Weg · gebaut 2026-11-14 (79 Tests grün)
 

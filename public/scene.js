@@ -45,8 +45,10 @@ scene.add(sun);
 // ---------------------------------------------------------------- Himmel
 // Tag/Nacht: Die Sonne wandert (Vektor aus /api/state), Erde hängt fest.
 // licht: Hemisphere hell, Sonne warm. Nacht: beides runter auf ~0,3.
-const HEMI_TAG = 1.35, HEMI_NACHT = 0.3;
-const SONNE_TAG = 3.2, SONNE_NACHT = 0.5;
+// Tag/Nacht 2026-11-14: kein globales Dimmen mehr — Sonne rotiert, Richtung macht Tag/Nacht.
+// Nur Finsternis skaliert (SONNE_F/HEMI_F in sonneSetzen). NACHT-Konstanten ersatzlos raus.
+const HEMI_TAG = 1.35;
+const SONNE_TAG = 3.2;
 {
   const geo = new THREE.BufferGeometry();
   const pts = [];
@@ -516,24 +518,38 @@ scene.add(deko);
 
 function baueDeko(entities) {
   const zufall = mulberry32(1337);   // fester Seed: gleiche Welt bei jedem Reload
-  const belegt = (x, z, abstand) => entities.some((e) => Math.hypot(e.x - x, e.z - z) < abstand);
-  // Vereinzelte Steine, mit Abstand zu den Orten
+  // Vereinheitlicht 2026-11-14: ein Pass ueber die Kugel, 80 % Steinchen / 20 % Felsen.
+  // Vorher zwei Welten (60 klein flach + 220 Riesen-Kulisse) — nach dem Cluster-Umzug
+  // lag das Wohngebiet mitten im Riesenfeld. Seed fix (1337), Orte bleiben frei (9 m Sehne).
   const steinGeos = [new THREE.DodecahedronGeometry(0.7), new THREE.DodecahedronGeometry(1.2),
-    new THREE.BoxGeometry(1.4, 0.7, 1.0)];
+    new THREE.BoxGeometry(1.4, 0.7, 1.0), new THREE.DodecahedronGeometry(2.6)];
+  const _sd = new THREE.Vector3();
+  const _nord = new THREE.Vector3(0, R, 0);
+  const _sued = new THREE.Vector3(0, -R, 0);
+  // entities nutzen x/y/z (Engine-Vektor, Kugel x120) — Abstand als Sehne
+  const belegtKugel = (p) => entities.some((e) => {
+    const dx = (e.x || 0) - p.x, dy = (e.y || 0) - p.y, dz = (e.z || 0) - p.z;
+    return dx * dx + dy * dy + dz * dz < 81;
+  });
   let gesetzt = 0;
-  for (let versuch = 0; versuch < 600 && gesetzt < 60; versuch += 1) {
-    const x = (zufall() * 2 - 1) * 100;
-    const z = (zufall() * 2 - 1) * 100;
-    const r = Math.hypot(x, z);
-    if (r < 9 || r > 105 || belegt(x, z, 9)) continue;
-    const stein = new THREE.Mesh(steinGeos[gesetzt % steinGeos.length], MAT.stein);
+  for (let versuch = 0; versuch < 3000 && gesetzt < 220; versuch += 1) {
+    // Gleichmaessig auf der Kugel: z uniform, theta uniform (kein Pol-Bias)
+    const zz = zufall() * 2 - 1, th = zufall() * Math.PI * 2;
+    const ss = Math.sqrt(Math.max(0, 1 - zz * zz));
+    _sd.set(ss * Math.cos(th), zz, ss * Math.sin(th)).multiplyScalar(R);
+    if (belegtKugel(_sd)) continue;
+    if (_sd.distanceTo(_nord) < 5 || _sd.distanceTo(_sued) < 5) continue;   // Flaggen frei
+    const w = zufall();
+    const geo = w < 0.4 ? steinGeos[0] : w < 0.8 ? steinGeos[1] : w < 0.9 ? steinGeos[2] : steinGeos[3];
+    const stein = new THREE.Mesh(geo, MAT.stein);
     stein.castShadow = true;
     stein.receiveShadow = true;
-    const s = 0.5 + zufall() * 1.3;
-    stein.scale.set(s * (0.7 + zufall() * 0.6), s * (0.5 + zufall() * 0.5), s * (0.7 + zufall() * 0.6));
-    stein.rotation.set(zufall() * Math.PI, zufall() * Math.PI, zufall() * Math.PI);
-    aufOberflaeche(stein, x, z);
-    stein.position.y -= 0.25 * s;
+    const gr = w < 0.8 ? 0.5 + zufall() * 1.3 : 1.2 + zufall() * 1.6;
+    stein.scale.set(gr * (0.7 + zufall() * 0.6), gr * (0.5 + zufall() * 0.5), gr * (0.7 + zufall() * 0.6));
+    const dir = _sd.clone().normalize();
+    stein.position.copy(dir).multiplyScalar(R - 0.25 * gr);
+    stein.quaternion.setFromUnitVectors(HOCH, dir);
+    stein.rotateY(zufall() * Math.PI);
     deko.add(stein);
     gesetzt += 1;
   }
@@ -553,24 +569,6 @@ function baueDeko(entities) {
     };
     wolken.push(w);
     deko.add(g);
-  }
-  // Kulisse: Steine jenseits der Spielfläche (50°..130° vom Pol — das sichtbare Band),
-  // rein optisch, keine Engine-Koordinaten. Groß genug, um aus der Planetensicht
-  // als Geröllfeld zu lesen; weiter hinten braucht es nichts.
-  for (let i = 0; i < 220; i += 1) {
-    const theta = zufall() * Math.PI * 2;
-    const phi = (50 + zufall() * 80) * Math.PI / 180;
-    const dir = new THREE.Vector3(
-      Math.sin(phi) * Math.cos(theta), Math.cos(phi), Math.sin(phi) * Math.sin(theta));
-    const fern = new THREE.Mesh(steinGeos[i % steinGeos.length], MAT.stein);
-    fern.castShadow = true;
-    fern.receiveShadow = true;
-    const fs = 2.0 + zufall() * 4.5;
-    fern.scale.set(fs * (0.7 + zufall() * 0.6), fs * (0.4 + zufall() * 0.4), fs * (0.7 + zufall() * 0.6));
-    fern.position.copy(dir).multiplyScalar(R + 0.2);   // auf der Oberfläche, nicht versenkt
-    fern.quaternion.setFromUnitVectors(HOCH, dir);
-    fern.rotateY(zufall() * Math.PI);
-    deko.add(fern);
   }
 }
 
@@ -1014,9 +1012,11 @@ es.onmessage = (ev) => {
   zeichneGlaube(d.beliefs);
 };
 
-// Tag/Nacht: Sonne aus dem Engine-Vektor stellen, Licht dimmen.
+// Tag/Nacht 2026-11-14: Die Sonne dreht sich um den Planeten, sonst nichts.
+// Kein globales Abdunkeln: Der Nacht wird es dunkel, weil das gerichtete Licht von
+// der anderen Seite kommt — nicht weil wir einen Dimmer drehen. Nur die Finsternis
+// (Deckung Sonne/Erde) dimmt global mit, Lampe/Scheibe folgen dem lokalen Licht.
 // Kein eigenes Modell — dasselbe Ding wie die Engine rechnet, kein Drift.
-// Finsternis: Deckung dimmt das Sonnenlicht mit (4 Stufen, Faktoren aus FINSTERNIS).
 // phase fehlt (alter Server): nichts tun, Startposition bleibt.
 function sonneSetzen(tag) {
   if (!tag || !tag.sonne || !tag.phase) return;
@@ -1036,17 +1036,18 @@ function sonneSetzen(tag) {
   const fenster = (10 + 40) / 900;         // SONNE_RADIUS + ERDE_RADIUS / Schale
   const grad = abstand >= fenster ? 0 : 1 - abstand / fenster;
   const finst = grad >= 0.9 ? 3 : grad >= 0.5 ? 2 : grad >= 0.1 ? 1 : 0;
+  // Nur Finsternis dimmt global (Deckung, nicht Phase — die Phase macht das Licht
+  // per Richtung von selbst: Nachtseite liegt im Schatten des DirectionalLights).
   const SONNE_F = [1, 0.8, 0.5, 0][finst], HEMI_F = [1, 1, 0.7, 0][finst];
-  const hell = tag.phase === 'licht' ? 1 : tag.phase === 'daemmer' ? 0.6 : 0;
-  hemi.intensity = (HEMI_NACHT + (HEMI_TAG - HEMI_NACHT) * hell) * HEMI_F;
-  sun.intensity = (SONNE_NACHT + (SONNE_TAG - SONNE_NACHT) * hell) * SONNE_F;
-  // Nachts verblasst die Scheibe mit (kein Mondlicht von der Sonne),
-  // der Hof schrumpft — tagsüber volle Pracht; Finsternis frisst den Hof zuerst
-  sonnenScheibe.material.color.setScalar((0.35 + 0.65 * hell) * (finst >= 3 ? 0.2 : 1));
-  const hofF = (0.4 + 0.6 * hell) * SONNE_F;
+  hemi.intensity = HEMI_TAG * HEMI_F;
+  sun.intensity = SONNE_TAG * SONNE_F;
+  // Scheibe/Hof stehen immer voll da — nur totale Finsternis frisst sie.
+  // Ob es am Piloten hell oder dunkel ist, entscheidet die Lichtrichtung, kein Dimmer.
+  sonnenScheibe.material.color.setScalar(finst >= 3 ? 0.2 : 1);
+  const hofF = SONNE_F;
   sonnenHof.scale.set(90 * hofF, 90 * hofF, 1);
-  // Taschenlampe: an bei Nacht/Dämmerung — und bei totaler Finsternis am Tag.
-  // Der Spot folgt der Figur (Kind-Knoten), der Kegel zeigt den Strahl.
+  // Taschenlampe: an bei lokalem Nacht/Daemmerlicht am Piloten — und bei totaler
+  // Finsternis am Tag. Der Spot folgt der Figur (Kind-Knoten), der Kegel zeigt den Strahl.
   const lampenHell = finst >= 3 ? 1 : tag.phase === 'nacht' ? 1 : tag.phase === 'daemmer' ? 0.5 : 0;
   lampe.intensity = lampenHell * 60;
   lampenKegel.visible = lampenHell > 0 && !DEV;

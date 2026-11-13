@@ -2,13 +2,23 @@
 
 Kurz und praktisch. Das Programm liegt in diesem Ordner (`app/`), die Datenbank **außerhalb**, damit Syncthing sie nicht anfasst.
 
+**Container-Pfad (seb-dev):** vor jedem `node`/`npm`-Befehl:
+
+```
+cd /workspaces/seb-dev/aiquarium/aiquarium-app
+```
+
+(Nach einem Vault-Umzug Windows → Linux/Docker bricht nichts an Node — häufigste
+Ursache ist nur das falsche Verzeichnis: `node src/server.js` im falschen Ordner
+meldet `Cannot find module '.../src/server.js'`.)
+
 ## Wo was liegt
 
 | Was | Pfad |
 |---|---|
-| Programm | `<Vault>/Seb Privat Stuff/aiquarium/app/` |
+| Programm | `/workspaces/seb-dev/aiquarium/aiquarium-app/` |
 | Zugangsschlüssel | `app/.env` (nicht im Git, nicht im Backup) |
-| Datenbank | Linux: `~/.local/share/aiquarium/world.sqlite` · Windows: `C:\Users\<du>\.local\share\aiquarium\world.sqlite` |
+| Datenbank | Linux/Container: `~/.local/share/aiquarium/world.sqlite` — oder `AIQUARIUM_DB` (empfohlen: gemountetes Volume, sonst beim Container-Rebuild weg) · Windows: `C:\Users\<du>\.local\share\aiquarium\world.sqlite` |
 | Log (bei Hintergrundstart) | `app/aiquarium.log` |
 
 ## Starten
@@ -16,14 +26,14 @@ Kurz und praktisch. Das Programm liegt in diesem Ordner (`app/`), die Datenbank 
 **Linux (VPS oder PC), im Vordergrund** — Strg+C beendet ihn sauber:
 
 ```
-cd "<Vault>/Seb Privat Stuff/aiquarium/app"
+cd /workspaces/seb-dev/aiquarium/aiquarium-app
 node src/server.js
 ```
 
 **Linux, im Hintergrund** (läuft weiter, wenn das Terminal zugeht):
 
 ```
-cd "<Vault>/Seb Privat Stuff/aiquarium/app"
+cd /workspaces/seb-dev/aiquarium/aiquarium-app
 nohup node src/server.js > aiquarium.log 2>&1 & echo $! > aiquarium.pid
 ```
 
@@ -109,7 +119,7 @@ Beim Start lässt sich der Faktor auch per Umgebung setzen: `AIQUARIUM_SPEED=10 
 ## Tests
 
 ```
-cd "<Vault>/Seb Privat Stuff/aiquarium/app"
-npm test          # 71 Tests
+cd /workspaces/seb-dev/aiquarium/aiquarium-app
+npm test          # 84 Tests (5 rot = Paket R, siehe 01 Umsetzung)
 npm run check     # Syntaxprüfung aller Module
 ```
