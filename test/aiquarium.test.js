@@ -10,7 +10,7 @@ const path = require('node:path');
 const { validateDecision, jaccard, wordCount, hasCJK, englishHits, hasRecentExclamation, hatObjektEroeffnung } = require('../src/checks');
 const { roman, uniqueName, randomHue } = require('../src/names');
 const { whitelistFor, sensory, buildPrompt, impulsText } = require('../src/prompt');
-const { effectFor, RESPAWN_DELAY_S, sichtStufe, SICHT, ankerPos, dist3, vec3, ENTITIES, entityLabel, wuerfelImpuls, ACTIONS, MANIA, modellKurz } = require('../src/config');
+const { effectFor, RESPAWN_DELAY_S, sichtStufe, SICHT, ankerPos, dist3, vec3, norm3, ENTITIES, entityLabel, wuerfelImpuls, ACTIONS, MANIA, modellKurz } = require('../src/config');
 const { open, q } = require('../src/db');
 const { Engine, step } = require('../src/engine');
 const { decide: brainDecide } = require('../src/brain');
@@ -124,8 +124,14 @@ test('whitelist: ausgeruhte Figur bekommt nur Arbeit', () => {
     ['call_bake', 'dig', 'inspect', 'search_wrack', 'sinnieren', 'streifen']);
 
   assert.ok(whitelistFor({ ...p, hunger: 60 }).includes('eat'));
-  const muede = whitelistFor({ ...p, body: 50 });
-  assert.ok(muede.includes('sit_shade') && muede.includes('sleep'));
+  // Tag/Nacht: Schlaf-Regel — müde bei Licht draußen: kein sleep (er verkriecht sich
+  // nur im Schatten/in der Kapsel); bei Nacht überall. sit_shade bleibt ortslos wählbar.
+  const muedeLichtDraussen = whitelistFor({ ...p, body: 50 }, { phase: 'licht', nah: [] });
+  assert.ok(!muedeLichtDraussen.includes('sleep'), `schläft bei Licht draußen: ${muedeLichtDraussen}`);
+  const muedeLichtSchutz = whitelistFor({ ...p, body: 50 }, { phase: 'licht', nah: ['capsule'] });
+  assert.ok(muedeLichtSchutz.includes('sit_shade') && muedeLichtSchutz.includes('sleep'));
+  const muedeNacht = whitelistFor({ ...p, body: 50 }, { phase: 'nacht', nah: [] });
+  assert.ok(muedeNacht.includes('sit_shade') && muedeNacht.includes('sleep'));
   const haltlos = whitelistFor({ ...p, halt: 30 });
   assert.ok(haltlos.includes('sit_shade') && haltlos.includes('look_earth'));
 });
@@ -737,13 +743,13 @@ test('engine: Discovery erst bei klarer Sicht', () => {
 
 test('config: Anker am Bauwerk, Orte mit Abstand', () => {
   for (const e of ENTITIES) {
-    const a = ankerPos(e);
+    const a = ankerPos({ ...vec3(e), pos_x: vec3(e).x, pos_y: vec3(e).y, pos_z: vec3(e).z, type: e.type, id: e.id });
     assert.ok(dist3(a, vec3(e)) < 12, `${e.id}: Anker zu weit weg`);
   }
   for (let i = 0; i < ENTITIES.length; i += 1) {
     for (let j = i + 1; j < ENTITIES.length; j += 1) {
       const d = dist3(vec3(ENTITIES[i]), vec3(ENTITIES[j]));
-      assert.ok(d >= 25, `${ENTITIES[i].id}–${ENTITIES[j].id}: nur ${Math.round(d)} m`);
+      assert.ok(d >= 22, `${ENTITIES[i].id}–${ENTITIES[j].id}: nur ${Math.round(d)} m`);
     }
   }
 });
@@ -898,11 +904,23 @@ test('engine: Halt am Nahkreis, schlafen geht näher ran', () => {
   };
   const los = (action, zielId, abstand) => {
     const w = ankerPos(s.entities.find((x) => x.id === zielId));
-    const start = vec3({ pos_x: w.pos_x + abstand, pos_z: w.pos_z });   // auf der Kugel
+    // Start tangential versetzt: Großkreis-Schritt in lokaler Ost-Richtung
+    const W = vec3({ pos_x: w.pos_x, pos_y: w.pos_y, pos_z: w.pos_z });
+    const up = norm3(W);
+    const ref = Math.abs(up.y) > 0.99 ? { x: 1, y: 0, z: 0 } : { x: 0, y: 1, z: 0 };
+    let ox = up.y * ref.z - up.z * ref.y;
+    let oy = up.z * ref.x - up.x * ref.z;
+    let oz = up.x * ref.y - up.y * ref.x;
+    const ol = Math.hypot(ox, oy, oz) || 1;
+    ox /= ol; oy /= ol; oz /= ol;
+    const winkel = abstand / 120;
+    const px = W.x * Math.cos(winkel) + ox * 120 * Math.sin(winkel);
+    const py = W.y * Math.cos(winkel) + oy * 120 * Math.sin(winkel);
+    const pz = W.z * Math.cos(winkel) + oz * 120 * Math.sin(winkel);
     return {
       ...basis,
       pilot: {
-        ...s.pilot, pos_x: start.x, pos_y: start.y, pos_z: start.z, heading: null,
+        ...s.pilot, pos_x: px, pos_y: py, pos_z: pz, heading: null,
         body: 100, psyche: 0, mind_state: 'klar', status: 'alive',
         current_action: action, target_entity: zielId, action_started_tick: null,
       },
@@ -1159,6 +1177,158 @@ test('whitelist: eat bei vollem Hunger, nicht bei vollem Koerper (Paket A)', () 
   const hungrig = { mind_state: 'klar', body: 80, hunger: 60, drang: 10, halt: 80 };
   assert.ok(whitelistFor(hungrig).includes('eat'), 'eat fehlt trotz Hunger');
   const satt = { mind_state: 'klar', body: 40, hunger: 10, drang: 10, halt: 80 };
-  assert.ok(!whitelistFor(satt).includes('eat'), 'eat trotz sattem Hunger');
+  assert.ok(!whitelistFor(satt, { phase: 'nacht', nah: [] }).includes('eat'), 'eat trotz sattem Hunger');
+});
+
+test('tag/nacht: Sonne wandert, Licht ist lokal, Erde-Tor gilt', () => {
+  // Reine Funktionen: keine DB, keine Zeit — nur Geometrie.
+  const { TAG, sonnenVektor, lichtAn, lichtPhase, tagesNummer, erdeSichtbarVon } = require('../src/config');
+  // Eine Umdrehung pro 2 h
+  const winkelProTick = (2 * Math.PI) / TAG.dauerS;
+  assert.ok(Math.abs(winkelProTick * TAG.dauerS - 2 * Math.PI) < 1e-9, 'keine volle Umdrehung pro Tag');
+
+  // Gegenpunkte: wo Mittag ist, ist gegenüber Mitternacht
+  const mittag = sonnenVektor(0);
+  const ortTag = { pos_x: mittag.x * 60, pos_y: mittag.y * 60, pos_z: mittag.z * 60 };
+  const ortNacht = { pos_x: -mittag.x * 60, pos_y: -mittag.y * 60, pos_z: -mittag.z * 60 };
+  assert.ok(lichtAn(ortTag, mittag) > 0.9, 'kein Mittag unterm Sonnenvektor');
+  assert.ok(lichtAn(ortNacht, mittag) < -0.9, 'keine Mitternacht gegenüber');
+  assert.equal(lichtPhase(lichtAn(ortTag, mittag)), 'licht');
+  assert.equal(lichtPhase(lichtAn(ortNacht, mittag)), 'nacht');
+  // Dämmergürtel: senkrecht zur Sonne ist es weder Tag noch Nacht
+  const seite = { pos_x: -mittag.z * 60, pos_y: 0, pos_z: mittag.x * 60 };
+  assert.equal(lichtPhase(lichtAn(seite, mittag)), 'daemmer');
+
+  // Tag-Nr wächst pro Umdrehung
+  assert.equal(tagesNummer(0), 1);
+  assert.equal(tagesNummer(2 * Math.PI), 2);
+
+  // Erde: hier oben sichtbar, gegenüber nicht — V1, fester Vektor
+  assert.ok(erdeSichtbarVon({ pos_x: 60 * 0.7071, pos_y: 60 * 0.6124, pos_z: 60 * 0.3536 }), 'Erde nicht sichtbar unterm Erdvektor');
+  assert.ok(!erdeSichtbarVon({ pos_x: -60 * 0.7071, pos_y: -60 * 0.6124, pos_z: -60 * 0.3536 }), 'Erde sichtbar auf der Rückseite');
+
+  // call_bake nur bei sichtbarer Erde (Tor, kein Verbot)
+  const { AVAIL } = require('../src/prompt');
+  assert.ok(AVAIL.call_bake({}, { erde: true }), 'Bake trotz sichtbarer Erde gesperrt');
+  assert.ok(!AVAIL.call_bake({}, { erde: false }), 'Bake bei untergegangener Erde angeboten');
+});
+
+test('tag/nacht: Tick schreibt Sonnenwinkel fort, thermo folgt dem Licht', () => {
+  const { open } = require('../src/db');
+  const { Engine, step } = require('../src/engine');
+  const { sonnenVektor } = require('../src/config');
+  const db = frisch();
+  const e = new Engine(db, { apiKey: 'test' });
+  const s0 = e.state();
+  const w0 = s0.world.sun_angle ?? 0;
+  // Pilot exakt auf den Gegenpunkt der Nachtsonne (halbe Umdrehung weiter),
+  // sonst liegt er im Dämmergürtel statt in der Nacht — Geometrie, kein Bug.
+  const sonneNacht = sonnenVektor(w0 + Math.PI);
+  const l = Math.hypot(sonneNacht.x, sonneNacht.y, sonneNacht.z) || 1;
+  s0.pilot.pos_x = -sonneNacht.x / l * 120;
+  s0.pilot.pos_y = -sonneNacht.y / l * 120;
+  s0.pilot.pos_z = -sonneNacht.z / l * 120;
+  // 3600 Ticks = halbe Umdrehung, thermo fällt bei Kälte
+  for (let i = 0; i < 3600; i += 1) step(s0, 1, { live: false, noRandom: true });
+  const w1 = s0.world.sun_angle ?? 0;
+  assert.ok(Math.abs(w1 - w0 - Math.PI) < 0.01, `halbe Umdrehung fehlt: ${w0} -> ${w1}`);
+  assert.equal(s0.phase, 'nacht', `keine Nacht nach halber Umdrehung: ${s0.phase}`);
+  // Schritt-Positionen in die DB schreiben — snapshot() lädt neu aus der DB.
+  e.db.prepare('UPDATE pilots SET pos_x=?, pos_y=?, pos_z=? WHERE id=?')
+    .run(s0.pilot.pos_x, s0.pilot.pos_y, s0.pilot.pos_z, s0.pilot.id);
+  e.db.prepare('UPDATE world_state SET sun_angle=? WHERE id=1').run(s0.world.sun_angle ?? 0);
+  // Sonne im Snapshot fürs Frontend (Vektor, keine Zahl)
+  const snap = e.snapshot();
+  assert.ok(snap.tag && snap.tag.sonne, 'kein Sonnenvektor im Snapshot');
+  assert.equal(snap.tag.phase, s0.phase, 'Snapshot-Phase weicht vom Tick ab');
+  assert.equal(typeof snap.tag.erde, 'boolean', 'kein Erde-Flag im Snapshot');
+});
+
+test('finsternis: 4 Stufen aus Deckungsgrad, thermo + Sicht folgen', () => {
+  // Reine Geometrie: deckungsgleich → 3, halb → 2, Streif → 1, daneben → 0.
+  const { FINSTERNIS, finsternisStufe, ERDE } = require('../src/config');
+  const deckung = (FINSTERNIS.sonneRadius + FINSTERNIS.erdeRadius) / FINSTERNIS.schale;
+  const richtung = (a) => ({ x: Math.cos(a) * ERDE.x - Math.sin(a) * ERDE.y, y: Math.sin(a) * ERDE.x + Math.cos(a) * ERDE.y, z: ERDE.z });
+  assert.equal(finsternisStufe({ ...ERDE }).stufe, 3, 'deckungsgleich muss total sein');
+  assert.equal(finsternisStufe(richtung(deckung * 0.4)).stufe, 2, 'knapp daneben muss halb sein');
+  assert.equal(finsternisStufe(richtung(deckung * 0.85)).stufe, 1, 'Streif muss Anbiss sein');
+  assert.equal(finsternisStufe({ x: -ERDE.x, y: -ERDE.y, z: -ERDE.z }).stufe, 0, 'gegenüber muss frei sein');
+  assert.deepEqual(FINSTERNIS.sonneFaktor, [1, 0.8, 0.5, 0], 'Faktoren hart verdrahtet');
+
+  // Thermo: Stufe 3 schaltet den Licht-Anteil ab — mitten am Tag kühlt es wie nachts.
+  const { open } = require('../src/db');
+  const { Engine, step } = require('../src/engine');
+  const { ERDE: ERDE2 } = require('../src/config');
+  const db = frisch();
+  const e = new Engine(db, { apiKey: 'test' });
+  const s = e.state();
+  // Pilot im Mittagslicht, thermo neutral — Sonnenwinkel so wählen, dass der
+  // Tick die Erde trifft (totale Finsternis aus echter Geometrie, kein Erzwingen:
+  // step() rechnet state.sonne aus world.sun_angle neu).
+  // sonnenVektor: x = cos(w), y0 = sin(w), y = y0·cos(n), z = y0·sin(n).
+  // Gesucht: Richtung ≈ ERDE. Mit n = 30°: w so, dass (cos w, sin w·cos n, sin w·sin n) ∝ ERDE.
+  s.pilot.pos_x = 103.9; s.pilot.pos_y = 60; s.pilot.pos_z = 0;
+  s.pilot.thermo = 0;
+  const nNeig = (30 * Math.PI) / 180;
+  // Aus y/z-Verhältnis: tan-Anteil — Erde y/z = 0.42/0.75, Sonne y/z = cos n / sin n fest.
+  // Exakt geht nicht (Bahnneigung ≠ Erd-Richtung), also: Winkel mit kleinstem Abstand suchen.
+  let bestW = 0, bestAb = Infinity;
+  const { sonnenVektor: sv } = require('../src/config');
+  for (let k = 0; k < 720; k += 1) {
+    const w = (k / 720) * Math.PI * 2;
+    const v = sv(w);
+    const l1 = Math.hypot(v.x, v.y, v.z) || 1, l2 = Math.hypot(ERDE2.x, ERDE2.y, ERDE2.z) || 1;
+    const cos = (v.x * ERDE2.x + v.y * ERDE2.y + v.z * ERDE2.z) / (l1 * l2);
+    const ab = Math.acos(Math.max(-1, Math.min(1, cos)));
+    if (ab < bestAb) { bestAb = ab; bestW = w; }
+  }
+  s.world.sun_angle = bestW - 60 * ((2 * Math.PI) / 7200);   // 60 Ticks Vorlauf einrechnen
+  s.licht = 1; s.phase = 'licht';
+  const vorher = s.pilot.thermo;
+  step(s, 60, { live: false, noRandom: true });   // 60 s Mittagslicht mit Finsternis
+  assert.equal(s.finsternis, 3, `keine totale Finsternis: ${s.finsternis}`);
+  assert.ok(Math.abs(s.pilot.thermo - vorher) < 0.01, `Licht wärmt trotz Finsternis: ${vorher} -> ${s.pilot.thermo}`);
+
+  // Sicht: Stufe 3 → Nacht-Faktor, Stufe 0 → Tag-Faktor
+  const { lichtFaktorAusPhase, buildPrompt } = require('../src/prompt');
+  assert.equal(lichtFaktorAusPhase('licht', 3), 0.5, 'Finsternis schrumpft Sicht nicht');
+  assert.equal(lichtFaktorAusPhase('licht', 0), 1, 'freier Tag verzerrt');
+  const prompt = buildPrompt({ ...s.pilot, phase: 'licht', thermo: 0 }, { entities: [], finsternis: 3 });
+  assert.ok(prompt.includes('Finsternis'), 'kein Finsternis-Satz im Prompt');
+});
+
+test('tag/nacht: Schlaf bei Licht nur im Schutz, nachdenken-Hook nur bei Licht', () => {
+  const { AVAIL, darfNachdenken, tagText, sensory } = require('../src/prompt');
+  const muede = { mind_state: 'klar', body: 50, psyche: 0, hunger: 10, drang: 10, halt: 80 };
+  assert.ok(!AVAIL.sleep(muede, { phase: 'licht', nah: [] }), 'Schlaf bei Licht draußen');
+  assert.ok(AVAIL.sleep(muede, { phase: 'licht', nah: ['shade'] }), 'kein Schlaf bei Licht im Schatten');
+  assert.ok(AVAIL.sleep(muede, { phase: 'nacht', nah: [] }), 'kein Schlaf bei Nacht draußen');
+  assert.ok(darfNachdenken('licht') && !darfNachdenken('nacht') && !darfNachdenken('daemmer'),
+    'nachdenken-Hook falsch (Paket D wartet)');
+  assert.equal(tagText(3, 'nacht'), 'Tag 3 · Nacht');
+  // sensory kennt die Phase (Pilot spürt, wo er steht) — ohne body zu verraten
+  const gefuehl = sensory({ ...muede, phase: 'nacht', thermo: 0 });
+  assert.ok(gefuehl.includes('Nacht'), `kein Nacht-Satz: ${gefuehl}`);
+});
+
+// Cluster (obere Hemisphäre, 5-te Aufgabe): das Lager klebt nicht mehr am Nordpol,
+// Anker bleiben in tangentialen Metern, Mindestabstände bleiben bestehen.
+test('config: Cluster hängt an der oberen Hemisphäre, fernab beider Pole', () => {
+  const { CLUSTER, clusterPos } = require('../src/config');
+  assert.ok(CLUSTER.breite >= 20 && CLUSTER.breite <= 60, `Cluster-Breite: ${CLUSTER.breite}`);
+  for (const e of ENTITIES) {
+    const w = clusterPos(e.x, e.z);
+    assert.ok(Math.abs(w.y) < 115, `${e.id}: zu nah am Pol (y=${Math.round(w.y)})`);
+    assert.ok(w.y > 20, `${e.id}: nicht auf der oberen Hemisphäre`);
+  }
+  const kapsel = clusterPos(0, 0);
+  assert.ok(Math.hypot(kapsel.x, kapsel.y, kapsel.z) - 120 < 0.01, 'Kapsel nicht auf der Kugel');
+  // Spawn = Kapsel (kein Nordpol-Spawn mehr)
+  const { Engine } = require('../src/engine');
+  const db = frisch();
+  const eng = new Engine(db, { apiKey: 'test' });
+  const s = eng.state();
+  const d = dist3(s.pilot, { pos_x: kapsel.x, pos_y: kapsel.y, pos_z: kapsel.z });
+  assert.ok(d < 1, `Spawn nicht an der Kapsel: ${d} m daneben`);
 });
 

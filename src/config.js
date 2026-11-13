@@ -136,8 +136,11 @@ const TREIBER = {
     komfort: 30,           // -30..+30 neutral
     drainAb: 40,           // ab |thermo| > 40 leichter body-Drain + psyche-Abzug
     drainStarkAb: 75,      // ab |thermo| > 75 starker body-Drain
-    // Orts-Anteil (Tag/Nacht-Anteil folgt später): shade kühlt, capsule wärmt
+    // Orts-Anteil: shade kühlt, capsule wärmt
     ortRate: 0.05,         // pro Sekunde Richtung 0 am passenden Ort
+    // Licht-Anteil (Tag/Nacht): Sonne wärmt bei Licht, Nacht kühlt schneller
+    lichtAnteil: 0.02,     // pro Sekunde Richtung warm bei Licht
+    nachtAnteil: 0.03,     // pro Sekunde Richtung kalt bei Nacht
   },
   drang: {
     start: 10, min: -100, max: 100,
@@ -151,6 +154,95 @@ const TREIBER = {
     // Regeneration: look_earth, nachdenken (Paket D), sleep in capsule, Rituale (L4)
   },
 };
+
+// --- Tag/Nacht: wandernde Lichtkante + Erde-Tor --------------------------------
+// Kein globaler Tag — die Kugel rotiert unter der Sonne. Helligkeit ist lokal:
+// licht(punkt) = Skalarprodukt aus Ortsnormale und Sonnenvektor.
+// +1 Mittag, 0 Dämmergürtel, -1 Mitternacht. Der Dämmergürtel (|licht| < 0.2)
+// wandert mit der Sonne; der Pilot kann ihm davonlaufen (1 m/s > 0,05 m/s Kante).
+const TAG = {
+  dauerS: 7200,          // eine Umdrehung = 2 h (Tag + Nacht)
+  neigungGrad: 30,       // geneigte Sonnenbahn, damit die Orte-Kappe echten Wechsel erlebt
+  daemmerBis: 0.2,       // |licht| darunter = Dämmerung
+};
+
+// Sonnenvektor aus Winkel: geneigte Kreisbahn (Neigung um die X-Achse).
+// Neigung um X, nicht exakt um Y — die Orte-Kappe (alle pos_y ≈ +120) erlebt
+// sonst ewige Dämmerung statt Wechsel. Der Südpol (leer) kriegt Polartag/-nacht.
+function sonnenVektor(winkel) {
+  const n = (TAG.neigungGrad * Math.PI) / 180;
+  const x = Math.cos(winkel);
+  const y0 = Math.sin(winkel);
+  return { x, y: y0 * Math.cos(n), z: y0 * Math.sin(n) };
+}
+
+// Lokale Helligkeit an einem Kugelpunkt (-1..+1). Reine Funktion, testbar.
+function lichtAn(punkt, sonne) {
+  const p = norm3(vec3(punkt));
+  const l = Math.hypot(sonne.x, sonne.y, sonne.z) || 1;
+  return (p.x * sonne.x + p.y * sonne.y + p.z * sonne.z) / l;
+}
+
+// Phasenwort für Prompt und HUD — keine Zahlen, keine Werte-Namen.
+function lichtPhase(licht) {
+  if (licht > TAG.daemmerBis) return 'licht';
+  if (licht < -TAG.daemmerBis) return 'nacht';
+  return 'daemmer';
+}
+
+// Tageszähler: Sonnen-Umdrehungen seit Start (global, nicht lokal).
+function tagesNummer(winkel) {
+  return Math.floor(winkel / (Math.PI * 2)) + 1;
+}
+
+// --- Erde: fester Himmelsvektor, Sichtbarkeit ist lokal ------------------------
+// V1: Die Erde hängt fest, der Planet dreht sich darunter weg — ~1 h sichtbar,
+// ~1 h weg pro 2-h-Tag. (V2-Idee: langsame Libration, steht in 01 Umsetzung.)
+// Position AUF der Sonnenbahn (w = 45°): nur so gibt es echte Deckung
+// (Finsternis). Mindestabstand sonst 0,46 rad — 8× über dem Deckungsfenster.
+const ERDE = { x: 0.7071, y: 0.6124, z: 0.3536 };   // sonnenVektor(45°) bei 30° Neigung, normiert
+const ERDE_HORIZONT = 0.15;   // so weit über der Kante muss sie stehen
+
+// Ist die Erde vom Punkt aus zu sehen? Reine Funktion, testbar.
+function erdeSichtbarVon(punkt) {
+  const p = norm3(vec3(punkt));
+  const l = Math.hypot(ERDE.x, ERDE.y, ERDE.z) || 1;
+  return (p.x * ERDE.x + p.y * ERDE.y + p.z * ERDE.z) / l > ERDE_HORIZONT;
+}
+
+// --- Finsternis: Deckung in 4 Stufen (simplifiziert, kein Verlauf) --------------
+// Winkeltreu, nicht maßstabstreu: Sonne (Radius 10) + Erde (Radius 40) stehen
+// auf derselben Schale (×900). Deckung = Richtungsabstand < (10+40)/900.
+// Stufen: 0 frei · 1 Anbiss (−20 % Licht) · 2 halb (−50 %) · 3 total (Nachtwerte).
+// Reine Funktion: zwei Vektoren rein, Stufe + Faktoren raus. Testbar ohne DB.
+const FINSTERNIS = {
+  schale: 900,
+  sonneRadius: 10,
+  erdeRadius: 40,
+  grenze1: 0.1, grenze2: 0.5, grenze3: 0.9,   // Deckungsgrad-Grenzen
+  sonneFaktor: [1, 0.8, 0.5, 0],              // Multiplikator fürs Sonnenlicht
+  hemiFaktor: [1, 1, 0.7, 0],                 // Multiplikator fürs Himmelslicht
+  worte: [null, 'Anbiss', 'Halbbedeckt', 'Finsternis'],
+  saetze: [null,
+    'Die Erde schiebt sich vor die Sonne.',
+    'Die Sonne ist halb bedeckt.',
+    'Finsternis — es ist dunkel am hellen Tag.'],
+};
+function finsternisStufe(sonne, erdeVec = ERDE) {
+  const l1 = Math.hypot(sonne.x, sonne.y, sonne.z) || 1;
+  const l2 = Math.hypot(erdeVec.x, erdeVec.y, erdeVec.z) || 1;
+  // Richtungsabstand (Winkel) zwischen Sonnen- und Erd-Richtung
+  const cos = Math.max(-1, Math.min(1,
+    (sonne.x * erdeVec.x + sonne.y * erdeVec.y + sonne.z * erdeVec.z) / (l1 * l2)));
+  const abstand = Math.acos(cos);
+  const deckung = (FINSTERNIS.sonneRadius + FINSTERNIS.erdeRadius) / FINSTERNIS.schale;
+  if (abstand >= deckung) return { stufe: 0, grad: 0 };
+  const grad = 1 - abstand / deckung;   // 0 streift, 1 deckungsgleich
+  const stufe = grad >= FINSTERNIS.grenze3 ? 3 : grad >= FINSTERNIS.grenze2 ? 2 : 1;
+  // Stufe 1 braucht Mindest-Deckung (Anbiss sichtbar), sonst 0
+  if (stufe === 1 && grad < FINSTERNIS.grenze1) return { stufe: 0, grad };
+  return { stufe, grad };
+}
 
 // --- Paket A: Vorhaben (Ziel + Weg aus echten Treibern) ----------------------
 // Schwellen aus Paket K. Setzen nur wenn Distanz > setzenAb, löschen bei
@@ -184,6 +276,8 @@ const NOTEN = ['…Ankunft…', '…nicht öffnen…', '…sie hören zu…'];
 // Sichtstufen (Paket I): Sehen ≠ Verstehen. Ungesehen fehlt im Prompt,
 // bemerkt zeigt nur „?", vermutet eine Vermutung („Eine Art Turm?"),
 // klar erkennt (Namen entdecken). Verstehen braucht Untersuchen vor Ort.
+// Tag/Nacht: lichtFaktor 1 (Tag) … 0,5 (Nacht) — verkürzt alle Distanzen.
+// Dämmerung interpoliert dazwischen (Faktor ~0,75). Der Stolperradius bleibt.
 let SICHT = {
   fernWeit: { winkel: 120, dist: 15 },   // peripheres Bemerken: da ist etwas
   fernEng:  { winkel: 45,  dist: 30 },   // fokussiertes Bemerken: weiter, aber schmal
@@ -219,11 +313,37 @@ const VAGUE_HINTS = {
 // Alle Positionen sind 3D-Vektoren auf der Kugel (Radius WORLD_RADIUS).
 // Altbestände ohne pos_y werden auf die Kugel projiziert — kein Migrationsbruch.
 function vec3(e) {
-  const x = e.pos_x ?? e.x ?? 0;
-  const z = e.pos_z ?? e.z ?? 0;
-  if (e.pos_y != null) return { x, y: e.pos_y, z };
+  // Drei Formen: gespeicherte pos_* (absolut) → direkt;
+  // reine x/z-Werte (Config-Lokal) → clusterPos;
+  // x/y/z-Tripel (Zwischenergebnis) → absolut wie es ist.
+  if (e.pos_x != null && e.pos_y != null && e.pos_z != null) {
+    return { x: e.pos_x, y: e.pos_y, z: e.pos_z };
+  }
+  if (e.x != null && e.y != null && e.z != null) {
+    return { x: e.x, y: e.y, z: e.z };
+  }
+  if (e.x != null || e.z != null) return clusterPos(e.x ?? 0, e.z ?? 0);
+  const x = e.pos_x ?? 0;
+  const z = e.pos_z ?? 0;
   const y = Math.sqrt(Math.max(WORLD_RADIUS * WORLD_RADIUS - x * x - z * z, 0));
   return { x, y, z };
+}
+
+// Cluster lokal (Meter Ost/Nord um die Kapsel) → Kugelposition.
+// Mitte = CLUSTER, lokale Achsen = Ost/Nord dort, Länge = Bogenmaß.
+function clusterPos(lokalOst, lokalNord) {
+  const rad = (d) => (d * Math.PI) / 180;
+  const b0 = rad(CLUSTER.breite), l0 = rad(CLUSTER.laenge);
+  // Mitte als Einheitsvektor
+  const M = { x: Math.cos(b0) * Math.cos(l0), y: Math.sin(b0), z: Math.cos(b0) * Math.sin(l0) };
+  // Tangentialrahmen an der Mitte: Ost + Nord
+  const ost = { x: -Math.sin(l0), y: 0, z: Math.cos(l0) };
+  const nord = { x: -Math.sin(b0) * Math.cos(l0), y: Math.cos(b0), z: -Math.sin(b0) * Math.sin(l0) };
+  const px = M.x + ost.x * (lokalOst / WORLD_RADIUS) + nord.x * (lokalNord / WORLD_RADIUS);
+  const py = M.y + ost.y * (lokalOst / WORLD_RADIUS) + nord.y * (lokalNord / WORLD_RADIUS);
+  const pz = M.z + ost.z * (lokalOst / WORLD_RADIUS) + nord.z * (lokalNord / WORLD_RADIUS);
+  const n = norm3({ x: px, y: py, z: pz });
+  return { x: n.x * WORLD_RADIUS, y: n.y * WORLD_RADIUS, z: n.z * WORLD_RADIUS };
 }
 function norm3(v) {
   const l = Math.hypot(v.x, v.y, v.z) || 1;
@@ -295,13 +415,14 @@ function sichtWinkel(pilot, e) {
   const cos = klammer((tx * h[0] + ty * h[1] + tz * h[2]) / (l * hl));
   return { dist, grad: Math.acos(cos) * 180 / Math.PI };
 }
-function sichtStufe(pilot, e) {
+function sichtStufe(pilot, e, lichtFaktor = 1) {
   const { dist: d, grad } = sichtWinkel(pilot, e);
   if (d <= SICHT.kontakt) return 'klar';                    // Stolpern geht auch hinterm Rücken
-  if (grad <= SICHT.nah.winkel / 2 && d <= SICHT.nah.dist + SICHT.vorlauf) return 'klar';
-  if (grad <= SICHT.mittel.winkel / 2 && d <= SICHT.mittel.dist) return 'vermutet';
-  if ((grad <= SICHT.fernWeit.winkel / 2 && d <= SICHT.fernWeit.dist)
-    || (grad <= SICHT.fernEng.winkel / 2 && d <= SICHT.fernEng.dist)) return 'bemerkt';
+  const f = Math.max(0.5, Math.min(1, lichtFaktor));         // Nacht halbiert, Tag voll
+  if (grad <= SICHT.nah.winkel / 2 && d <= SICHT.nah.dist * f + SICHT.vorlauf) return 'klar';
+  if (grad <= SICHT.mittel.winkel / 2 && d <= SICHT.mittel.dist * f) return 'vermutet';
+  if ((grad <= SICHT.fernWeit.winkel / 2 && d <= SICHT.fernWeit.dist * f)
+    || (grad <= SICHT.fernEng.winkel / 2 && d <= SICHT.fernEng.dist * f)) return 'bemerkt';
   return 'ungesehen';
 }
 
@@ -364,8 +485,14 @@ function modellKurz(name = MODEL.name) {
 const WORLD_RADIUS = 120;   // die GESAMTE Kugel ist begehbar (kein Polkappen-Ausschnitt mehr)
 const PLANET_R = 120;      // Anzeige-Radius; 1 Weltmeter bleibt 1 Meter (Bogenlänge)
 
-// Acht Orte (v0.1). Koordinaten in Metern, Kapsel im Ursprung.
+// Acht Orte (v0.1). Lokale Cluster-Koordinaten in Metern, Kapsel im Ursprung.
+// Das Cluster hängt an CLUSTER (obere Hemisphäre, fernab beider Pole) —
+// clusterPos() projiziert lokal → Kugel, vec3()/db.seed() nutzen das.
 // Abstände bewusst groß (≥ 25 m): Wege sind Teil des Spiels (Vorhaben).
+// Cluster-Mitte: 35° Breite, 20° Länge (obere Hemisphäre, kein Polkappen-Gedränge).
+const CLUSTER = { breite: 35, laenge: 20 };
+// Lokale Ausdehnung des Clusters (Meter Ost/Nord um die Mitte).
+const CLUSTER_R = 60;
 const ENTITIES = [
   { id: 'capsule', type: 'capsule', name: 'Kapsel',        x: 0,    z: 0    },
   { id: 'shade',   type: 'shade',   name: 'Blechschatten', x: 22,   z: 14   },
@@ -381,18 +508,21 @@ const ENTITIES = [
 // Mesh steht. Engine und Prompt rechnen mit der SICHTBAREN Position (ankerPos),
 // die DB behält Logikkoordinaten — keine Migration nötig.
 const VERSATZ = {
-  capsule: [3.4, 3.0], shade: [4, 2], wreck: [10, -6], field: [0, 0],
+  capsule: [3.4, 3.0], shade: [4, 2], wreck: [8, -5], field: [0, 0],
   mast: [2, 3], note: [-2, 1], kuppel: [5.5, 0], bake: [2.5, 1.5],
 };
 
 function ankerPos(e) {
-  const off = VERSATZ[e.type] || [0, 0];
+  // Anker: das Bauwerk steht versetzt zum Logikpunkt, in tangentialen METERN
+  // (VERSATZ ist ein Meter-Offset, kein Skalar). Damit bleibt der Abstand
+  // überall auf der Kugel gleich (früher skalierte er mit der Polnähe).
   const P = vec3(e);
   const { ost, nord } = tangentialRahmen(P);
-  const ax = P.x + ost.x * off[0] + nord.x * off[1];
-  const ay = P.y + ost.y * off[0] + nord.y * off[1];
-  const az = P.z + ost.z * off[0] + nord.z * off[1];
-  const n = norm3({ x: ax, y: ay, z: az });
+  const off = VERSATZ[e.type] || [0, 0];
+  const px = P.x + ost.x * off[0] + nord.x * off[1];
+  const py = P.y + ost.y * off[0] + nord.y * off[1];
+  const pz = P.z + ost.z * off[0] + nord.z * off[1];
+  const n = norm3({ x: px, y: py, z: pz });
   return { pos_x: n.x * WORLD_RADIUS, pos_y: n.y * WORLD_RADIUS, pos_z: n.z * WORLD_RADIUS };
 }
 
@@ -419,7 +549,9 @@ module.exports = {
   DRAIN, MOVE_COST, EFFECT, effectFor, SHADE, EAT_FULL, EARTH, SATT,
   ACTIONS, WALK_SPEED, PSYCHE, MANIA, TREIBER, VORHABEN, NOVELTY, NOTEN, SICHT, VAGUE_HINTS,
   vec3, norm3, dist3, schritt3, tangentialRahmen, sichtWinkel,
-  sichtStufe, richtungWort,
+  sichtStufe, richtungWort, sonnenVektor, lichtAn, lichtPhase, tagesNummer,
+  erdeSichtbarVon, TAG, ERDE, ERDE_HORIZONT, FINSTERNIS, finsternisStufe,
   ankerPos, VERSATZ, STUFE_RANG, entityLabel, haltAbstand, wuerfelImpuls, IMPULS_WAHL,
   RESPAWN_DELAY_S, START, MODEL, modellKurz, WORLD_RADIUS, PLANET_R, ENTITIES,
+  CLUSTER, CLUSTER_R, clusterPos,
 };

@@ -13,7 +13,7 @@ const stage = document.getElementById('stage');
 const renderer = new THREE.WebGLRenderer({ antialias: true });
 renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
-renderer.toneMappingExposure = 1.15;
+renderer.toneMappingExposure = 1.25;
 renderer.shadowMap.enabled = true;   // simple Schatten, ein Licht, eine Map
 renderer.shadowMap.type = THREE.PCFShadowMap;
 renderer.setSize(innerWidth, innerHeight);
@@ -24,9 +24,11 @@ scene.background = new THREE.Color(0x05070b);
 
 const camera = new THREE.PerspectiveCamera(50, innerWidth / innerHeight, 0.5, 1200);
 
-// Licht von einer Seite: keine Tageszeit, ein fester Winkel
-scene.add(new THREE.HemisphereLight(0x3b4a63, 0x151311, 1.15));
-const sun = new THREE.DirectionalLight(0xfff1dc, 2.4);
+// Licht wandert mit der Sonne (Vektor aus /api/state), nicht fest.
+// Start: alte Festposition, bis der erste State kommt.
+const hemi = new THREE.HemisphereLight(0x3b4a63, 0x151311, 1.35);
+scene.add(hemi);
+const sun = new THREE.DirectionalLight(0xfff1dc, 3.2);
 sun.position.set(0.45, 1, 0.35).normalize().multiplyScalar(200);
 // Ganz simple Schatten: eine 1024er Shadowmap, Boden fängt, Meshes werfen
 sun.castShadow = true;
@@ -41,6 +43,10 @@ sun.shadow.bias = -0.0005;
 scene.add(sun);
 
 // ---------------------------------------------------------------- Himmel
+// Tag/Nacht: Die Sonne wandert (Vektor aus /api/state), Erde hängt fest.
+// licht: Hemisphere hell, Sonne warm. Nacht: beides runter auf ~0,3.
+const HEMI_TAG = 1.35, HEMI_NACHT = 0.3;
+const SONNE_TAG = 3.2, SONNE_NACHT = 0.5;
 {
   const geo = new THREE.BufferGeometry();
   const pts = [];
@@ -53,18 +59,183 @@ scene.add(sun);
   scene.add(new THREE.Points(geo, new THREE.PointsMaterial({ color: 0x8fa3bd, size: 1.4, sizeAttenuation: true })));
 }
 
-// Die Erde steht fest am Himmel — der Anker für den späteren Uplink
-const erde = new THREE.Mesh(
-  new THREE.SphereGeometry(7, 24, 16),
-  new THREE.MeshBasicMaterial({ color: 0x6fb3ff }),
-);
-erde.position.set(0.5, 0.42, 0.75).normalize().multiplyScalar(210);
+// Die Erde hängt fest am Himmel (V1) — der Anker für den späteren Uplink.
+// Wird aus /api/state gesetzt (gleicher Vektor wie die Engine rechnet).
+// Weit draußen als Scheibe (Sprite, immer zur Kamera), visuell GRÖSSER als
+// die Sonne: 80 px bei ×900 schlägt 20 px Scheibe bei ×600 deutlich.
+// Muster: prozeduraler Canvas (Ozean + Zufalls-Kontinente + Wolken), einmalig,
+// keine Texturdatei, kein Rechenaufwand pro Frame.
+// In-Scale-Himmel (winkeltreu, nicht maßstabstreu): Sonne + Erde auf derselben
+// Schale (×900), Radien 10/40. Deckung = Richtungsabstand < (10+40)/900.
+// Die Erde ist eine KUGEL mit StandardMaterial — das echte Sonnenlicht malt
+// ihre Phasen von selbst (Vollerde/Halb/Neumond). Sprite war immer voll hell.
+const HIMMEL_WEIT = 900;
+const SONNE_RADIUS = 10, ERDE_RADIUS = 40;
+// Deterministischer Seed — die Erde sieht bei jedem Laden gleich aus.
+// Mulberry32, prozedural, keine Datei, kein Aufwand pro Frame.
+function erdeZufall(seed) {
+  let a = seed >>> 0;
+  return () => {
+    a |= 0; a = (a + 0x6D2B79F5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+const erde = (() => {
+  const zufall = erdeZufall(20261114);   // fester Seed: gleiche Erde bei jedem Laden
+  const c = document.createElement('canvas');
+  c.width = 256; c.height = 256;
+  const g = c.getContext('2d');
+  // Ozean-Grund
+  const ozean = g.createRadialGradient(96, 96, 20, 128, 128, 128);
+  ozean.addColorStop(0, '#3a8fd0');
+  ozean.addColorStop(0.6, '#2265a0');
+  ozean.addColorStop(1, '#143a63');
+  g.fillStyle = ozean;
+  g.beginPath(); g.arc(128, 128, 124, 0, Math.PI * 2); g.fill();
+  // Auf die Scheibe clippen — alles Weitere bleibt im Kreis
+  g.save();
+  g.beginPath(); g.arc(128, 128, 124, 0, Math.PI * 2); g.clip();
+  // Kontinente grob wie die Erde: links Afrika/Eurasien als Block,
+  // rechts Amerika als Band, Australien als Klecks unten rechts.
+  // Jede Landmasse = Ellipsen-Cluster mit zerfranster Küste (Seed-gesteuert).
+  const gruen = ['#3f9150', '#5da85c', '#7cbf6a', '#2f7340'];
+  const land = (x, y, rx, ry, n, streu) => {
+    for (let i = 0; i < n; i += 1) {
+      const ex = x + (zufall() - 0.5) * streu, ey = y + (zufall() - 0.5) * streu;
+      const erx = rx * (0.35 + zufall() * 0.5), ery = ry * (0.35 + zufall() * 0.5);
+      g.fillStyle = gruen[Math.floor(zufall() * gruen.length)];
+      g.beginPath(); g.ellipse(ex, ey, erx, ery, zufall() * Math.PI, 0, Math.PI * 2); g.fill();
+    }
+  };
+  land(150, 120, 58, 62, 9, 70);    // Afrika/Eurasien-Block (Mitte/Osten)
+  land(70, 110, 30, 55, 7, 45);     // Amerika-Band (Westen)
+  land(205, 190, 20, 14, 4, 22);    // Australien-Klecks (unten rechts)
+  land(128, 45, 40, 12, 4, 50);     // Nordkappe (oben, schmal)
+  // Eiskappen oben/unten
+  g.fillStyle = 'rgba(235,242,250,0.95)';
+  g.fillRect(0, 0, 256, 22);
+  g.fillRect(0, 234, 256, 22);
+  // Wolken: dünne weiße Streifen, halbtransparent (Seed-gesteuert, fest)
+  g.fillStyle = 'rgba(255,255,255,0.5)';
+  for (let i = 0; i < 22; i += 1) {
+    const x = zufall() * 256, y = zufall() * 256;
+    g.beginPath();
+    g.ellipse(x, y, 20 + zufall() * 36, 3 + zufall() * 5, (zufall() - 0.5) * 0.6, 0, Math.PI * 2);
+    g.fill();
+  }
+  // Lichtkante: rechts dunkel abblenden für Tiefe (unbeleuchtetes Sprite)
+  const schatten = g.createLinearGradient(60, 0, 220, 0);
+  schatten.addColorStop(0, 'rgba(0,0,10,0)');
+  schatten.addColorStop(1, 'rgba(0,0,15,0.55)');
+  g.fillStyle = schatten;
+  g.fillRect(0, 0, 256, 256);
+  g.restore();
+  // feiner Rand gegen den Sternenhimmel
+  g.strokeStyle = 'rgba(150,190,255,0.6)';
+  g.lineWidth = 3;
+  g.beginPath(); g.arc(128, 128, 122, 0, Math.PI * 2); g.stroke();
+  const tex = new THREE.CanvasTexture(c);
+  // Kugel statt Sprite: Das Sonnenlicht (DirectionalLight) beleuchtet sie echt —
+  // Phasen entstehen von selbst. Emissive lässt die Nachtseite schimmern
+  // (kein Schwarz vor den Sternen). Kein Schattenwurf (26-km-Schatten in
+  // 1024 px wäre Matsch — die Boden-Finsternis dimmt das Licht, nicht der Schatten).
+  const erde = new THREE.Mesh(
+    new THREE.SphereGeometry(ERDE_RADIUS, 32, 24),
+    new THREE.MeshStandardMaterial({
+      map: tex, roughness: 0.9, metalness: 0,
+      emissive: 0x0a1830, emissiveIntensity: 0.35,
+    }),
+  );
+  erde.castShadow = false;
+  erde.receiveShadow = false;
+  return erde;
+})();
+const ERDE_VEC = { x: 0.7071, y: 0.6124, z: 0.3536 };   // wie ERDE in config.js
+erde.position.set(0.5, 0.42, 0.75).normalize().multiplyScalar(HIMMEL_WEIT);
 scene.add(erde);
 
+// Die Sonne als sichtbarer Himmelskörper: kleine helle Scheibe + Hof,
+// auf derselben Schale wie die Erde (×900). Das DirectionalLight
+// bleibt unsichtbar — das hier ist sein Körper am Himmel.
+const SONNE_WEIT = HIMMEL_WEIT;
+const sonnenScheibe = new THREE.Mesh(
+  new THREE.SphereGeometry(SONNE_RADIUS, 24, 16),
+  new THREE.MeshBasicMaterial({ color: 0xfff3d6 }),
+);
+scene.add(sonnenScheibe);
+const sonnenHof = (() => {
+  const c = document.createElement('canvas');
+  c.width = 128; c.height = 128;
+  const g = c.getContext('2d');
+  const grad = g.createRadialGradient(64, 64, 0, 64, 64, 64);
+  grad.addColorStop(0, 'rgba(255,240,210,0.9)');
+  grad.addColorStop(0.35, 'rgba(255,220,160,0.35)');
+  grad.addColorStop(1, 'rgba(255,210,140,0)');
+  g.fillStyle = grad;
+  g.fillRect(0, 0, 128, 128);
+  const tex = new THREE.CanvasTexture(c);
+  const sprite = new THREE.Sprite(new THREE.SpriteMaterial({
+    map: tex, transparent: true, depthTest: true, depthWrite: false,
+  }));
+  sprite.scale.set(90, 90, 1);
+  return sprite;
+})();
+scene.add(sonnenHof);
+
+// ------------------------------------------------- Pole: Flaggen als Sektor-Nullpunkte
+// Die Flaggen markieren Nord-/Südpol sichtbar — später Sektor-Nullpunkte (Paket J).
+function polFlagge(nord) {
+  const gruppe = new THREE.Group();
+  const stange = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.12, 0.12, 4.5, 8),
+    new THREE.MeshStandardMaterial({ color: 0xd8dee8, roughness: 0.6 }),
+  );
+  stange.position.y = 2.25;
+  stange.castShadow = true;
+  const tuch = new THREE.Mesh(
+    new THREE.PlaneGeometry(2.6, 1.6),
+    new THREE.MeshStandardMaterial({ color: nord ? 0x38bdf8 : 0xf5a524, side: THREE.DoubleSide, roughness: 0.8 }),
+  );
+  tuch.position.set(1.35, 3.5, 0);
+  gruppe.add(stange, tuch);
+  const pol = new THREE.Vector3(0, nord ? R : -R, 0);
+  gruppe.position.copy(pol);
+  gruppe.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), pol.clone().normalize());
+  scene.add(gruppe);
+  return gruppe;
+}
+polFlagge(true);
+polFlagge(false);
+
 // ---------------------------------------------------------------- Planet
+// Subtiles Oberflächenmuster: prozedurale Canvas-Textur (Seed fest —
+// gleiches Bild bei jedem Laden), sehr niedriger Kontrast, kein Rechenaufwand.
+function planetTextur() {
+  const c = document.createElement('canvas');
+  c.width = 512; c.height = 256;
+  const g = c.getContext('2d');
+  let s = 20261114;
+  const rnd = () => ((s = (s * 1664525 + 1013904223) >>> 0) / 0xffffffff);
+  g.fillStyle = '#837a68'; g.fillRect(0, 0, 512, 256);
+  for (let i = 0; i < 2600; i += 1) {
+    const x = rnd() * 512, y = rnd() * 256, r = 1 + rnd() * 7;
+    g.fillStyle = rnd() > 0.5 ? 'rgba(255,250,235,0.05)' : 'rgba(20,16,10,0.06)';
+    g.beginPath(); g.arc(x, y, r, 0, 7); g.fill();
+  }
+  for (let i = 0; i < 40; i += 1) {
+    const x = rnd() * 512, y = rnd() * 256, r = 8 + rnd() * 26;
+    g.fillStyle = 'rgba(40,34,22,0.05)';
+    g.beginPath(); g.arc(x, y, r, 0, 7); g.fill();
+  }
+  const t = new THREE.CanvasTexture(c);
+  t.colorSpace = THREE.SRGBColorSpace;
+  return t;
+}
 const planet = new THREE.Mesh(
   new THREE.SphereGeometry(R, 96, 64),
-  new THREE.MeshStandardMaterial({ color: 0x837a68, roughness: 0.95, metalness: 0.05 }),
+  new THREE.MeshStandardMaterial({ map: planetTextur(), roughness: 0.95, metalness: 0.05 }),
 );
 planet.receiveShadow = true;   // Boden fängt alle Schatten
 scene.add(planet);
@@ -131,6 +302,30 @@ function label(text) {
   return sprite;
 }
 
+// --------------------------------------------- Dev: Linien Planet→Sonne + Planet→Erde
+// Nur im Dev-Modus sichtbar — zwei Linien vom Kern zu Sonne und Erde.
+// Die Deckungs-Färbung nutzt die Finsternis-Rechnung der Engine (Deckung < 3,2°).
+let linieSonne = null, linieErde = null;
+if (DEV) {
+  const geoS = new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(), new THREE.Vector3(1, 0, 0)]);
+  linieSonne = new THREE.Line(geoS, new THREE.LineBasicMaterial({ color: 0xffd76a }));
+  const geoE = new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(), new THREE.Vector3(1, 0, 0)]);
+  linieErde = new THREE.Line(geoE, new THREE.LineBasicMaterial({ color: 0x38bdf8 }));
+  linieSonne.frustumCulled = false; linieErde.frustumCulled = false;
+  scene.add(linieSonne, linieErde);
+}
+function devLinien(sonneRichtung) {
+  if (!DEV || !linieSonne) return;
+  const kern = new THREE.Vector3(0, 0, 0);
+  const s = sonneRichtung.clone().normalize().multiplyScalar(SONNE_WEIT);
+  const e = new THREE.Vector3(ERDE_VEC.x, ERDE_VEC.y, ERDE_VEC.z).normalize().multiplyScalar(HIMMEL_WEIT);
+  linieSonne.geometry.setFromPoints([kern, s]);
+  linieErde.geometry.setFromPoints([kern, e]);
+  // Finsternis-Deckung: Richtungsabstand wie in der Engine (FINSTERNIS.deckungMax 3,2°)
+  const deckung = s.clone().normalize().angleTo(e.clone().normalize()) * 180 / Math.PI;
+  linieSonne.material.color.setHex(deckung < 3.2 ? 0xff5a5a : 0xffd76a);
+}
+
 function baueOrt(e) {
   const g = new THREE.Group();
   switch (e.type) {
@@ -182,7 +377,17 @@ function baueOrt(e) {
       const lampe = new THREE.PointLight(0xffd8a8, 26, 16, 2);
       lampe.position.set(0, 4.5, 0);
 
-      g.add(sockel, fenster, ringUnten, ringOben, dach, innen, konsole, schirm, liege, lampe);
+      // Dachlicht: kleine warme Außenlampe auf der Dachspitze — der Heimathafen
+      // ist nachts als Leuchtfeuer lesbar. Leuchtet immer (tagsüber gegen die
+      // Sonne chancenlos, nachts der Orientierungspunkt). Kein Schatten.
+      const dachKnopf = new THREE.Mesh(new THREE.SphereGeometry(0.32, 12, 8),
+        new THREE.MeshBasicMaterial({ color: 0xffdca8 }));
+      dachKnopf.position.set(0, 8.45, 0);
+      const dachLicht = new THREE.PointLight(0xffc98a, 30, 14, 2);
+      dachLicht.position.set(0, 8.9, 0);
+
+      g.add(sockel, fenster, ringUnten, ringOben, dach, innen, konsole, schirm, liege, lampe,
+        dachKnopf, dachLicht);
       break;
     }
     case 'shade': {
@@ -427,6 +632,27 @@ figur.add(korper, kopf, augeL, augeR, helm);
 figur.traverse((o) => { if (o.isMesh) { o.castShadow = true; o.receiveShadow = false; } });
 scene.add(figur);
 
+// Taschenlampe: SpotLight an der Figur, Blickrichtung = weiche _blick-Richtung.
+// Warmweiß, ~25° Öffnung, ~18 m weit — grob die „mittel"-Distanz (15 m).
+// An nur bei Nacht/Dämmerung; tagsüber unsichtbar. Kein Schatten (teuer),
+// nur Aufhellen. Der sichtbare Kegel ist dezent, im Dev-Modus aus.
+const lampe = new THREE.SpotLight(0xffe6c0, 0, 22, 25 * Math.PI / 180, 0.5, 1.2);
+lampe.position.set(0, 3.6, 0.6);
+figur.add(lampe);
+lampe.target.position.set(0, 1.5, 12);
+figur.add(lampe.target);
+const lampenKegel = new THREE.Mesh(
+  new THREE.ConeGeometry(4.2, 16, 20, 1, true),
+  new THREE.MeshBasicMaterial({
+    color: 0xffe6c0, transparent: true, opacity: 0.05,
+    side: THREE.DoubleSide, depthWrite: false, blending: THREE.AdditiveBlending,
+  }),
+);
+lampenKegel.position.set(0, 2.2, 8);
+lampenKegel.rotation.x = Math.PI / 2 - 0.12;   // leicht nach unten geneigt
+lampenKegel.visible = false;
+figur.add(lampenKegel);
+
 // Dev-Sichtkegel (Paket I, nur ?mode=dev): 15 m vage + 7 m klar als Overlay,
 // ausgerichtet am Engine-Heading. Kein Tiefentest — reine Debug-Anzeige.
 let kegel = null;
@@ -557,9 +783,13 @@ grab.visible = false;
 scene.add(grab);
 
 // ---------------------------------------------------------------- Kamera
+// Zwei Modi: Charakter (folgt der Figur) und Planet (frei drehbar, immer auf
+// den Kern zentriert). Im Planet-Modus ist die Neigung frei (Pole erlaubt) —
+// nur der Blickzwang auf den Kern bleibt, sonst verliert man die Kugel.
 const MODES = {
   charakter: { dist: 46, min: 30, max: 80, yaw: 0.7, pitch: 0.52, pitchMin: 0.2, pitchMax: 1.0, target: 'pilot' },
-  planet: { dist: 330, min: 250, max: 430, yaw: 0.6, pitch: 0.85, pitchMin: 0.3, pitchMax: 1.4, target: 'planet' },
+  // Planet: Pitch bis ±85° (fast Pole, kein Gimbal mehr dank radialem Up).
+  planet: { dist: 330, min: 250, max: 430, yaw: 0.6, pitch: 0.85, pitchMin: -1.48, pitchMax: 1.48, target: 'planet' },
 };
 
 let mode = 'charakter';
@@ -607,9 +837,9 @@ renderer.domElement.addEventListener('pointerdown', (e) => {
 renderer.domElement.addEventListener('pointermove', (e) => {
   if (!dragging) return;
   const m = MODES[mode];
+  // Yaw: immer frei (360°+, beide Modi). Pitch: Charakter begrenzt (über der
+  // Oberfläche bleiben), Planet frei (Pole erlaubt, Kern bleibt das Ziel).
   camZiel.yaw -= (e.clientX - letzteX) * 0.005;
-  // Nur die Neigung ist begrenzt (Kamera bleibt über der Oberfläche),
-  // gedreht wird frei um 360°+.
   camZiel.pitch = Math.min(m.pitchMax, Math.max(m.pitchMin, camZiel.pitch - (e.clientY - letzteY) * 0.004));
   letzteX = e.clientX;
   letzteY = e.clientY;
@@ -663,9 +893,18 @@ function zeichneHud(s) {
   const p = s.pilot;
   const c = s.clock || { day: 1, ageHours: 0 };
   const h = c.ageHours < 1 ? `${Math.round(c.ageHours * 60)} min` : `${Math.round(c.ageHours * 10) / 10} h`;
+  // Tag/Nacht: globale Tag-Nr + lokale Phase („Tag 3 · Nacht" = 3× gedreht, hier Nacht)
+  const tag = s.tag || null;
+  const tagZeile = tag
+    ? ` · Tag ${tag.nr} · ${tag.phase === 'licht' ? 'Tag' : tag.phase === 'nacht' ? 'Nacht' : 'Dämmerung'}`
+    : '';
   document.getElementById('name').innerHTML =
-    `<b>${p.name}</b> · Zyklus ${p.cycle_num} · Tag ${c.day} · seit ${h}`;
+    `<b>${p.name}</b> · Zyklus ${p.cycle_num}${tagZeile} · seit ${h}`;
   const hinweise = [`Tick ${s.world.tick}`, AKTION[p.current_action] || p.current_action];
+  // Erde untergegangen → Bake-Tor zu (steht im Prompt, hier als Hinweis)
+  if (tag && !tag.erde) hinweise.push('Erde weg');
+  // Finsternis: Warn-Hinweis bei total, klein daneben bei Anbiss/Halb
+  if (tag && tag.finsternisWort) hinweise.push(tag.finsternisWort);
   if (s.speed && s.speed > 1) hinweise.push(`×${s.speed} Zeit`);
   if (p.mania) hinweise.push('MANIE');
   if (p.mind_state !== 'klar') hinweise.push(p.mind_state.toUpperCase());
@@ -765,14 +1004,58 @@ const es = new EventSource('/api/stream');
 es.onmessage = (ev) => {
   let d;
   try { d = JSON.parse(ev.data); } catch { return; }
-  if (d.kind === 'state') { letzterState = d; syncOrte(d.entities); zeichneHud(d); return; }
+  if (d.kind === 'state') { letzterState = d; syncOrte(d.entities); zeichneHud(d); sonneSetzen(d.tag); return; }
   if (d.kind === 'feed') { zeichneFeed(d.feed); zeichneGlaube(d.beliefs); return; }
   letzterState = d;
   syncOrte(d.entities);
   zeichneHud(d);
+  sonneSetzen(d.tag);
   zeichneFeed(d.feed);
   zeichneGlaube(d.beliefs);
 };
+
+// Tag/Nacht: Sonne aus dem Engine-Vektor stellen, Licht dimmen.
+// Kein eigenes Modell — dasselbe Ding wie die Engine rechnet, kein Drift.
+// Finsternis: Deckung dimmt das Sonnenlicht mit (4 Stufen, Faktoren aus FINSTERNIS).
+// phase fehlt (alter Server): nichts tun, Startposition bleibt.
+function sonneSetzen(tag) {
+  if (!tag || !tag.sonne || !tag.phase) return;
+  const v = tag.sonne;
+  const l = Math.hypot(v.x, v.y, v.z) || 1;
+  sun.position.set(v.x / l, v.y / l, v.z / l).multiplyScalar(200);
+  // Scheibe + Hof folgen derselben Richtung, auf der Himmels-Schale
+  sonnenScheibe.position.set(v.x / l, v.y / l, v.z / l).multiplyScalar(SONNE_WEIT);
+  sonnenHof.position.copy(sonnenScheibe.position);
+  // Finsternis: Richtungsabstand Sonne↔Erde entscheidet (gleiche Rechnung wie Engine).
+  // Faktoren hart verdrahtet wie FINSTERNIS in config.js (kein Doppel-Modell).
+  const ex = 0.7071, ey = 0.6124, ez = 0.3536;   // ERDE_VEC — synchron mit ERDE in config.js halten
+  const el = Math.hypot(ex, ey, ez) || 1;
+  const nx = v.x / l, ny = v.y / l, nz = v.z / l;
+  const abstand = Math.acos(Math.max(-1, Math.min(1,
+    nx * (ex / el) + ny * (ey / el) + nz * (ez / el))));
+  const fenster = (10 + 40) / 900;         // SONNE_RADIUS + ERDE_RADIUS / Schale
+  const grad = abstand >= fenster ? 0 : 1 - abstand / fenster;
+  const finst = grad >= 0.9 ? 3 : grad >= 0.5 ? 2 : grad >= 0.1 ? 1 : 0;
+  const SONNE_F = [1, 0.8, 0.5, 0][finst], HEMI_F = [1, 1, 0.7, 0][finst];
+  const hell = tag.phase === 'licht' ? 1 : tag.phase === 'daemmer' ? 0.6 : 0;
+  hemi.intensity = (HEMI_NACHT + (HEMI_TAG - HEMI_NACHT) * hell) * HEMI_F;
+  sun.intensity = (SONNE_NACHT + (SONNE_TAG - SONNE_NACHT) * hell) * SONNE_F;
+  // Nachts verblasst die Scheibe mit (kein Mondlicht von der Sonne),
+  // der Hof schrumpft — tagsüber volle Pracht; Finsternis frisst den Hof zuerst
+  sonnenScheibe.material.color.setScalar((0.35 + 0.65 * hell) * (finst >= 3 ? 0.2 : 1));
+  const hofF = (0.4 + 0.6 * hell) * SONNE_F;
+  sonnenHof.scale.set(90 * hofF, 90 * hofF, 1);
+  // Taschenlampe: an bei Nacht/Dämmerung — und bei totaler Finsternis am Tag.
+  // Der Spot folgt der Figur (Kind-Knoten), der Kegel zeigt den Strahl.
+  const lampenHell = finst >= 3 ? 1 : tag.phase === 'nacht' ? 1 : tag.phase === 'daemmer' ? 0.5 : 0;
+  lampe.intensity = lampenHell * 60;
+  lampenKegel.visible = lampenHell > 0 && !DEV;
+  lampenKegel.material.opacity = lampenKegel.visible ? 0.05 * lampenHell : 0;
+  // Erde: Kugel auf der Himmels-Schale, aus dem gleichen Vektor wie die Engine.
+  erde.position.set(ERDE_VEC.x, ERDE_VEC.y, ERDE_VEC.z).normalize().multiplyScalar(HIMMEL_WEIT);
+  // Dev-Linien: Kern → Sonne + Kern → Erde (nur ?mode=dev sichtbar)
+  devLinien(new THREE.Vector3(v.x / l, v.y / l, v.z / l));
+}
 
 // ---------------------------------------------------------------- Debug-Log (?mode=dev)
 const dbgListe = document.getElementById('debugliste');
@@ -926,6 +1209,10 @@ const uhr = new THREE.Clock();
 const bubble = document.getElementById('bubble');
 const kopfWelt = new THREE.Vector3();
 const blick = new THREE.Vector3();
+// Blick-Hilfsvektor für die Kameraführung (Up-Weiche) — wird jeden Tick
+// frisch beschrieben, kein Zustand. Nicht mit _fwd verwechseln (Figurenblick).
+const _kamBlick = new THREE.Vector3();
+const _upHilf = new THREE.Vector3();
 
 function tick() {
   const dt = Math.min(uhr.getDelta(), 0.1);
@@ -1022,16 +1309,30 @@ function tick() {
     zielPunkt.copy(figur.position).addScaledVector(normal, 3.0);
   }
 
-  const sp = Math.sin(cam.pitch);
+  // Kamera: Pitch = Höhenwinkel (−80° Südpol … +80° Nordpol). Damit geht
+  // senkrecht unten genauso wie oben — die alten Grenzen (0,05…π−0,05) haben
+  // die Südhalbkugel ausgesperrt. cos(pitch) bleibt positiv, kein Spiegeln.
+  const sp = Math.sin(cam.pitch), cp = Math.cos(cam.pitch);
   camPos.set(
-    zielPunkt.x + Math.cos(cam.yaw) * Math.cos(cam.pitch) * cam.dist,
+    zielPunkt.x + Math.cos(cam.yaw) * cp * cam.dist,
     zielPunkt.y + sp * cam.dist,
-    zielPunkt.z + Math.sin(cam.yaw) * Math.cos(cam.pitch) * cam.dist,
+    zielPunkt.z + Math.sin(cam.yaw) * cp * cam.dist,
   );
   camera.position.copy(camPos);
+  // Radiales Up gegen den Pol-Flip: Up = Projektion von „oben" auf die
+  // Bildebene. Am Pol zeigt die Kamera senkrecht nach unten, der alte
+  // Welt-Y-Up ist dort parallel zur Blickrichtung → lookAt rollt 90–180°.
+  // Im Charakter-Modus bleibt Welt-Y (Horizont stabil), im Planet-Modus
+  // dreht Up mit (Pole ohne Flip begehbar).
+  _kamBlick.subVectors(zielPunkt, camPos).normalize();
+  if (mode === 'planet') {
+    _upHilf.set(0, 1, 0).addScaledVector(_kamBlick, -_kamBlick.y);
+    if (_upHilf.lengthSq() < 1e-6) _upHilf.set(0, 0, _kamBlick.z >= 0 ? -1 : 1);
+    camera.up.copy(_upHilf.normalize());
+  } else {
+    camera.up.set(0, 1, 0);
+  }
   camera.lookAt(zielPunkt);
-
-  camera.up.set(0, 1, 0);
 
   // Pin: in der Planetenansicht ersetzt er die Figur als sichtbaren Punkt
   pin.visible = mode === 'planet' && figur.visible;

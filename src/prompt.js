@@ -2,6 +2,17 @@
 // Prompt-Bau: Wesen (Gewichte), Körpergefühl, Glaube, Objekte, Whitelist, Musings.
 const { ACTIONS, PSYCHE, NOVELTY, VAGUE_HINTS, dist3, sichtStufe, richtungWort, ankerPos } = require('./config');
 
+// Lichtfaktor aus Phasenwort (Engine rechnet, Prompt verbraucht nur).
+// licht 1, daemmer 0,75, nacht 0,5 — passt zum sichtStufe-Vertrag.
+// Finsternis: Stufe 3 → Nacht-Sicht (0,5), Stufe 2 → Dämmer-Sicht (0,75).
+function lichtFaktorAusPhase(phase, finsternis = 0) {
+  if (finsternis >= 3) return 0.5;
+  if (finsternis >= 2) return 0.75;
+  if (phase === 'nacht') return 0.5;
+  if (phase === 'daemmer') return 0.75;
+  return 1;
+}
+
 const INSTINCTS = [
   'Sitzen hilft nur, wenn der Körper Ruhe braucht. Bist du fit, wird dir langweilig und die Stimmung sinkt.',
   'Stille und unregelmäßiges Klopfen ziehen dich runter. Etwas Neues hebt dich.',
@@ -47,6 +58,13 @@ function sensory(pilot) {
   else if (hunger > 50) out.push('Dein Magen knurrt.');
   else if (hunger > 35) out.push('Du könntest etwas vertragen.');
 
+  // Tag/Nacht: ein Satz zum Licht, keine Zahlen. Der Phasen-Satz steht immer,
+  // thermo-Sätze feuern jetzt öfter (die Sonne bewegt den Wert rhythmisch).
+  const phase = pilot.phase || 'licht';
+  if (phase === 'licht') out.push('Die Sonne steht hoch.');
+  else if (phase === 'nacht') out.push('Es ist Nacht.');
+  else out.push('Das Licht kippt.');
+
   const thermo = pilot.thermo ?? 0;
   if (thermo > 75) out.push('Die Hitze flimmert im Anzug.');
   else if (thermo > 40) out.push('Dir ist zu warm.');
@@ -64,11 +82,21 @@ function sensory(pilot) {
 
 // Wann eine Aktion angeboten wird: nur wenn der Körper sie braucht.
 // Paket K: eat/sleep/sit_shade/look_earth lesen Treiber, nicht mehr body/psyche direkt.
+// Tag/Nacht: opts { phase, erde } vom Tick — Schlaf bei Licht nur im Schatten/in der
+// Kapsel (er verkriecht sich), bei Nacht überall. call_bake nur bei sichtbarer Erde.
 const AVAIL = {
   eat: (p) => (p.hunger ?? 15) > 45,
   // Sitzen ist keine Freizeitbeschäftigung: erst wenn der Körper Ruhe braucht
   sit_shade: (p) => p.body < 70 || (p.drang ?? 10) < -30 || (p.halt ?? 80) < 40,
-  sleep: (p) => p.body < 60 || (p.drang ?? 10) < -40 || (p.halt ?? 80) < 40,
+  sleep: (p, o = {}) => {
+    const basis = p.body < 60 || (p.drang ?? 10) < -40 || (p.halt ?? 80) < 40;
+    if (!basis) return false;
+    if ((o.phase || 'licht') === 'licht') {
+      const nah = o.nah || [];
+      return nah.includes('shade') || nah.includes('capsule');
+    }
+    return true;
+  },
   look_earth: (p) => (p.halt ?? 80) < 60,
   inspect: () => true,
   dig: () => true,
@@ -76,7 +104,10 @@ const AVAIL = {
   read_note: (p) => p.psyche < -15,
   check_stock: (p) => p.body < 65,
   tend_dome: (p) => p.body < 75 || p.psyche > 20,
-  call_bake: () => true,   // die schlechte Option bleibt absichtlich wählbar
+  // Tag/Nacht (Erde-Tor): Notruf nur bei sichtbarer Erde — sonst gar nicht angeboten.
+  // Kein Verbot durch Strafe, sondern durch Nicht-Angebot. Default: sichtbar (Tests
+  // ohne Erde-Kontext laufen weiter — die Engine übergibt immer den echten Wert).
+  call_bake: (p, o = {}) => (o.erde ?? true),   // die schlechte Option bleibt absichtlich wählbar
   streifen: () => true,    // ehrliche Alternative bei Langeweile: kostet Beine, bringt Neuigkeit
   sinnieren: () => true,   // freies Denken, jederzeit; Monotonie-Bremse fängt Spam
 };
@@ -84,7 +115,10 @@ const AVAIL = {
 const RUHE = ['sit_shade', 'look_earth', 'sinnieren'];
 
 function whitelistFor(pilot, opts = {}) {
-  const { recentActions = [] } = opts;
+  // opts: recentActions + Tag/Nacht (phase, erde, nah) — die Engine übergibt
+  // echte Werte, Tests ohne Kontext bekommen Tag-Defaults (Licht, Erde sichtbar).
+  const { recentActions = [], phase = 'licht', erde = true, nah = [] } = opts;
+  const tagNacht = { phase, erde, nah };
   const manieAktiv = pilot.mania_until_tick != null;
   let list;
   if (pilot.mind_state === 'stupor') list = ['sit_shade', 'sleep'];
@@ -110,7 +144,7 @@ function whitelistFor(pilot, opts = {}) {
   }
 
   if (pilot.mind_state === 'klar') {
-    const gefiltert = list.filter((a) => !AVAIL[a] || AVAIL[a](pilot));
+    const gefiltert = list.filter((a) => !AVAIL[a] || AVAIL[a](pilot, tagNacht));
     if (gefiltert.length) list = gefiltert;
 
     // Ruhe-Quote: zwei ruhige Aktionen in den letzten drei -> Ruhe eine Runde gesperrt
@@ -148,11 +182,11 @@ function whitelistFor(pilot, opts = {}) {
   return list.length ? list : ['sleep'];
 }
 
-function nearbyObjects(pilot, entities, max = 5) {
+function nearbyObjects(pilot, entities, max = 5, lichtFaktor = 1) {
   return entities
     .map((e) => ({ ...e, ...ankerPos(e) }))   // Entfernungen zum sichtbaren Bauwerk, nicht zum Logikpunkt
     .map((e) => ({ ...e, dist: dist3(pilot, e) }))
-    .map((e) => ({ ...e, stufe: sichtStufe(pilot, e) }))
+    .map((e) => ({ ...e, stufe: sichtStufe(pilot, e, lichtFaktor) }))
     .filter((e) => e.stufe !== 'ungesehen')   // Paket I: Ungesehenes fehlt im Prompt
     .sort((a, b) => a.dist - b.dist)
     .slice(0, max);
@@ -187,11 +221,18 @@ function impulsText(id) {
 
 function buildPrompt(pilot, ctx = {}) {
   const { entities = [], beliefs = [], whitelist = [], words = [], recentThoughts = [], musing = null, vorrat = null,
-    impuls = 'vorhaben', seit = true, vorhaben = null, weg = null } = ctx;
+    impuls = 'vorhaben', seit = true, vorhaben = null, weg = null, phase = 'licht', erde = true, finsternis = 0 } = ctx;
 
-  // Paket I: Klare Orte mit Namen, Vermutete mit „Vermutung: …", Bemerkte nur
-  // als „etwas Unbekanntes", Ungesehene fehlen (Filter oben)
-  const sichtbaren = nearbyObjects(pilot, entities);
+  // Tag/Nacht: Sicht stutzt mit dem Licht (Nacht halbiert), Erde-Zeile im Lage-Block.
+  // Finsternis: Stufe 3 schrumpft die Sicht auf Nacht, Stufe 2 auf Dämmerung —
+  // plus ein Satz im Lage-Block (Phase bleibt licht: die Sonne steht ja oben).
+  const lichtFaktor = lichtFaktorAusPhase(phase, finsternis);
+  const sichtbaren = nearbyObjects(pilot, entities, 5, lichtFaktor);
+  const erdeZeile = erde ? 'Die Erde steht am Himmel.' : 'Die Erde ist untergegangen.';
+  const finsternisSatz = [null,
+    'Die Erde schiebt sich vor die Sonne.',
+    'Die Sonne ist halb bedeckt.',
+    'Finsternis — es ist dunkel am hellen Tag.'][finsternis] || null;
   const zeilen = sichtbaren
     .filter((e) => e.stufe === 'klar')
     .map((e) => `- ${OBJECT_HINTS[e.type] || e.name} (${Math.round(e.dist)} Schritte entfernt)`);
@@ -236,6 +277,7 @@ ${beliefLine}
 
 In deiner Nähe:
 ${nahBlock}
+${erdeZeile}${finsternisSatz ? `\n${finsternisSatz}` : ''}
 
 Wörter, die dir nicht aus dem Kopf gehen: ${wordLine}
 
@@ -248,7 +290,20 @@ Antworte STRIKT in diesem JSON, nichts davor, nichts danach:
 {"action": "eine der Aktionen", "thought": "dein Gedanke"${musing ? ', "musing": "dein freier Gedanke"' : ''}}`;
 }
 
+// Nacht-Anzeige für HUD und Prompt: Tag-Nummer global, Phase lokal.
+// „Tag 3 · Nacht" = der Planet hat sich 3× gedreht, hier ist es Nacht.
+function tagText(nr, phase) {
+  const wort = phase === 'licht' ? 'Tag' : phase === 'nacht' ? 'Nacht' : 'Dämmerung';
+  return `Tag ${nr} · ${wort}`;
+}
+
+// Hook für Paket D (nachdenken): Aktion nur anbieten, wenn Licht herrscht.
+// Steht hier, damit D nur noch aufruft — kein D-Code in diesem Punkt.
+function darfNachdenken(phase) {
+  return (phase || 'licht') === 'licht';
+}
+
 module.exports = {
-  INSTINCTS, OBJECT_HINTS, AVAIL, sensory, whitelistFor,
-  nearbyObjects, buildPrompt, waehleMusingThema, impulsText, IMPULS_TEXTE,
+  INSTINCTS, OBJECT_HINTS, AVAIL, sensory, whitelistFor, tagText, darfNachdenken,
+  nearbyObjects, buildPrompt, waehleMusingThema, impulsText, IMPULS_TEXTE, lichtFaktorAusPhase,
 };

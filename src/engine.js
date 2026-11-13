@@ -5,6 +5,8 @@ const {
   DRAIN, MOVE_COST, effectFor, ACTIONS, WALK_SPEED, PSYCHE, MANIA, TREIBER, VORHABEN, START, NOVELTY, SATT, NOTEN,
   CATCHUP_WRITE_EVERY, FREEZE_S, RESPAWN_DELAY_S, MODEL, SICHT, sichtStufe, ankerPos,
   STUFE_RANG, entityLabel, haltAbstand, dist3, vec3, norm3, wuerfelImpuls, WORLD_RADIUS, modellKurz,
+  TAG, sonnenVektor, lichtAn, lichtPhase, tagesNummer, erdeSichtbarVon, clusterPos,
+  ERDE, FINSTERNIS, finsternisStufe,
 } = require('./config');
 const { q, logEvent } = require('./db');
 const { uniqueName, randomHue } = require('./names');
@@ -165,8 +167,20 @@ function loadState(db) {
   const near = new Set(String((pilot && pilot.near_json) || '').split(',').filter(Boolean));
   // Nervenlage für den Zusammenbruch: Übergewicht der letzten 5 nerve_events
   const recentNerve = pilot ? q.recentNerve(db, pilot.id, 5) : [];
+
+  // --- Tag/Nacht: Licht und Erde aus Welt-Winkel + Pilotenposition -------------
+  // state.licht (-1..+1), state.phase (licht/daemmer/nacht), state.erde (bool).
+  // Welt ohne Pilot (Tod): Sonne steht trotzdem, aber nichts ist zu sehen.
+  // Finsternis: global (Himmel), nicht lokal — Stufe aus Sonnen- vs. Erd-Richtung.
+  const winkel = (world && world.sun_angle != null) ? world.sun_angle : 0;
+  const sonne = sonnenVektor(winkel);
+  const licht = pilot ? lichtAn(pilot, sonne) : -1;
+  const phase = lichtPhase(licht);
+  const erde = pilot ? erdeSichtbarVon(pilot) : false;
+  const finsternis = finsternisStufe(sonne).stufe;
+
   return { world, pilot, entities, recentActions, allNames, novelty, near, nerve: [], events: [], recentNerve,
-    vorhaben: pilot ? leseVorhaben(pilot) : null };
+    vorhaben: pilot ? leseVorhaben(pilot) : null, sonne, licht, phase, erde, finsternis };
 }
 
 function step(state, dt = 1, opts = {}) {
@@ -175,6 +189,19 @@ function step(state, dt = 1, opts = {}) {
   const pilot = state.pilot;
   const tick = world.world_tick + 1;
   world.world_tick = tick;
+
+  // --- Tag/Nacht: Sonne wandert, eine Umdrehung pro TAG.dauerS -----------------
+  // Der Winkel überlebt Neustarts (world_state.sun_angle) und läuft im
+  // Catch-up normal mit (kein Freeze-Sonderfall — wie hunger).
+  world.sun_angle = ((world.sun_angle ?? 0) + (dt * 2 * Math.PI) / TAG.dauerS) % (Math.PI * 2);
+  state.sonne = sonnenVektor(world.sun_angle);
+  // Finsternis: global, folgt der Sonne (kein Pilot nötig — Himmel, nicht Ort).
+  state.finsternis = finsternisStufe(state.sonne).stufe;
+  if (pilot) {
+    state.licht = lichtAn(pilot, state.sonne);
+    state.phase = lichtPhase(state.licht);
+    state.erde = erdeSichtbarVon(pilot);
+  }
   if (!pilot) return state;
 
   if (pilot.status === 'dead') {
@@ -400,11 +427,13 @@ function step(state, dt = 1, opts = {}) {
 
     // Paket K: halt-Regeneration — Erde schauen, Schlaf in der Kapsel und
     // sichere Rituale erden. (nachdenken aus Paket D und Tag/Nacht kommen dazu.)
+    // Tag/Nacht (Erde-Tor): look_earth erdet voll (+5) nur bei sichtbarer Erde,
+    // ins Leere starren gibt +2. Kein Psyche-Effekt — Sehnsucht braucht kein Licht.
     {
       const anlass = state.recentActions[state.recentActions.length - 1];
       const inKapsel = (target && target.id === 'capsule') || (rohZiel && rohZiel.id === 'capsule');
       let plus = 0;
-      if (anlass === 'look_earth') plus = 5;
+      if (anlass === 'look_earth') plus = state.erde ? 5 : 2;
       else if (anlass === 'sleep' && inKapsel) plus = 8;
       if (plus) {
         pilot.halt = klammerTreiber((pilot.halt ?? TREIBER.halt.start) + plus,
@@ -437,7 +466,8 @@ function step(state, dt = 1, opts = {}) {
   }
 
   // Paket K: thermo-Ortsanteil — shade kühlt bei Hitze, capsule wärmt bei Kälte.
-  // (Tag/Nacht-Anteil folgt mit dem Tag/Nacht-Punkt.)
+  // Tag/Nacht: Licht wärmt, Nacht kühlt (schneller als der Tag wärmt) —
+  // die Kapsel wird nachts zum Zuhause, der Schatten tagsüber zur Rettung.
   {
     const nahIds = state.near ? [...state.near] : [];
     const amShade = nahIds.includes('shade');
@@ -448,6 +478,22 @@ function step(state, dt = 1, opts = {}) {
       pilot.thermo = klammerTreiber(t - TREIBER.thermo.ortRate * dt, TREIBER.thermo.min, TREIBER.thermo.max);
     } else if (inCapsule && t < -35) {
       pilot.thermo = klammerTreiber(t + TREIBER.thermo.ortRate * dt, TREIBER.thermo.min, TREIBER.thermo.max);
+    }
+    // Licht-Anteil: Dämmerung ist neutral, Licht/Nacht ziehen Richtung warm/kalt.
+    // In der Kapsel/im Schatten greift der Schutz: die Hälfte kommt noch durch
+    // (ein Blech ist kein Bunker), draußen die volle Rate.
+    // Finsternis: Stufe 3 schaltet den Licht-Anteil ab (nur Nacht kühlt noch),
+    // Stufe 2 halbiert ihn, Stufe 1 (Anbiss) ändert nichts spürbar.
+    const licht = state.licht ?? 0;
+    const finst = state.finsternis ?? 0;
+    const geschuetzt = amShade || inCapsule;
+    const faktor = (geschuetzt ? 0.5 : 1) * (finst >= 3 ? 0 : finst >= 2 ? 0.5 : 1);
+    if (licht > TAG.daemmerBis) {
+      pilot.thermo = klammerTreiber((pilot.thermo ?? 0) + TREIBER.thermo.lichtAnteil * faktor * dt,
+        TREIBER.thermo.min, TREIBER.thermo.max);
+    } else if (licht < -TAG.daemmerBis) {
+      pilot.thermo = klammerTreiber((pilot.thermo ?? 0) - TREIBER.thermo.nachtAnteil * faktor * dt,
+        TREIBER.thermo.min, TREIBER.thermo.max);
     }
   }
 
@@ -552,6 +598,7 @@ function spawn(state, tick, previous) {
   const name = uniqueName(existing);
   state.allNames = [...existing, name];
   state.novelty = {};                  // Neugier beginnt bei jedem Piloten neu
+  const kapsel = clusterPos(0, 0);     // Spawn an der Kapsel (Cluster-Mitte)
   return {
     id: null,
     cycle_num: (previous?.cycle_num || 0) + 1,
@@ -565,9 +612,9 @@ function spawn(state, tick, previous) {
     drang: 10.0,
     halt: 80.0,
     vorhaben_json: '',
-    pos_x: 0,
-    pos_y: 120,
-    pos_z: 0,
+    pos_x: kapsel.x,
+    pos_y: kapsel.y,
+    pos_z: kapsel.z,
     heading: null,
     mania_until_tick: null,
     accent_hue: randomHue(),
@@ -672,8 +719,8 @@ class Engine {
       if (e.unfinished_thought) this.db.prepare('UPDATE world_entities SET unfinished_thought=? WHERE id=?')
         .run(e.unfinished_thought, e.id);
     }
-    this.db.prepare('UPDATE world_state SET world_tick=?, last_tick_at=?, last_novelty_tick=? WHERE id=1')
-      .run(s.world.world_tick, new Date().toISOString(), s.world.last_novelty_tick || 0);
+    this.db.prepare('UPDATE world_state SET world_tick=?, last_tick_at=?, last_novelty_tick=?, sun_angle=? WHERE id=1')
+      .run(s.world.world_tick, new Date().toISOString(), s.world.last_novelty_tick || 0, s.world.sun_angle ?? 0);
     for (const e of s.events) {
       logEvent(this.db, s.world.world_tick, e.type, e.payload, e.type === 'action' ? false : e.in_feed);
       if (e.type === 'action' && e.payload && typeof e.payload.psyche_delta === 'number') {
@@ -700,7 +747,11 @@ class Engine {
   }
 
   whitelist(s) {
-    return whitelistFor(s.pilot, { recentActions: s.recentActions, entities: s.entities });
+    // Tag/Nacht-Kontext an die Whitelist: Phase, Erde, Nahkreis (für Schlaf-Ort).
+    return whitelistFor(s.pilot, {
+      recentActions: s.recentActions, entities: s.entities,
+      phase: s.phase || 'licht', erde: s.erde ?? true, nah: [...(s.near || [])],
+    });
   }
 
   async decide() {
@@ -721,10 +772,14 @@ class Engine {
       // Betrachtung zuerst: Neu Entdecktes bekommt den Zusatzgedanken —
       // „was lässt sich damit wohl anfangen?" Die Antwort formuliert er selbst.
       // Paket K: Musing-Rate pro Zone — Flow 75 %, sonst 35 %.
+      // Tag/Nacht: Schlaf-Traum — nachts träumt er von Flucht, Funk und Wärme.
       const offene = s.entities.filter((x) => x.unfinished_thought).map((x) => x.name);
+      const schlaeft = s.pilot.current_action === 'sleep';
       const thema = offene.length
         ? `Neu entdeckt: ${offene.join(', ')} — was lässt sich damit wohl anfangen?`
-        : waehleMusingThema(s.pilot, s.entities);
+        : (schlaeft && (s.phase || 'licht') === 'nacht')
+          ? 'Traum: Fluchtwege, Stimmen aus dem Funk, wie sich Wärme anfühlt'
+          : waehleMusingThema(s.pilot, s.entities);
       const musingRate = (s.pilot.psyche ?? 0) >= 35 ? 0.75 : 0.35;
       const musing = offene.length ? thema
         : (((whitelist.includes('sinnieren') && Math.random() < 0.8) || Math.random() < musingRate)
@@ -771,6 +826,7 @@ class Engine {
       const prompt = buildPrompt(s.pilot, {
         entities: s.entities, beliefs, whitelist, recentThoughts, musing, vorrat, impuls, seit,
         vorhaben: vorhabenText, weg: wegTextStr,
+        phase: s.phase || 'licht', erde: s.erde ?? true, finsternis: s.finsternis ?? 0,
       });
 
       const res = await brain.decide({
@@ -978,7 +1034,12 @@ class Engine {
       }
       s.events = [];
       if (s.pilot.status === 'alive' && s.pilot.current_action === 'idle') {
-        const wl = whitelistFor(s.pilot, { recentActions: s.recentActions, entities: s.entities });
+        // Catch-up entscheidet pragmatisch (Fallback), nicht per Modell —
+        // aber mit echtem Tag/Nacht-Kontext, sonst schläft er bei Licht draußen.
+        const wl = whitelistFor(s.pilot, {
+          recentActions: s.recentActions, entities: s.entities,
+          phase: s.phase || 'licht', erde: s.erde ?? true, nah: [...(s.near || [])],
+        });
         this.applyActionCatchup(s, this.fallbackAction(s, wl));
       }
       // Nicht jeden Tick schreiben — 12 h Nachrechnen sind sonst zehntausende Schreibvorgänge
@@ -997,8 +1058,8 @@ class Engine {
       this.db.prepare('UPDATE world_entities SET discovered=?, sicht=?, unfinished_thought=? WHERE id=?')
         .run(e.discovered ? 1 : 0, e.sicht || 0, e.unfinished_thought || null, e.id);
     }
-    this.db.prepare('UPDATE world_state SET world_tick=?, last_tick_at=?, last_novelty_tick=? WHERE id=1')
-      .run(fromTick + missed, new Date(now).toISOString(), s.world.last_novelty_tick || 0);
+    this.db.prepare('UPDATE world_state SET world_tick=?, last_tick_at=?, last_novelty_tick=?, sun_angle=? WHERE id=1')
+      .run(fromTick + missed, new Date(now).toISOString(), s.world.last_novelty_tick || 0, s.world.sun_angle ?? 0);
     logEvent(this.db, fromTick + missed, 'offline', {
       minutes: Math.round(missed / 60), from_tick: fromTick, to_tick: fromTick + missed,
       deaths, spawned, before,
@@ -1041,9 +1102,22 @@ class Engine {
         ageSeconds,
         ageHours: Math.round(ageSeconds / 360) / 10,
       },
+      // Tag/Nacht: wandernde Lichtkante (Sonne als Vektor) + Erde-Tor.
+      // tagNr = Sonnen-Umdrehungen (global), phase/erde = lokal am Piloten.
+      // Finsternis: global (Himmel), Stufe 0–3 + Wort fürs HUD.
+      tag: {
+        nr: tagesNummer(s.world.sun_angle ?? 0),
+        phase: s.phase || 'licht',
+        erde: s.erde ?? true,
+        sonne: s.sonne || null,
+        finsternis: s.finsternis ?? 0,
+        finsternisWort: FINSTERNIS.worte[s.finsternis ?? 0] || null,
+      },
       pilot: {
         name: p.name, cycle_num: p.cycle_num, status: p.status, mind_state: p.mind_state,
         body: round(p.body), psyche: round(p.psyche),
+        phase: s.phase || 'licht',   // der Pilot spürt, wo er steht (für sensory)
+        finsternis: s.finsternis ?? 0,   // Boden-Finsternis schrumpft die Sicht mit
         mania: p.mania_until_tick != null && s.world.world_tick <= p.mania_until_tick,
         // Paket K (Spec, Umsetzung offen): Treiber erscheinen hier, sobald die
         // Spalten existieren — das UI zeigt sie dann automatisch, vorher grau.
@@ -1087,7 +1161,7 @@ class Engine {
     const snap = this.snapshot();
     return {
       kind: 'state',
-      world: snap.world, clock: snap.clock, pilot: snap.pilot, entities: snap.entities,
+      world: snap.world, clock: snap.clock, tag: snap.tag, pilot: snap.pilot, entities: snap.entities,
       sicht: snap.sicht, inventar: snap.inventar,
       stale: snap.stale, staleMinutes: snap.staleMinutes, clockSkew: this.lastSkew || 0,
     };

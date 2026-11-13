@@ -15,7 +15,7 @@ Code: `vault-privat/Seb Privat Stuff/aiquarium/app/`, Start: `npm start` → `ht
 ## Reihenfolge
 
 0. Vorab-Schnitt — **gebaut 2026-11-13**: ganze Kugel begehbar (3D-Einheitsvektoren, Großkreis), Post-Checks entschlackt (B-Schärfung), Catch-up-Freeze mit Reboot-Event, DB-Pruning. **63 Tests grün.**
-1. **K-Umsetzung — gebaut 2026-11-14** → 2. **A — gebaut 2026-11-14** (Vorhaben + Weg, Grid 15°) → 3. **C** (Kurzzeit + Ungereimtheit-Zeile) → 4. **D** (`nachdenken` + LTM, regeneriert `halt`) → 5. **E** (Glaubenssätze folgenreich + Zweiteilung) → 6. **F** (Fernziel) → 7. **G** (Fragen) → 8. **H** (`world_belief`). F–H erst nach A–E. **Danach: Tag/Nacht als nächstes** (eigener Beschluss, dann J–M, dann v0.2+). B-Rest (Musterbremse) ebenfalls **gebaut 2026-11-14**.
+1. **K-Umsetzung — gebaut 2026-11-14** → 2. **A — gebaut 2026-11-14** (Vorhaben + Weg, Grid 15°) → 3. **Tag/Nacht — gebaut 2026-11-14** (wandernde Lichtkante, Erde-Tor, 82 Tests) → 4. **C** (Kurzzeit + Ungereimtheit-Zeile) → 5. **D** (`nachdenken` + LTM, regeneriert `halt`) → 6. **E** (Glaubenssätze folgenreich + Zweiteilung) → 7. **F** (Fernziel) → 8. **G** (Fragen) → 9. **H** (`world_belief`). F–H erst nach A–E. **Danach: J–M** (dann v0.2+). B-Rest (Musterbremse) ebenfalls **gebaut 2026-11-14**.
 2. Paket I (Sichtstufen) ist **vorgezogen gebaut** — fundiert G.
 
 ## Paket A — Vorhaben und Weg · gebaut 2026-11-14 (79 Tests grün)
@@ -133,13 +133,35 @@ Ersetzt das 1-Schichten-Modell.
 - **Frontend:** Treiber live, 6 Schieber, dev/set alle sechs.
 - **Abnahme erfüllt** (alle Tests grün). **Offen:** thermo Licht-Anteil, nachdenken, Träume (Tag/Nacht).
 
-## Danach (geplant)
+## Tag/Nacht — wandernde Lichtkante + Erde-Tor · gebaut 2026-11-14 (82 Tests grün)
 
-- **Tag/Nacht** (eigener Beschluss, kein Paket — NÄCHSTES nach H, vor J–M): Lichtkante/Dämmergürtel mit Mechanik (Sicht, Körper-Drain), nachdenken nur bei Licht, Träume im Schlaf.
-- **J — Kacheln:** raeumliches Gedächtnis auf Radius-120-Kugel (ACHTUNG: alte Spec nannte Radius 60 — neu rechnen). streifen = naechste unbesuchte Kachel.
+Kein globaler Tag (Kugel!): Die Sonne wandert als Vektor, eine Umdrehung pro 2 h geneigt (30°), Helligkeit ist lokal (Skalarprodukt). Dämmergürtel |licht| < 0,2 wandert mit. Tag-Nr = Umdrehungen (global), Phase = lokal.
+
+- [x] **config:** `TAG` (dauerS 7200, neigung 30°, daemmerBis 0,2), `sonnenVektor`/`lichtAn`/`lichtPhase`/`tagesNummer` (rein), `ERDE`-Vektor + `erdeSichtbarVon` (V1 fest, ~1 h sichtbar/1 h weg).
+- [x] **Engine:** Winkel tickt in `world_state.sun_angle` (Migration, Catch-up-sicher). thermo Licht-Anteil (Schutz halbiert). `sleep` bei Licht nur Kapsel/shade; `call_bake` nur bei sichtbarer Erde. `look_earth` +5/+2. Musing-Schlaftraum nachts.
+- [x] **Sicht:** `sichtStufe(pilot, e, lichtFaktor)` — Nacht halbiert, Dämmerung 0,75. Stolperradius bleibt.
+- [x] **Prompt:** Phasen-Satz in sensory, Erde-Zeile im Lage-Block, `darfNachdenken`-Hook für D, `tagText`.
+- [x] **Frontend:** Sonne aus Engine-Vektor, Dimmen, HUD `Tag N · Phase`, `Erde weg`-Hinweis.
+- [x] **Tests:** Geometrie (Gegenpunkt, Gürtel, Erde), Winkel-Fortschritt, Schlaf-Regel, Erde-Tor, Hook (3 neu + 1 angepasst).
+- [x] **Finsternis (4 Stufen, simplifiziert):** Erde als Kugel (StandardMaterial + Canvas-Textur — Phasen gratis), Sonne + Erde auf ×900-Schale (Deckung < 3,2°), `FINSTERNIS`/`finsternisStufe` in config. Boden: Sonne ×Faktor, Stufe 3 = Nachtwerte, Lampe an. Engine: Licht-Anteil ab Stufe 2 halb, ab 3 aus. Sicht-Faktor 0,75/0,5. Prompt-Zeile + HUD-Wort. 1 Test (Geometrie + Thermo + Sicht + Prompt).
+- [x] **Abnahme offen:** Messlauf-Korrelation `call_bake` × Erde; Bake-Wahlrate beobachten (selten + schlecht → evtl. ~0 %); Finsternis-Häufigkeit (Deckung pro Tag messen).
+- [ ] **V2-Idee (später):** Erde libriert ±20° über ~12 Tage (Wochentakt statt Stundentakt). Gleicher Mechanik-Vertrag.
+
+## Gebaut (2026-11-14, 84 Tests grün)
+- **Cluster (Nr. 5):** Orte hängen an `CLUSTER` (35° Breite, 20° Länge, obere Hemisphäre) statt am Nordpol — `clusterPos()` in `config.js`, `seed()` + Spawn + Erstpilot nutzen sie, `vec3()` kennt drei Formen (pos_*/x-y-z-Tripel/lokal). Mindestabstand ≥ 22 m (leicht geschrumpft durch Kugelkrümmung, fixiert im Test), Anker tangential in Metern (`VERSATZ` Wrack 8/−5). Test: Hemisphäre + Kugel + Spawn an der Kapsel.
+- **Pol-Flaggen (Nr. 1):** Nord blau / Süd orange, Stange + Tuch, per Quaternion aufs Normale gesetzt. Später Sektor-Nullpunkte (Paket J).
+- **Bodenmuster (Nr. 2):** prozedurale Canvas-Textur (Seed `20261114`, 2.600 Sprenkel + 40 Flecken, ±5–6 % Alpha) — Idee: pro Sektor-Hash ±3 % Helligkeit (Wiedererkennung ohne Kompass, später).
+- **Dev-Linien (Nr. 3):** Kern → Sonne (gelb) + Kern → Erde (blau), nur `?mode=dev`, Deckung < 3,2° färbt Sonne rot (Finsternis-Debug gratis). Idee: HUD „3 von ~350 Gründen" statt Prozent.
+- **Kamera-Up (Nr. 4b):** radiales Up im Planet-Modus (Projektion von Welt-Y auf Bildebene), Charakter-Modus bleibt Welt-Y (Horizont stabil). Pitch bis ±85°, exakte Pole ohne Flip begehbar.
+
+## Danach (geplant)
+- **J — Kacheln/Sektoren (Cube-Sphere, entschieden 2026-11-14):** Würfel auf Kugel projiziert, jede Fläche N×N (gleiche Flächen ±20 %, triviale Nachbarschaft, `sector_id = face*N² + ix*N + iy`). **Darum kein Hex:** perfektes Hex auf der Kugel geht nicht (Euler: immer 12 Fünfecke nötig — Goldberg-Polyeder). **Größe: 20–25 m Kante → ~300–450 Sektoren** (10 m wären ~1.800, Fortschritt zu zäh). 1 Ort pro Sektor (Regel). Erstbetritt belohnt klein (`psyche`/`halt` in `EFFECT`, Prompt nur als Wort „neuer Grund", keine Zahl). Tabelle `visited_sectors`, Pruning beachten. **Dev:** `G` schaltet dreistufig (Alt-Grid → Sektor-Grid → aus).
+- **Karte:** Vollkugel-Verteilung der Inhalte (Fibonacci-Sphere, Mindestabstand, `PI/3`-Clamp in `placeOnPlanet` weg). Gehört zu J — nicht einzeln. Balancing neu vermessen (Drain, `TREIBER`-Schwellen, 8-h-Lauf: Sterberate 40–60 %).
+- **Spuren:** Fußabdruck-Spur pro besuchtem Sektor (1× verstreute Abdrücke, keine Linie). MVP: Trail der letzten K Positionen, Frontend streut max. ~10 Instanced-Ovale pro Sektor. Persistent: `traces(sector_id, x,y,z, tick)`, fremde Abdrücke = `discovery`-light („fremder Tritt"), Verwitterung erst als Löschen (`tick`-Cap), später Verblassen. Zählt auf L2/M ein (Funde + Friedhof-Echo). Nach J bauen.
+- **L — Emergent:** L1 erfundene Aktionen (max. 5, Verfall 3 Tage) · L2 Funde + Kombinieren (Inventar, 7 Teile = F) · L3 Benennen (rufname) · L4 Rituale (max. 3, Carve-out vs. Zickzack) · L5 Forces (alle 500–1500 Ticks).
 - **L — Emergent:** L1 erfundene Aktionen (max. 5, Verfall 3 Tage) · L2 Funde + Kombinieren (Inventar, 7 Teile = F) · L3 Benennen (rufname) · L4 Rituale (max. 3, Carve-out vs. Zickzack) · L5 Forces (alle 500–1500 Ticks).
 - **M Friedhof:** Grab/Helm als entity, verrostete Teile (Haelfte) bleiben, ancestral_echo bei discovery. **N Gap-UI · O OS-Direktiven · P Ambient-Audio.**
-- **v0.2+:** O2/Filter-Reichweite, Depots, Crafting, Erd-Uplink, Social, Cookies/Umami. Regel: mehr Inhalt = siebter Ort, kein neues System.
+- **v0.2+:** O2/Filter-Reichweite, Depots, Crafting, Erd-Uplink (Antwort/Inhalt — das Tor ist gebaut), Social, Cookies/Umami. Regel: mehr Inhalt = siebter Ort, kein neues System.
 
 
 ## Offene Punkte (Stand 2026-11-13)

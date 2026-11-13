@@ -84,6 +84,7 @@ Im Panel rechts unten:
 - **Zeitraffer** `×1 / ×3 / ×10`: Die Simulationsuhr läuft schneller, alle Aktionen und Bedürfnisse entsprechend auch. Der aktuelle Faktor steht in der Kopfzeile.
 - Jede Entscheidung erscheint mit Aktion, Ziel, Dauer, Auswahlmenü, Werten und Gedanken im gestrichelten Debug-Rahmen.
 - **Taste `G`**: Kugel-Grid (Breiten-/Längenkreise alle 15°) ein/aus — zum Prüfen, wo Orte und Figur stehen.
+- **Tag/Nacht**: Die Sonne wandert (1 Umdrehung = 2 h), das Licht dimmt mit. HUD zeigt `Tag N · Tag/Nacht/Dämmerung` (Nummer global, Phase lokal). Erde fest am Himmel — `Erde weg` im HUD heißt: kein Notruf möglich (Tor, kein Verbot).
 
 Nur von `127.0.0.1` erreichbar; von außen antworten die Endpunkte mit 403:
 

@@ -4,7 +4,7 @@
 const { DatabaseSync } = require('node:sqlite');
 const fs = require('node:fs');
 const path = require('node:path');
-const { ENTITIES, START } = require('./config');
+const { ENTITIES, START, clusterPos } = require('./config');
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS world_state (
@@ -190,6 +190,9 @@ function migrate(db) {
 
   const w = cols('world_state');
   if (!w.has('last_novelty_tick')) db.exec('ALTER TABLE world_state ADD COLUMN last_novelty_tick INTEGER DEFAULT 0');
+  // Tag/Nacht: Sonnenwinkel (Umdrehungen seit Start, 2 h pro Umdrehung).
+  // Alte Datenbanken ohne die Spalte werden nachgezogen, Default 0 = Tagesbeginn.
+  if (!w.has('sun_angle')) db.exec('ALTER TABLE world_state ADD COLUMN sun_angle REAL DEFAULT 0.0');
 
   // Paket K: hunger/exhaustion/stress -> body/psyche, Positionen -> 3D, Blick -> Vektor
   const p = cols('pilots');
@@ -261,19 +264,26 @@ function seed(db) {
     db.prepare('INSERT INTO world_state (id, last_tick_at, last_novelty_tick) VALUES (1, ?, 0)')
       .run(new Date().toISOString());
   }
-  const aufKugel = (x, z) => Math.sqrt(Math.max(120.0 * 120.0 - x * x - z * z, 0));
   const ins = db.prepare(`INSERT OR IGNORE INTO world_entities
     (id, type, name, pos_x, pos_y, pos_z, physics_traits_json, visual_kit_preset, discovered)
     VALUES (?, ?, ?, ?, ?, ?, NULL, ?, 0)`);
-  for (const e of ENTITIES) ins.run(e.id, e.type, e.name, e.x, aufKugel(e.x, e.z), e.z, e.id);
+  for (const e of ENTITIES) {
+    const w = clusterPos(e.x, e.z);
+    ins.run(e.id, e.type, e.name, w.x, w.y, w.z, e.id);
+  }
   // Layout ist code-definiert: bestehende DBs auf die Config-Koordinaten ziehen
   const lege = db.prepare('UPDATE world_entities SET pos_x=?, pos_y=?, pos_z=? WHERE id=?');
-  for (const e of ENTITIES) lege.run(e.x, aufKugel(e.x, e.z), e.z, e.id);
+  for (const e of ENTITIES) {
+    const w = clusterPos(e.x, e.z);
+    lege.run(w.x, w.y, w.z, e.id);
+  }
 
   const anzahl = db.prepare('SELECT COUNT(*) c FROM pilots').get().c;
   if (!anzahl) {
-    db.prepare(`INSERT INTO pilots (cycle_num, name, body, psyche, created_tick)
-      VALUES (1, ?, ?, ?, 0)`).run('Kapitän Meero', START.body, START.psyche);
+    const k = clusterPos(0, 0);   // erster Pilot startet an der Kapsel (Cluster)
+    db.prepare(`INSERT INTO pilots (cycle_num, name, body, psyche, created_tick,
+      pos_x, pos_y, pos_z)
+      VALUES (1, ?, ?, ?, 0, ?, ?, ?)`).run('Kapitän Meero', START.body, START.psyche, k.x, k.y, k.z);
   }
 }
 
