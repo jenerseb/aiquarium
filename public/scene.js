@@ -740,6 +740,12 @@ const helm = new THREE.Mesh(
 helm.position.y = 3.95;
 figur.add(korper, kopf, augeL, augeR, helm);
 figur.traverse((o) => { if (o.isMesh) { o.castShadow = true; o.receiveShadow = false; } });
+// Namensschild über der Figur (wie Ortsnamen über Orten): Sprite, immer zur Kamera
+const namensSchild = label('…');
+namensSchild.position.set(0, 6.2, 0);
+figur.add(namensSchild);
+figur.userData.schild = namensSchild;
+figur.userData.schildText = undefined;
 scene.add(figur);
 
 // Helmleuchte: kleines warmes PointLight an der Stirn — erhellt den Astronauten
@@ -1283,6 +1289,20 @@ function zeichneHud(s) {
   korperMat.color.setHSL(((p.accent_hue || 200) / 360) * 0.35 + 0.09, 0.35, 0.72);
   const neuerPilot = letzterPilot && (letzterPilot.name !== p.name || letzterPilot.cycle !== p.cycle_num);
   letzterPilot = { name: p.name, cycle: p.cycle_num };
+  // Namensschild über der Figur: Text nur bei Wechsel neu bauen (Texture kostet)
+  if (figur.userData.schild && figur.userData.schildText !== p.name) {
+    const alt = figur.userData.schild;
+    const neu = label(p.name);
+    neu.position.copy(alt.position);
+    neu.userData.base = alt.userData.base;
+    figur.remove(alt);
+    alt.material.map?.dispose();
+    alt.material.dispose();
+    figur.add(neu);
+    figur.userData.schild = neu;
+    figur.userData.schildText = p.name;
+  }
+  if (figur.userData.schild) figur.userData.schild.visible = p.status !== 'dead';
   zielP.x = p.x; zielP.y = p.y; zielP.z = p.z;
   if (neuerPilot) { istP.x = p.x; istP.y = p.y; istP.z = p.z; }   // Nachfolger erscheint am Startpunkt, kein Gleiten
   if (ersterSync) {
@@ -1902,6 +1922,15 @@ function tick() {
     const d = camera.position.distanceTo(g.position);
     const f = Math.min(2.2, Math.max(0.28, d / 42));
     schild.scale.set(schild.userData.base.x * f, schild.userData.base.y * f, 1);
+  }
+
+  // Namensschild der Figur: gleiche Entfernungs-Skalierung wie Ortschilder
+  if (figur.userData.schild?.visible) {
+    const d = camera.position.distanceTo(figur.position);
+    const f = Math.min(2.2, Math.max(0.28, d / 42));
+    figur.userData.schild.scale.set(
+      figur.userData.schild.userData.base.x * f,
+      figur.userData.schild.userData.base.y * f, 1);
   }
 
   // Sprechblase an den Kopf projizieren
