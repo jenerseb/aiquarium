@@ -1334,6 +1334,14 @@ test('config: Cluster hängt an der oberen Hemisphäre, fernab beider Pole', () 
 
 
 
+// SSE-Deckel (VPS, 2026-11-14): MAX_CLIENTS per Env, 503 bei Überlauf.
+test('server: sse-deckel begrenzt gleichzeitige verbindungen', () => {
+  const src = require('node:fs').readFileSync(require('node:path').join(__dirname, '..', 'src', 'server.js'), 'utf8');
+  assert.ok(/AIQUARIUM_MAX_CLIENTS/.test(src), 'Env-Override fehlt');
+  assert.ok(/clients\.size >= MAX_CLIENTS/.test(src), 'Deckel-Prüfung fehlt');
+  assert.ok(/503/.test(src) && /zu viele Verbindungen/.test(src), '503-Antwort fehlt');
+});
+
 // Proxy-Härtung + Healthcheck (Hermes-VPS, 2026-11-14): kein Modellaufruf,
 // keine DB — nur Loop-Leben, Bind-Host und (hier) Header-Logik prüfen.
 test('server: host bindet localhost, health meldet ok, dev hinter proxy sicher', () => {

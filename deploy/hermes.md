@@ -84,6 +84,9 @@ Danach: `caddy reload` (oder `systemctl reload caddy`), TLS kommt automatisch.
 `/api/dev/*` ist im Code proxy-sicher: `istLokal()` prüft TCP-Herkunft + `X-Real-IP`
 (Caddy überschreibt den Header) — direkter Port-Zugriff ohne Proxy bleibt per
 `HOST=127.0.0.1`-Bind (Default in `server.js`) zu.
+`/api/stream` (SSE) ist gedeckelt: `AIQUARIUM_MAX_CLIENTS` (Default 100, per Env),
+Überlauf antwortet 503 — ein Client kann den Server nicht mit tausend
+Verbindungen fluten.
 
 ## 5. Release-Flow (jedes Mal gleich)
 

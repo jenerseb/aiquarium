@@ -46,6 +46,8 @@ const db = open(DB_FILE);
 const engine = new Engine(db);
 
 const clients = new Set();
+// Obergrenze gleichzeitiger SSE-Verbindungen (per Env übersteuerbar).
+const MAX_CLIENTS = Math.max(1, Number(process.env.AIQUARIUM_MAX_CLIENTS || 100) || 100);
 function broadcast(obj) {
   const line = `data: ${JSON.stringify(obj)}\n\n`;
   for (const res of clients) {
@@ -143,6 +145,12 @@ const server = http.createServer((req, res) => {
   }
 
   if (url.pathname === '/api/stream') {
+    // Verbindungsdeckel: jede SSE-Verbindung hält einen Socket und bekommt jede
+    // Sekunde den kompletten Snapshot. Ohne Deckel kann ein Client mit ein paar
+    // tausend Verbindungen CPU und Bandbreite auffressen.
+    if (clients.size >= MAX_CLIENTS) {
+      return sendJson(res, 503, { error: 'zu viele Verbindungen', max: MAX_CLIENTS });
+    }
     res.writeHead(200, {
       'Content-Type': 'text/event-stream',
       'Cache-Control': 'no-cache',
