@@ -87,50 +87,58 @@ function erdeZufall(seed) {
 const erde = (() => {
   const zufall = erdeZufall(20261114);   // fester Seed: gleiche Erde bei jedem Laden
   const c = document.createElement('canvas');
-  c.width = 512; c.height = 256;   // 2:1 Equirectangular — echte Kugel-Map, kein Kreis-Bild
+  c.width = 256; c.height = 256;
   const g = c.getContext('2d');
-  // Ozean-Grund: vertikaler Verlauf (Äquator satter, Pole dunkler/kälter)
-  const ozean = g.createLinearGradient(0, 0, 0, 256);
-  ozean.addColorStop(0, '#1a4a78');
-  ozean.addColorStop(0.25, '#2a7ab8');
-  ozean.addColorStop(0.5, '#3a8fd0');
-  ozean.addColorStop(0.75, '#2265a0');
+  // Ozean-Grund
+  const ozean = g.createRadialGradient(96, 96, 20, 128, 128, 128);
+  ozean.addColorStop(0, '#3a8fd0');
+  ozean.addColorStop(0.6, '#2265a0');
   ozean.addColorStop(1, '#143a63');
-  g.fillStyle = ozean; g.fillRect(0, 0, 512, 256);
-  // Kontinente in Equirect-Koordinaten: x = 0…512 (Länge), y = 0…256 (Breite).
-  // Ellipsen-Cluster mit zerfranster Küste (Seed-gesteuert). Am linken/rechten
-  // Rand doppelt malen (wrap) — sonst Naht an der Datumsgrenze.
+  g.fillStyle = ozean;
+  g.beginPath(); g.arc(128, 128, 124, 0, Math.PI * 2); g.fill();
+  // Auf die Scheibe clippen — alles Weitere bleibt im Kreis
+  g.save();
+  g.beginPath(); g.arc(128, 128, 124, 0, Math.PI * 2); g.clip();
+  // Kontinente grob wie die Erde: links Afrika/Eurasien als Block,
+  // rechts Amerika als Band, Australien als Klecks unten rechts.
+  // Jede Landmasse = Ellipsen-Cluster mit zerfranster Küste (Seed-gesteuert).
   const gruen = ['#3f9150', '#5da85c', '#7cbf6a', '#2f7340'];
   const land = (x, y, rx, ry, n, streu) => {
     for (let i = 0; i < n; i += 1) {
       const ex = x + (zufall() - 0.5) * streu, ey = y + (zufall() - 0.5) * streu;
       const erx = rx * (0.35 + zufall() * 0.5), ery = ry * (0.35 + zufall() * 0.5);
       g.fillStyle = gruen[Math.floor(zufall() * gruen.length)];
-      for (const ox of (ex < 60 || ex > 452) ? [0, -512, 512] : [0]) {
-        g.beginPath(); g.ellipse(ex + ox, ey, erx, ery, zufall() * Math.PI, 0, Math.PI * 2); g.fill();
-      }
+      g.beginPath(); g.ellipse(ex, ey, erx, ery, zufall() * Math.PI, 0, Math.PI * 2); g.fill();
     }
   };
-  land(300, 128, 90, 62, 11, 110);   // Afrika/Eurasien-Block (Mitte/Osten)
-  land(140, 120, 48, 55, 8, 70);     // Amerika-Band (Westen)
-  land(410, 195, 30, 16, 4, 30);     // Australien-Klecks (unten rechts)
-  land(256, 40, 90, 14, 5, 110);     // Nordküste (oben, schmal)
-  // Eiskappen als gerade Bänder (Pole sind in Equirect oben/unten gerade)
+  land(150, 120, 58, 62, 9, 70);    // Afrika/Eurasien-Block (Mitte/Osten)
+  land(70, 110, 30, 55, 7, 45);     // Amerika-Band (Westen)
+  land(205, 190, 20, 14, 4, 22);    // Australien-Klecks (unten rechts)
+  land(128, 45, 40, 12, 4, 50);     // Nordkappe (oben, schmal)
+  // Eiskappen oben/unten
   g.fillStyle = 'rgba(235,242,250,0.95)';
-  g.fillRect(0, 0, 512, 20);
-  g.fillRect(0, 236, 512, 20);
+  g.fillRect(0, 0, 256, 22);
+  g.fillRect(0, 234, 256, 22);
   // Wolken: dünne weiße Streifen, halbtransparent (Seed-gesteuert, fest)
   g.fillStyle = 'rgba(255,255,255,0.5)';
-  for (let i = 0; i < 26; i += 1) {
-    const x = zufall() * 512, y = zufall() * 256;
+  for (let i = 0; i < 22; i += 1) {
+    const x = zufall() * 256, y = zufall() * 256;
     g.beginPath();
-    g.ellipse(x, y, 24 + zufall() * 44, 3 + zufall() * 5, (zufall() - 0.5) * 0.6, 0, Math.PI * 2);
+    g.ellipse(x, y, 20 + zufall() * 36, 3 + zufall() * 5, (zufall() - 0.5) * 0.6, 0, Math.PI * 2);
     g.fill();
   }
-  // KEINE gemalte Lichtkante mehr: Das Sonnenlicht (DirectionalLight) malt
-  // die Phasen echt auf die Kugel — ein Fake-Schatten würde dagegen arbeiten.
+  // Lichtkante: rechts dunkel abblenden für Tiefe (unbeleuchtetes Sprite)
+  const schatten = g.createLinearGradient(60, 0, 220, 0);
+  schatten.addColorStop(0, 'rgba(0,0,10,0)');
+  schatten.addColorStop(1, 'rgba(0,0,15,0.55)');
+  g.fillStyle = schatten;
+  g.fillRect(0, 0, 256, 256);
+  g.restore();
+  // feiner Rand gegen den Sternenhimmel
+  g.strokeStyle = 'rgba(150,190,255,0.6)';
+  g.lineWidth = 3;
+  g.beginPath(); g.arc(128, 128, 122, 0, Math.PI * 2); g.stroke();
   const tex = new THREE.CanvasTexture(c);
-  tex.colorSpace = THREE.SRGBColorSpace;
   // Kugel statt Sprite: Das Sonnenlicht (DirectionalLight) beleuchtet sie echt —
   // Phasen entstehen von selbst. Emissive lässt die Nachtseite schimmern
   // (kein Schwarz vor den Sternen). Kein Schattenwurf (26-km-Schatten in
@@ -180,8 +188,6 @@ scene.add(sonnenHof);
 
 // ------------------------------------------------- Pole: Flaggen als Sektor-Nullpunkte
 // Die Flaggen markieren Nord-/Südpol sichtbar — später Sektor-Nullpunkte (Paket J).
-// Im Dev-Modus zusätzlich: durchgehende Polachsen-Linie (Süd→Nord, über beide
-// Pole hinaus) + größere Flaggen, damit man die Achse aus jeder Entfernung sieht.
 function polFlagge(nord) {
   const gruppe = new THREE.Group();
   const stange = new THREE.Mesh(
@@ -199,29 +205,11 @@ function polFlagge(nord) {
   const pol = new THREE.Vector3(0, nord ? R : -R, 0);
   gruppe.position.copy(pol);
   gruppe.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), pol.clone().normalize());
-  if (DEV) gruppe.scale.setScalar(2.2);   // Dev: Flaggen größer, Achse sofort finden
   scene.add(gruppe);
   return gruppe;
 }
 polFlagge(true);
 polFlagge(false);
-let polAchse = null;
-if (DEV) {
-  // Polachse: dünne Linie Süd→Nord, beidseitig 25 über die Pole hinaus.
-  // Nord-Hälfte cyan, Süd-Hälfte amber — Richtung auf einen Blick.
-  const geoN = new THREE.BufferGeometry().setFromPoints(
-    [new THREE.Vector3(0, 0, 0), new THREE.Vector3(0, R + 25, 0)]);
-  const geoS = new THREE.BufferGeometry().setFromPoints(
-    [new THREE.Vector3(0, 0, 0), new THREE.Vector3(0, -(R + 25), 0)]);
-  const linieN = new THREE.Line(geoN,
-    new THREE.LineBasicMaterial({ color: 0x38bdf8, transparent: true, opacity: 0.9 }));
-  const linieS = new THREE.Line(geoS,
-    new THREE.LineBasicMaterial({ color: 0xf5a524, transparent: true, opacity: 0.9 }));
-  linieN.frustumCulled = false; linieS.frustumCulled = false;
-  polAchse = new THREE.Group();
-  polAchse.add(linieN, linieS);
-  scene.add(polAchse);
-}
 
 // ---------------------------------------------------------------- Planet
 // Mars-Oberfläche: rostrote Basis, dunkle/helle Marmorierung + stellenweise
@@ -275,61 +263,6 @@ const planet = new THREE.Mesh(
 );
 planet.receiveShadow = true;   // Boden fängt alle Schatten
 scene.add(planet);
-
-// Saturnartige Ringe: flach in der XZ-Ebene, teiltransparent (Oberfläche
-// bleibt im Planet-View lesbar). Prozedurale Ring-Textur (radiale Bänder,
-// Seed fest) auf RingGeometry — innen R+44, außen R+130 (Abstand, keine
-// Berührung). Deutlich geneigt (~28°), damit man die Schräge sieht.
-// DoubleSide, damit man sie von oben wie unten sieht;
-// kein Schattenwurf (wäre Matsch).
-const ringe = (() => {
-  const c = document.createElement('canvas');
-  c.width = 256; c.height = 8;
-  const g = c.getContext('2d');
-  let s = 20261115;
-  const rnd = () => ((s = (s * 1664525 + 1013904223) >>> 0) / 0xffffffff);
-  // Radiale Bänder: helle Zonen + Lücken (Cassini!). Alpha niedrig = durchsichtig.
-  const baender = [];
-  let x = 0;
-  while (x < 256) {
-    const w = 6 + rnd() * 26;
-    const hell = rnd();
-    const a = hell > 0.82 ? 0.34 : hell > 0.55 ? 0.20 : 0.10;   // Deckkraft je Band
-    const ton = hell > 0.55 ? '210,190,165' : '170,145,120';
-    baender.push([x, Math.min(256, x + w), ton, a]);
-    x += w + (rnd() > 0.75 ? 4 + rnd() * 14 : 0);   // Lücke
-  }
-  // Cassini-Lücke: breite fast leere Zone bei ~62 %
-  for (const [x0, x1, ton, a] of baender) {
-    const cassini = x0 < 165 && x1 > 150;
-    for (let px = Math.floor(x0); px < Math.ceil(x1); px += 1) {
-      const jitter = 0.75 + rnd() * 0.5;
-      const alpha = cassini ? 0.02 : Math.min(0.42, a * jitter);
-      g.fillStyle = `rgba(${ton},${alpha.toFixed(3)})`;
-      g.fillRect(px, 0, 1, 8);
-    }
-  }
-  const tex = new THREE.CanvasTexture(c);
-  tex.colorSpace = THREE.SRGBColorSpace;
-  const geo = new THREE.RingGeometry(R + 44, R + 130, 128, 1);
-  // RingGeometry-UVs sind planar — auf radial (x = Radius) umbiegen,
-  // damit die Canvas-Bänder als konzentrische Ringe laufen.
-  const pos = geo.attributes.position, uv = geo.attributes.uv;
-  for (let i = 0; i < pos.count; i += 1) {
-    const rad = Math.hypot(pos.getX(i), pos.getY(i));
-    uv.setXY(i, (rad - (R + 44)) / 86, 0.5);
-  }
-  const mat = new THREE.MeshBasicMaterial({
-    map: tex, transparent: true, side: THREE.DoubleSide,
-    depthWrite: false, opacity: 0.85,
-  });
-  const ring = new THREE.Mesh(geo, mat);
-  ring.rotation.x = -Math.PI / 2 + 0.48;   // deutlich geneigt (~28°, lesbar schräg)
-  ring.rotation.y = 0.18;                  // leichte Drehung, kein Frontal-Blick
-  ring.renderOrder = 2;                     // nach dem Planeten, vor den Schildern
-  scene.add(ring);
-  return ring;
-})();
 
 // Koordinaten (x,z) der Engine auf die Kugel legen
 const _v = new THREE.Vector3();
@@ -915,12 +848,8 @@ scene.add(grab);
 const MODES = {
   charakter: { dist: 13, min: 6, max: 80, yaw: 0.7, pitch: 0.22, pitchMin: -0.1, pitchMax: 1.25, target: 'pilot' },
   // Planet: Pitch bis ±85° (fast Pole, kein Gimbal mehr dank radialem Up).
-  // Weit raus bis 640 (Ringe außen R+130 bleiben im Bild). Up im Planet-Modus
-  // ist persistent (freies Rollen): kein Nordpol-Zwang mehr — die Achse kann
-  // schräg stehen und bleibt schräg. Shift+Ziehen rollt, normal Ziehen orbitet.
-  planet: { dist: 380, min: 250, max: 640, yaw: 0.6, pitch: 0.85, pitchMin: -1.48, pitchMax: 1.48, target: 'planet' },
+  planet: { dist: 330, min: 250, max: 430, yaw: 0.6, pitch: 0.85, pitchMin: -1.48, pitchMax: 1.48, target: 'planet' },
 };
-const PLANET_TILT = 0.55;   // Planet-Up fest um ~31° um die Blickachse kippen — Achse steht sichtbar schräg
 
 let mode = 'charakter';
 const cam = { yaw: MODES.charakter.yaw, pitch: MODES.charakter.pitch, dist: MODES.charakter.dist };
@@ -952,7 +881,6 @@ const modusBlend = {
   endYaw: 0,
   followFig: new THREE.Vector3(),  // letzte Figuren-Position für die Mitführung
   upNach: 0,                        // Up-Nachblend in s nach Blend-Ende (gegen Roll-Snap)
-  rollExtra: 0,                     // Roll-Gedächtnis aus Shift+Ziehen (bleibt über Fahrten erhalten)
 };
 const _upZiel = new THREE.Vector3();
 const _figNeu = new THREE.Vector3();
@@ -1003,8 +931,8 @@ const _tanB = new THREE.Vector3(0, 0, 1);
 const _tanH = new THREE.Vector3();
 const _wunsch = new THREE.Vector3();
 const _seit = new THREE.Vector3();
-let camStartGesicht = true;   // nächster Tick rahmt das Gesicht ein (Seite frei ±45°)
-const GESICHT_SEITE = Math.PI / 4;  // 45° Spielraum links/rechts der Blickachse
+let camStartGesicht = true;   // nächster Tick rahmt das Gesicht ein (30° links)
+const GESICHT_SEITE = Math.PI / 6;  // 30° von der Blickachse zur linken Seite
 function tangentialBasis(n) {
   _tanH.set(0, 1, 0).addScaledVector(n, -n.y);
   if (_tanH.lengthSq() < 1e-6) _tanH.set(1, 0, 0).addScaledVector(n, -n.x);
@@ -1024,34 +952,14 @@ function setzeModus(neu) {
     // „Ziel jeden Tick aus cam.yaw/pitch/dist neu rechnen" hat das Ziel
     // selbst bewegt (Expo lief gleichzeitig) — das gab die gebogene Fahrt.
     tangentialBasis(_nRueck.set(istP.x, istP.y, istP.z).normalize());
-    // Gesichts-Yaw: Blick auf Tangentialebene projizieren. Aus der
-    // ±45°-Spanne (GESICHT_SEITE) wird die Gradzahl mit dem kleinsten
-    // Drehaufwand vom Start-Yaw gewählt — nicht stur links/rechts.
-    // Der Dreh zu „ins Gesicht" beginnt erst spät (GESICHT_START).
+    // Gesichts-Yaw wie in tick(): Blick auf Tangentialebene projizieren,
+    // 30° zur Seite (GESICHT_SEITE) — kein Snap, nur endYaw einfrieren.
     _wunsch.copy(_blick).addScaledVector(_nRueck, -_blick.dot(_nRueck));
     if (_wunsch.lengthSq() < 1e-6) _wunsch.set(0, 0, 1).applyMatrix4(_basis);
     _wunsch.normalize();
     _seit.crossVectors(_wunsch, _nRueck).normalize();  // links der Figur
-    const yawDirekt = Math.atan2(_wunsch.dot(_tanB), _wunsch.dot(_tanA));
-    // Start-Yaw: Blick von der Planet-Pose auf die Figur (wo wir herkommen).
-    _figNeu.copy(camera.position.lengthSq() > 1e-6 ? camera.position : camPos)
-      .sub(figur.position);
-    // In Tangentialebene projizieren für vergleichbare Yaw-Basis.
-    _figNeu.addScaledVector(_nRueck, -_figNeu.dot(_nRueck));
-    if (_figNeu.lengthSq() < 1e-6) _figNeu.copy(_wunsch);
-    _figNeu.normalize();
-    const yawStart = Math.atan2(_figNeu.dot(_tanB), _figNeu.dot(_tanA));
-    // Feinsuche über die Spanne: welcher Offset ∈ [-45°, +45°] braucht
-    // den kleinsten Dreh vom Start-Yaw? (9 Stützstellen à 11,25° reichen.)
-    let seite = 0;   // als Winkel-Offset, nicht nur links/rechts
-    let bestDreh = Infinity;
-    for (let k = -4; k <= 4; k += 1) {
-      const off = (k / 4) * GESICHT_SEITE;
-      const d = Math.abs(winkelDelta(yawStart, yawDirekt + off));
-      if (d < bestDreh) { bestDreh = d; seite = off; }
-    }
-    _wunsch.multiplyScalar(Math.cos(seite))
-      .addScaledVector(_seit, Math.sin(seite));
+    _wunsch.multiplyScalar(Math.cos(GESICHT_SEITE))
+      .addScaledVector(_seit, Math.sin(GESICHT_SEITE));
     const yawNeu = Math.atan2(_wunsch.dot(_tanB), _wunsch.dot(_tanA));
     const sp = Math.sin(m.pitch), cp = Math.cos(m.pitch);
     _tanH.copy(_tanA).multiplyScalar(Math.cos(yawNeu))
@@ -1123,7 +1031,7 @@ function setzeModus(neu) {
     b.setAttribute('aria-pressed', String(b.dataset.mode === neu));
   }
   document.getElementById('hinweis').textContent = neu === 'planet'
-    ? 'ziehen = drehen · Shift+ziehen = rollen · Rad = zoom · der Punkt ist die Figur'
+    ? 'ziehen = drehen · Rad = zoom · der Punkt ist die Figur'
     : 'ziehen = drehen · Rad = zoom';
   for (const [, g] of orte) if (g.userData.schild) g.userData.schild.visible = neu !== 'planet';
 }
@@ -1161,21 +1069,6 @@ renderer.domElement.addEventListener('pointermove', (e) => {
   }
   // Yaw: immer frei (360°+, beide Modi). Pitch: Charakter begrenzt (über der
   // Oberfläche bleiben), Planet frei (Pole erlaubt, Kern bleibt das Ziel).
-  // Shift + horizontal ziehen = Rollen (nur Planet): Up um die Blickachse
-  // drehen — so lässt sich die Polachse schräg stellen und bleibt schräg.
-  if (e.shiftKey && mode === 'planet') {
-    _kamBlick.subVectors(zielPunkt, camera.position);
-    if (_kamBlick.lengthSq() > 1e-12) {
-      _kamBlick.normalize();
-      const winkel = (e.clientX - letzteX) * 0.008;
-      camera.up.applyAxisAngle(_kamBlick, winkel).normalize();
-      modusBlend.rollExtra += winkel;   // merken — nächste Fahrt übernimmt die Schräglage
-      if (modusBlend.aktiv) modusBlend.startUp.copy(camera.up);
-      letzteX = e.clientX;
-      letzteY = e.clientY;
-      return;
-    }
-  }
   camZiel.yaw -= (e.clientX - letzteX) * 0.005;
   camZiel.pitch = Math.min(m.pitchMax, Math.max(m.pitchMin, camZiel.pitch - (e.clientY - letzteY) * 0.004));
   letzteX = e.clientX;
@@ -1184,23 +1077,14 @@ renderer.domElement.addEventListener('pointermove', (e) => {
 renderer.domElement.addEventListener('pointerup', () => { dragging = false; });
 renderer.domElement.addEventListener('wheel', (e) => {
   e.preventDefault();
-  // Während einer Fahrt kein Trigger und kein Abbruch per Wheel —
-  // sonst startet jeder Tick eine neue Fahrt (Dauerfeuer).
-  if (modusBlend.aktiv) return;
+  if (modusBlend.aktiv) {
+    modusBlend.aktiv = false;
+    camZiel.yaw = cam.yaw;
+    camZiel.pitch = cam.pitch;
+    camZiel.dist = cam.dist;
+    if (mode === 'charakter') camStartGesicht = true;
+  }
   const m = MODES[mode];
-  // Zoom-Trigger an den Grenzen (Buttons/Tasten bleiben zusätzlich):
-  // Charakter ganz raus (max = weit weg) → Planet-Fahrt, Planet ganz
-  // rein (min = nah dran) → Charakter-Fahrt. Nur bei klarem Zoom-Willen
-  // (|deltaY|-Schwelle gegen Trackpad-Rauschen, kein Pinch per ctrlKey).
-  const willZoom = Math.abs(e.deltaY) > 4 && !e.ctrlKey;
-  if (willZoom && mode === 'charakter' && e.deltaY > 0 && camZiel.dist >= m.max - 0.5) {
-    setzeModus('planet');
-    return;
-  }
-  if (willZoom && mode === 'planet' && e.deltaY < 0 && camZiel.dist <= m.min + 0.5) {
-    setzeModus('charakter');
-    return;
-  }
   camZiel.dist = Math.min(m.max, Math.max(m.min, camZiel.dist * (1 + e.deltaY * 0.0012)));
 }, { passive: false });
 
@@ -1411,12 +1295,6 @@ function sonneSetzen(tag) {
   // damit das Gesicht nie absäuft. Nachts/dämmrig voller, gekoppelt an lampenHell.
   helmLicht.intensity = 1.2 + lampenHell * 2.0;
   gesichtsFill.intensity = 0.9 + lampenHell * 2.4;
-  // Erd-Finsternis: Geht die Strecke Sonne→Erde durch unseren Planeten
-  // (Strecken-Abstand zum Kern < R), steht die Erde in unserem Schatten —
-  // Erde abdunkeln (Phasen kommen weiter vom Sonnenlicht von selbst).
-  // Läuft immer, nicht nur im Dev-Modus (nur die Linie ist Dev-only).
-  erde.material.emissiveIntensity = erdFinsternis ? 0.03 : 0.35;
-  erde.material.color.setScalar(erdFinsternis ? 0.18 : 1);
   // Erde: Kugel auf der Himmels-Schale, aus dem gleichen Vektor wie die Engine.
   erde.position.set(ERDE_VEC.x, ERDE_VEC.y, ERDE_VEC.z).normalize().multiplyScalar(HIMMEL_WEIT);
   // Dev-Linien: Kern → Sonne + Kern → Erde (nur ?mode=dev sichtbar)
@@ -1789,17 +1667,7 @@ function tick() {
     if (blendLaeuft && modusBlend.von === 'planet') {
       // Drehen-vor-Zoomen rückwärts: Richtung zuerst auf Kugelschale um den
       // (sich bewegenden) Look, Abstand überlappend danach. Slerp-Fallback.
-      // Der Dreh zu „ins Gesicht" (Gesichts-Mix) beginnt erst spät
-      // (GESICHT_START) — vorher nur außen anfliegen, kein frühes Eindrehen.
-      const GESICHT_START = 0.62;
-      const gesichtMix = glatt01((modusBlend.t - BLEND_DAUER * GESICHT_START)
-        / (BLEND_DAUER * (1 - GESICHT_START)));
-      _tanH.copy(modusBlend.startDir).lerp(modusBlend.endDir, drehMix);
-      if (_tanH.lengthSq() < 1e-8) _tanH.copy(modusBlend.endDir);
-      _tanH.normalize();
-      // Ziel-Richtung fürs Gesicht: endDir ist bereits die 30°-Seite —
-      // spät dorthin eindrehen statt von Anfang an.
-      _blendEnde.copy(_tanH).lerp(modusBlend.endDir, gesichtMix * 0.85);
+      _blendEnde.copy(modusBlend.startDir).lerp(modusBlend.endDir, drehMix);
       if (_blendEnde.lengthSq() < 1e-8) _blendEnde.copy(modusBlend.endDir);
       _blendEnde.normalize();
       const distNeu = modusBlend.startDist + (modusBlend.endDist - modusBlend.startDist) * zoomMix;
@@ -1824,10 +1692,11 @@ function tick() {
     _kamBlick.subVectors(zielPunkt, camPos).normalize();
   }
   camera.position.copy(camPos);
-  // Up-Logik: Charakter radial (N projiziert, Pol-Flip-Schutz), Planet
-  // PERSISTENT (freies Rollen — kein Nordpol-Zwang, die Achse darf schräg
-  // stehen). Während der Fahrt blendet Up vom Start zum Ziel, danach bleibt
-  // es stehen. Pol-Notfall: Blick ∥ Up → Fallback statt lookAt-Rollen.
+  // Radiales Up gegen den Pol-Flip: Up = N projiziert auf die Bildebene.
+  // Am Pol ist der Welt-Y-Up parallel zur Blickrichtung → lookAt rollt.
+  // In beiden Modi dreht Up radial mit (Charakter-Horizont = Tangentialebene).
+  // Während der Fahrt Up weich vom Start-Up zum Ziel-Up blenden (kein Roll-Snap).
+  // Nach dem Rückweg noch 0,25 s nachblenden, sonst Jump im letzten Frame.
   if (modusBlend.upNach > 0 && !blendLaeuft) {
     modusBlend.upNach = Math.max(0, modusBlend.upNach - dt);
     _upZiel.copy(normal).addScaledVector(_kamBlick, -_kamBlick.dot(normal));
@@ -1837,13 +1706,8 @@ function tick() {
     camera.up.copy(camera.up).lerp(_upZiel, Math.min(1, dt * 8) * (0.3 + 0.7 * kNach)).normalize();
   } else if (blendLaeuft) {
     if (mode === 'planet') {
-      // Ziel-Up für den Hinweg: Welt-Y projiziert, dann FEST um PLANET_TILT
-      // um die Blickachse kippen — die Achse steht sichtbar schräg statt
-      // senkrecht (kein Nordpol-Zwang). Roll-Anteil aus Shift-Ziehen wird
-      // unten draufaddiert, nicht überschrieben.
       _upHilf.set(0, 1, 0).addScaledVector(_kamBlick, -_kamBlick.y);
       if (_upHilf.lengthSq() < 1e-6) _upHilf.set(0, 0, _kamBlick.z >= 0 ? -1 : 1);
-      _upHilf.normalize().applyAxisAngle(_kamBlick, PLANET_TILT + modusBlend.rollExtra);
     } else {
       _upHilf.copy(normal).addScaledVector(_kamBlick, -_kamBlick.dot(normal));
       if (_upHilf.lengthSq() < 1e-6) _upHilf.copy(normal);
@@ -1852,13 +1716,9 @@ function tick() {
     _blendUp.copy(modusBlend.startUp).lerp(_upHilf, posMix).normalize();
     camera.up.copy(_blendUp);
   } else if (mode === 'planet') {
-    // Persistent: Up bleibt wie es ist (frei gerollt oder aus der Fahrt).
-    // Nur Pol-Notfall abfangen: Blick ∥ Up → minimal kippen statt Rollen.
-    if (Math.abs(camera.up.dot(_kamBlick)) > 0.995) {
-      _upHilf.set(0, 0, 1).addScaledVector(_kamBlick, -_kamBlick.z);
-      if (_upHilf.lengthSq() < 1e-6) _upHilf.set(1, 0, 0).addScaledVector(_kamBlick, -_kamBlick.x);
-      camera.up.copy(_upHilf.normalize());
-    }
+    _upHilf.set(0, 1, 0).addScaledVector(_kamBlick, -_kamBlick.y);
+    if (_upHilf.lengthSq() < 1e-6) _upHilf.set(0, 0, _kamBlick.z >= 0 ? -1 : 1);
+    camera.up.copy(_upHilf.normalize());
   } else {
     _upHilf.copy(normal).addScaledVector(_kamBlick, -_kamBlick.dot(normal));
     if (_upHilf.lengthSq() < 1e-6) _upHilf.copy(normal);
