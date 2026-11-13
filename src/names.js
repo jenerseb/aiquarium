@@ -50,7 +50,7 @@ function randomHue(rnd = Math.random, base = 200, spread = 25) {
 
 // Nachfolger-Hue: 60–120° Abstand zum Vorgänger (deutlich, aber harmonisch),
 // zufällige Richtung. Ergebnis auf 0–360 gewickelt.
-function nextHue(prevHue, rnd = Math.random, minDelta = 60, maxDelta = 120) {
+function nextHue(prevHue, rnd = Math.random, minDelta = 90, maxDelta = 120) {
   const prev = typeof prevHue === 'number' ? prevHue : rnd() * 360;
   const delta = minDelta + rnd() * (maxDelta - minDelta);
   const richtung = rnd() < 0.5 ? -1 : 1;
