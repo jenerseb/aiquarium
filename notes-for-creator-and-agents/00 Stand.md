@@ -30,6 +30,7 @@ Autonomes 24/7-Web-Terrarium: ein KI-gesteuerter Piloten-Charakter lebt auf eine
 
 ## Offen
 
+- **Kamera-Fahrt Charakter → Planet noch buggy** (Stand 2026-11-14, muss gefixt werden): Hinweg fährt scheinbar erst den Kern an statt radial entlang der Achse Kern ↔ Klickpunkt auszufahren; Rückweg (Planet → Charakter) läuft dagegen sauber. Vermutung: Hinweg-End-Pose wird jeden Tick neu aus laufendem `zielPunkt` + `cam`-Expo gerechnet statt eingefroren. Fix: `endPos/endLook` in `setzeModus('planet')` einmalig einfrieren wie beim Rückweg, Drehen-vor-Zoomen (`drehMix`/`zoomMix`).
 - **Figur** — Nager oder Slime mit Händen? (Modelle noch nicht geladen.)
 - **Assets** — Links in `links-zu-3d-models.txt`, nichts heruntergeladen, Lizenzen ungeprüft (siehe [[CREDITS]]).
 - **Luftreiniger/Ventilator** als Zonen-Freischalter (v0.2+, braucht Crafting).

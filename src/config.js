@@ -466,7 +466,7 @@ const START = { body: 100, psyche: 0 };
 // Umgebung (AIQUARIUM_MODEL in der .env überschreibt diesen Default).
 const MODEL = {
   baseUrl: process.env.OPENROUTER_BASE_URL || 'https://openrouter.ai/api/v1/chat/completions',
-  name: process.env.AIQUARIUM_MODEL || 'google/gemma-4-26b-a4b-it:free',
+  name: process.env.AIQUARIUM_MODEL || 'nvidia/nemotron-3.5-super-vl:free',
   timeoutMs: 30000,
   temperature: 0.85,
   retryTemperature: 0.55,
@@ -478,7 +478,7 @@ const MODEL = {
 };
 
 // Kurzname fürs Log: nach dem letzten "/", vor dem nächsten "-"
-// ("google/gemma-4-26b-a4b-it" → "gemma", "mimo-v2.6-pro" → "mimo").
+// ("nvidia/nemotron-3.5-super-vl" → "nemotron", "mimo-v2.6-pro" → "mimo").
 function modellKurz(name = MODEL.name) {
   const nachSlash = String(name || '').split('/').pop();
   return nachSlash.split('-')[0] || nachSlash || '?';

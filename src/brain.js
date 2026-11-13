@@ -3,7 +3,7 @@
 const { validateDecision } = require('./checks');
 const { MODEL } = require('./config');
 
-const PRICE = { in: 0.08e-6, out: 0.10e-6 }; // Gemma 4 26B bei OpenRouter, Stand 2026-11-12
+const PRICE = { in: 0, out: 0 }; // Free-Tier-Default (Nemotron 3.5 Super VL), Stand 2026-11-13
 
 async function callModel({ prompt, apiKey, baseUrl = MODEL.baseUrl, model = MODEL.name,
   timeoutMs = MODEL.timeoutMs, temperature = MODEL.temperature }) {

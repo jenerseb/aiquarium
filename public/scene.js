@@ -212,23 +212,45 @@ polFlagge(true);
 polFlagge(false);
 
 // ---------------------------------------------------------------- Planet
-// Subtiles Oberflächenmuster: prozedurale Canvas-Textur (Seed fest —
-// gleiches Bild bei jedem Laden), sehr niedriger Kontrast, kein Rechenaufwand.
+// Mars-Oberfläche: rostrote Basis, dunkle/helle Marmorierung + stellenweise
+// graue Patches (altes Gestein/Asche). Prozedurale Canvas-Textur (Seed fest —
+// gleiches Bild bei jedem Laden), kein Rechenaufwand pro Frame.
 function planetTextur() {
   const c = document.createElement('canvas');
   c.width = 512; c.height = 256;
   const g = c.getContext('2d');
   let s = 20261114;
   const rnd = () => ((s = (s * 1664525 + 1013904223) >>> 0) / 0xffffffff);
-  g.fillStyle = '#837a68'; g.fillRect(0, 0, 512, 256);
-  for (let i = 0; i < 2600; i += 1) {
-    const x = rnd() * 512, y = rnd() * 256, r = 1 + rnd() * 7;
-    g.fillStyle = rnd() > 0.5 ? 'rgba(255,250,235,0.05)' : 'rgba(20,16,10,0.06)';
+  // Basis: Mars-Rost mit leichtem vertikalem Verlauf (Pole etwas heller/staubiger)
+  const grad = g.createLinearGradient(0, 0, 0, 256);
+  grad.addColorStop(0, '#c08a5e');
+  grad.addColorStop(0.25, '#a95027');
+  grad.addColorStop(0.6, '#9c4a24');
+  grad.addColorStop(0.85, '#a95027');
+  grad.addColorStop(1, '#bd8460');
+  g.fillStyle = grad; g.fillRect(0, 0, 512, 256);
+  // Weiche Marmorierung: dunkle + helle Kleckse, sehr niedriger Kontrast
+  for (let i = 0; i < 70; i += 1) {
+    const x = rnd() * 512, y = rnd() * 256, r = 10 + rnd() * 34;
+    g.fillStyle = rnd() > 0.45 ? 'rgba(70,28,12,0.10)' : 'rgba(232,150,100,0.10)';
     g.beginPath(); g.arc(x, y, r, 0, 7); g.fill();
   }
-  for (let i = 0; i < 40; i += 1) {
-    const x = rnd() * 512, y = rnd() * 256, r = 8 + rnd() * 26;
-    g.fillStyle = 'rgba(40,34,22,0.05)';
+  // Graue Patches: je Patch 5–9 überlappende Kreise → unregelmäßige Form
+  for (let p = 0; p < 16; p += 1) {
+    const px = rnd() * 512, py = 30 + rnd() * 196;
+    const ton = ['125,120,112', '140,135,126', '105,100,94'][(rnd() * 3) | 0];
+    const n = 5 + ((rnd() * 5) | 0);
+    for (let k = 0; k < n; k += 1) {
+      const x = px + (rnd() - 0.5) * 56, y = py + (rnd() - 0.5) * 30;
+      const r = 8 + rnd() * 20;
+      g.fillStyle = `rgba(${ton},${0.28 + rnd() * 0.22})`;
+      g.beginPath(); g.arc(x, y, r, 0, 7); g.fill();
+    }
+  }
+  // Feines Korn: helle + dunkle Sprenkel
+  for (let i = 0; i < 2600; i += 1) {
+    const x = rnd() * 512, y = rnd() * 256, r = 0.6 + rnd() * 2.2;
+    g.fillStyle = rnd() > 0.5 ? 'rgba(255,220,180,0.07)' : 'rgba(40,15,5,0.08)';
     g.beginPath(); g.arc(x, y, r, 0, 7); g.fill();
   }
   const t = new THREE.CanvasTexture(c);
@@ -795,6 +817,69 @@ let mode = 'charakter';
 const cam = { yaw: MODES.charakter.yaw, pitch: MODES.charakter.pitch, dist: MODES.charakter.dist };
 const camZiel = { yaw: cam.yaw, pitch: cam.pitch, dist: cam.dist };
 
+// Richtungs-Blend (Variante B, beide Wege): Klickpunkt/Kern erst halten,
+// dann weich zum Ziel. Beim Umschalten frieren wir StartPos/StartLook/StartUp
+// ein und fahren die Kamera in Weltkoordinaten — dadurch kein Yaw-Sprung
+// zwischen Tangential-Frame (Charakter) und Welt-Yaw (Planet) und kein
+// langer Interpolations-Schwenk.
+const BLEND_DAUER = 2.0;   // s gesamt: ~0,7 s halten + ~1,3 s fahren (Ease-In-Out)
+const modusBlend = {
+  aktiv: false,
+  t: 0,
+  von: 'charakter',   // Start-Modus der Fahrt
+  startPos: new THREE.Vector3(),
+  startLook: new THREE.Vector3(),
+  startUp: new THREE.Vector3(0, 1, 0),
+  // Beide Wege: eingefrorene End-Pose in Weltkoordinaten (einmalig in setzeModus
+  // berechnet, danach nur noch per Figuren-Delta mitgeführt — keine Kurve).
+  // Drehen-vor-Zoomen: Richtung (drehMix, läuft zuerst) und Abstand (zoomMix,
+  // setzt überlappend ein) fahren getrennt — sonst schneidet die Gerade die Kugel.
+  endPos: new THREE.Vector3(),
+  endLook: new THREE.Vector3(),
+  startDir: new THREE.Vector3(0, 1, 0),  // Offset-Richtung Start (normiert)
+  endDir: new THREE.Vector3(0, 1, 0),    // Offset-Richtung Ende (normiert)
+  startDist: 13,                          // Offset-Länge Start
+  endDist: 13,                            // Offset-Länge Ende
+  endYaw: 0,
+  followFig: new THREE.Vector3(),  // letzte Figuren-Position für die Mitführung
+  upNach: 0,                        // Up-Nachblend in s nach Blend-Ende (gegen Roll-Snap)
+};
+const _upZiel = new THREE.Vector3();
+const _figNeu = new THREE.Vector3();
+const _figDelta = new THREE.Vector3();
+const _nRueck = new THREE.Vector3(0, 1, 0);   // Rückweg-Normale (lokal aus istP, normal lebt nur in tick())
+const _blendEnde = new THREE.Vector3();
+const _blendLook = new THREE.Vector3();
+const _blendUp = new THREE.Vector3();
+const _KERN = new THREE.Vector3(0, 0, 0);
+function winkelDelta(a, b) {
+  // kürzeste Differenz b - a in [-PI, PI], damit 3,1 → -3,1 nicht um den Planeten rotiert
+  let d = (b - a) % (Math.PI * 2);
+  if (d > Math.PI) d -= Math.PI * 2;
+  if (d < -Math.PI) d += Math.PI * 2;
+  return d;
+}
+function glatt01(x) {
+  // Smootherstep (6t⁵−15t⁴+10t³): Ease-In-Out mit noch weicheren Enden als
+  // Smoothstep — kein „Anstoßen" beim Anhalten auf 2,0 s.
+  const k = Math.min(1, Math.max(0, x));
+  return k * k * k * (k * (k * 6 - 15) + 10);
+}
+// Phasenversetzte Mixe: drehMix läuft zuerst (Großteil des Weges drehen,
+// außen bleiben), zoomMix setzt überlappend ein (rein-/rauszoomen).
+// Anteile von k: Drehen 0 → 0,78 · Zoom 0,42 → 1 · Look hält bis 0,35.
+const DREH_ENDE = 0.78;
+const ZOOM_START = 0.42;
+function drehMixFaktor(t) {
+  return glatt01(t / (BLEND_DAUER * DREH_ENDE));
+}
+function zoomMixFaktor(t) {
+  return glatt01((t - BLEND_DAUER * ZOOM_START) / (BLEND_DAUER * (1 - ZOOM_START)));
+}
+function posMixFaktor() {
+  return glatt01(modusBlend.t / BLEND_DAUER);
+}
+
 const camPos = new THREE.Vector3();
 const camLook = new THREE.Vector3();
 const zielPunkt = new THREE.Vector3(0, R, 0);
@@ -823,13 +908,85 @@ function setzeModus(neu) {
   mode = neu;
   const m = MODES[neu];
   if (neu === 'charakter') {
-    // Zurück zur Figur = zurück vors Gesicht (30° links), wie beim Laden.
-    camStartGesicht = true;
-    camZiel.pitch = m.pitch;
+    // Rückweg = gleiche Fahrt rückwärts, aber mit EINGEFRORENEM Ziel:
+    // End-Pose einmalig aus live-Figur/normal/Gesichts-Yaw in Weltkoordinaten
+    // rechnen, danach nur noch per Figuren-Delta mitführen. Das alte
+    // „Ziel jeden Tick aus cam.yaw/pitch/dist neu rechnen" hat das Ziel
+    // selbst bewegt (Expo lief gleichzeitig) — das gab die gebogene Fahrt.
+    tangentialBasis(_nRueck.set(istP.x, istP.y, istP.z).normalize());
+    // Gesichts-Yaw wie in tick(): Blick auf Tangentialebene projizieren,
+    // 30° zur Seite (GESICHT_SEITE) — kein Snap, nur endYaw einfrieren.
+    _wunsch.copy(_blick).addScaledVector(_nRueck, -_blick.dot(_nRueck));
+    if (_wunsch.lengthSq() < 1e-6) _wunsch.set(0, 0, 1).applyMatrix4(_basis);
+    _wunsch.normalize();
+    _seit.crossVectors(_wunsch, _nRueck).normalize();  // links der Figur
+    _wunsch.multiplyScalar(Math.cos(GESICHT_SEITE))
+      .addScaledVector(_seit, Math.sin(GESICHT_SEITE));
+    const yawNeu = Math.atan2(_wunsch.dot(_tanB), _wunsch.dot(_tanA));
+    const sp = Math.sin(m.pitch), cp = Math.cos(m.pitch);
+    _tanH.copy(_tanA).multiplyScalar(Math.cos(yawNeu))
+      .addScaledVector(_tanB, Math.sin(yawNeu));
+    _figNeu.copy(figur.position).addScaledVector(_nRueck, -1.0);
+    modusBlend.endLook.copy(_figNeu).addScaledVector(_nRueck, 3.0);
+    modusBlend.endPos.copy(modusBlend.endLook)
+      .addScaledVector(_tanH, cp * m.dist)
+      .addScaledVector(_nRueck, sp * m.dist);
+    const bodenAb0 = modusBlend.endPos.length();
+    if (bodenAb0 < R + 0.6) modusBlend.endPos.multiplyScalar((R + 0.6) / (bodenAb0 || 1));
+    modusBlend.followFig.copy(_figNeu);
+    modusBlend.endYaw = yawNeu;
+    // Rückweg-Start: Richtung/Dist aus aktueller Pose relativ zum
+    // Start-Look (Kern) — gleiche Bezugsgröße wie die Fahrt-Geometrie.
+    _figNeu.copy(camera.position.lengthSq() > 1e-6 ? camera.position : camPos).sub(zielPunkt);
+    modusBlend.startDist = Math.max(_figNeu.length() || m.dist, R + 2);
+    modusBlend.startDir.copy(_figNeu).normalize();
+    modusBlend.endDist = modusBlend.endPos.clone().sub(modusBlend.endLook).length() || m.dist;
+    modusBlend.endDir.copy(modusBlend.endPos).sub(modusBlend.endLook).normalize();
+    modusBlend.startPos.copy(camera.position.lengthSq() > 1e-6 ? camera.position : camPos);
+    modusBlend.startLook.copy(zielPunkt);
+    modusBlend.startUp.copy(camera.up);
+    modusBlend.t = 0;
+    modusBlend.von = 'planet';
+    modusBlend.aktiv = true;
+    modusBlend.upNach = 0;
+    camStartGesicht = false;   // kein Snap während/nach der Fahrt (siehe unten)
     camZiel.dist = m.dist;
+    // Yaw/Pitch bleiben während der Fahrt eingefroren — der Welt-Blend trägt.
+    camZiel.pitch = cam.pitch;
+    camZiel.yaw = cam.yaw;
   } else {
-    camZiel.yaw = m.yaw;
-    camZiel.pitch = m.pitch;
+    // Hinweg: Achse = Kern ↔ letzter Charakter-Standpunkt (N).
+    // Position als Kugel-Interpolation: Richtung per Slerp drehen, Radius
+    // wachsen lassen, Look Klickpunkt → Kern. Kein Durchflug, kein Kern-Bogen.
+    const nl = Math.hypot(istP.x, istP.y, istP.z) || 1;
+    _nRueck.set(istP.x / nl, istP.y / nl, istP.z / nl);
+    const yawNeu = Math.atan2(_nRueck.z, _nRueck.x);
+    const pitchNeu = Math.min(m.pitchMax, Math.max(m.pitchMin, Math.asin(Math.min(1, Math.max(-1, _nRueck.y)))));
+    const sp = Math.sin(pitchNeu), cp = Math.cos(pitchNeu);
+    modusBlend.endLook.copy(_KERN);
+    modusBlend.endDir.set(Math.cos(yawNeu) * cp, sp, Math.sin(yawNeu) * cp).normalize();
+    modusBlend.endDist = m.dist;
+    modusBlend.endPos.copy(_KERN).addScaledVector(modusBlend.endDir, m.dist);
+    // Start: Richtung/Dist aus aktueller Pose relativ zum Start-Look
+    // (Klickpunkt) — gleiche Bezugsgröße wie die Fahrt-Geometrie unten.
+    _figNeu.copy(camPos.lengthSq() > 1e-6 ? camPos : camera.position).sub(zielPunkt);
+    modusBlend.startDist = Math.max(_figNeu.length() || m.dist, R + 2);
+    modusBlend.startDir.copy(_figNeu).normalize();
+    modusBlend.followFig.copy(figur.position);
+    modusBlend.endYaw = yawNeu;
+    // Blend in Weltkoordinaten starten: von aktueller Pose aus fahren.
+    modusBlend.startPos.copy(camera.position.lengthSq() > 1e-6 ? camera.position : camPos);
+    modusBlend.startLook.copy(zielPunkt);
+    modusBlend.startUp.copy(camera.up);
+    modusBlend.t = 0;
+    modusBlend.von = 'charakter';
+    modusBlend.aktiv = true;
+    modusBlend.upNach = 0;
+    cam.yaw = yawNeu;
+    camZiel.yaw = yawNeu;
+    cam.pitch = pitchNeu;
+    camZiel.pitch = pitchNeu;
+    cam.dist = modusBlend.startDist;
     camZiel.dist = m.dist;
   }
   for (const b of document.querySelectorAll('.cam button')) {
@@ -862,6 +1019,16 @@ renderer.domElement.addEventListener('pointerdown', (e) => {
 renderer.domElement.addEventListener('pointermove', (e) => {
   if (!dragging) return;
   const m = MODES[mode];
+  // Eigenes Ziehen während eines Modus-Blends beendet die Fahrt — danach
+  // gelten Yaw/Pitch/Dist direkt, kein Zurückspringen. Beim Rückweg danach
+  // Gesichts-Rahmung nachholen, sonst bleibt die Cam an der Blend-Pose.
+  if (modusBlend.aktiv) {
+    modusBlend.aktiv = false;
+    camZiel.yaw = cam.yaw;
+    camZiel.pitch = cam.pitch;
+    camZiel.dist = cam.dist;
+    if (mode === 'charakter') camStartGesicht = true;
+  }
   // Yaw: immer frei (360°+, beide Modi). Pitch: Charakter begrenzt (über der
   // Oberfläche bleiben), Planet frei (Pole erlaubt, Kern bleibt das Ziel).
   camZiel.yaw -= (e.clientX - letzteX) * 0.005;
@@ -872,6 +1039,13 @@ renderer.domElement.addEventListener('pointermove', (e) => {
 renderer.domElement.addEventListener('pointerup', () => { dragging = false; });
 renderer.domElement.addEventListener('wheel', (e) => {
   e.preventDefault();
+  if (modusBlend.aktiv) {
+    modusBlend.aktiv = false;
+    camZiel.yaw = cam.yaw;
+    camZiel.pitch = cam.pitch;
+    camZiel.dist = cam.dist;
+    if (mode === 'charakter') camStartGesicht = true;
+  }
   const m = MODES[mode];
   camZiel.dist = Math.min(m.max, Math.max(m.min, camZiel.dist * (1 + e.deltaY * 0.0012)));
 }, { passive: false });
@@ -1326,13 +1500,59 @@ function tick() {
   _rolle.setFromAxisAngle(_vorwaerts, Math.sin(t * f * 0.5 + 1) * rollAmp);
   figur.quaternion.multiply(_rolle);
 
-  // Kamera weich nachziehen
-  cam.yaw += (camZiel.yaw - cam.yaw) * Math.min(1, dt * 6);
-  cam.pitch += (camZiel.pitch - cam.pitch) * Math.min(1, dt * 6);
-  cam.dist += (camZiel.dist - cam.dist) * Math.min(1, dt * 5);
+  // Kamera weich nachziehen (Yaw immer auf kürzestem Weg, sonst Spin bei ±PI).
+  // Während einer Fahrt ist das Expo AUS — der Welt-Blend trägt die Pose
+  // allein (Expo gegen den Blend hat die gebogene Fahrt verursacht).
+  const blendLaeuft = modusBlend.aktiv;
+  if (!blendLaeuft) {
+    cam.yaw += winkelDelta(cam.yaw, camZiel.yaw) * Math.min(1, dt * 6);
+    cam.pitch += (camZiel.pitch - cam.pitch) * Math.min(1, dt * 6);
+    cam.dist += (camZiel.dist - cam.dist) * Math.min(1, dt * 5);
+  }
+  // Blend-Uhr: beide Richtungen teilen sich Uhr + Easing (Smootherstep).
+  // Dazu phasenversetzt: drehMix (Richtung, zuerst) + zoomMix (Abstand,
+  // überlappend) — kein Durchflug durch den Planeten.
+  if (blendLaeuft) modusBlend.t = Math.min(BLEND_DAUER, modusBlend.t + dt);
+  const posMix = blendLaeuft ? glatt01(modusBlend.t / BLEND_DAUER) : 1;
+  const drehMix = blendLaeuft ? drehMixFaktor(modusBlend.t) : 1;
+  const zoomMix = blendLaeuft ? zoomMixFaktor(modusBlend.t) : 1;
+  // Look schwenkt phasenversetzt zum Drehen: hält Start-Fokus, folgt dann
+  // überlappend (gleiche Logik wie Zoom, eigenes Timing).
+  const LOOK_START = 0.35;
+  const lookMix = blendLaeuft
+    ? glatt01((modusBlend.t - BLEND_DAUER * LOOK_START) / (BLEND_DAUER * (1 - LOOK_START)))
+    : 1;
 
   if (MODES[mode].target === 'planet') {
-    zielPunkt.set(0, 0, 0);
+    if (modusBlend.aktiv && modusBlend.von === 'charakter') {
+      // Hinweg: Kugel-Interpolation um den Look — Richtung per Slerp drehen
+      // (außen bleiben, kein Kern-Bogen), Radius überlappend wachsen lassen.
+      // Figur läuft weiter — endPos per Figuren-Delta mitführen.
+      _figNeu.copy(figur.position);
+      _figDelta.subVectors(_figNeu, modusBlend.followFig);
+      modusBlend.followFig.copy(_figNeu);
+      modusBlend.endPos.add(_figDelta);
+      modusBlend.endDir.copy(modusBlend.endPos).sub(modusBlend.endLook).normalize();
+      modusBlend.endDist = modusBlend.endPos.distanceTo(modusBlend.endLook) || modusBlend.endDist;
+      _blendLook.copy(modusBlend.startLook).lerp(_KERN, lookMix);
+      zielPunkt.copy(_blendLook);
+    } else {
+      zielPunkt.set(0, 0, 0);
+    }
+  } else if (blendLaeuft && modusBlend.von === 'planet') {
+    // Rückweg: Kern erst halten, dann weich aufs EINGEFRORENE End-Look.
+    // Die Figur läuft weiter — endPos/endLook werden per Figuren-Delta
+    // mitgeführt (Translation), die Gerade bleibt eine Gerade.
+    _figNeu.copy(figur.position).addScaledVector(normal, -1.0);
+    _figDelta.subVectors(_figNeu, modusBlend.followFig);
+    modusBlend.followFig.copy(_figNeu);
+    modusBlend.endPos.add(_figDelta);
+    modusBlend.endLook.add(_figDelta);
+    // Figuren-Delta ändert auch die End-Geometrie → Richtung/Dist nachziehen.
+    _tanH.copy(modusBlend.endPos).sub(zielPunkt);
+    modusBlend.endDist = _tanH.length() || modusBlend.endDist;
+    modusBlend.endDir.copy(_tanH).normalize();
+    zielPunkt.copy(modusBlend.startLook).lerp(modusBlend.endLook, lookMix);
   } else {
     zielPunkt.copy(figur.position).addScaledVector(normal, 2.0);
   }
@@ -1343,18 +1563,44 @@ function tick() {
   _kamBlick.subVectors(zielPunkt, camPos);
   if (_kamBlick.lengthSq() > 1e-12) _kamBlick.normalize();
   if (mode === 'planet') {
-    const sp = Math.sin(cam.pitch), cp = Math.cos(cam.pitch);
-    camPos.set(
-      zielPunkt.x + Math.cos(cam.yaw) * cp * cam.dist,
-      zielPunkt.y + sp * cam.dist,
-      zielPunkt.z + Math.sin(cam.yaw) * cp * cam.dist,
-    );
+    if (modusBlend.aktiv && modusBlend.von === 'charakter') {
+      // Kugelschale um den Look: Richtung drehen (slerp), Radius wachsen.
+      // Start = aktuelle Pose über Klickpunkt, Ende = radial über Kern —
+      // außen bleiben, kein Kern-Bogen, kein Durchflug.
+      _blendEnde.copy(modusBlend.startDir).lerp(modusBlend.endDir, drehMix);
+      if (_blendEnde.lengthSq() < 1e-8) _blendEnde.copy(modusBlend.endDir);
+      _blendEnde.normalize();
+      const distNeu = modusBlend.startDist + (modusBlend.endDist - modusBlend.startDist) * zoomMix;
+      camPos.copy(zielPunkt).addScaledVector(_blendEnde, distNeu);
+      cam.dist = distNeu;
+      cam.yaw = modusBlend.endYaw;
+      camZiel.yaw = modusBlend.endYaw;
+      if (modusBlend.t >= BLEND_DAUER) {
+        modusBlend.aktiv = false;
+        cam.pitch = Math.asin(Math.min(1, Math.max(-1, modusBlend.endDir.y)));
+        camZiel.pitch = cam.pitch;
+        cam.dist = modusBlend.endDist;
+        camZiel.dist = modusBlend.endDist;
+        camPos.copy(modusBlend.endPos);
+        zielPunkt.copy(_KERN);
+      }
+    } else {
+      const sp = Math.sin(cam.pitch), cp = Math.cos(cam.pitch);
+      _blendEnde.set(
+        zielPunkt.x + Math.cos(cam.yaw) * cp * cam.dist,
+        zielPunkt.y + sp * cam.dist,
+        zielPunkt.z + Math.sin(cam.yaw) * cp * cam.dist,
+      );
+      camPos.copy(_blendEnde);
+    }
   } else {
     tangentialBasis(normal);
     // Start: 30° von der linken Seite auf das Gesicht — die Cam steht vor
     // der Figur (_blick zeigt dorthin, wo sie hinschaut) und sieht sie
     // leicht von links. Danach bleibt yaw frei (kein Mitrotieren).
-    if (camStartGesicht && _blick.lengthSq() > 1e-6) {
+    // Während des Rückweg-Blends NICHT snappen — erst am Ende nachholen.
+    if (camStartGesicht && !(modusBlend.aktiv && modusBlend.von === 'planet')
+        && _blick.lengthSq() > 1e-6) {
       _wunsch.copy(_blick).addScaledVector(normal, -_blick.dot(normal));
       if (_wunsch.lengthSq() > 1e-6) {
         _wunsch.normalize();
@@ -1370,19 +1616,64 @@ function tick() {
     const sp = Math.sin(cam.pitch), cp = Math.cos(cam.pitch);
     _tanH.copy(_tanA).multiplyScalar(Math.cos(cam.yaw))
       .addScaledVector(_tanB, Math.sin(cam.yaw));
-    camPos.copy(zielPunkt)
+    _blendEnde.copy(zielPunkt)
       .addScaledVector(_tanH, cp * cam.dist)
       .addScaledVector(normal, sp * cam.dist);
     // Unter die Oberfläche tauchen verboten (nahe, flache Cam am Boden).
-    const bodenAb = camPos.length();
-    if (bodenAb < R + 0.6) camPos.multiplyScalar((R + 0.6) / (bodenAb || 1));
+    const bodenAb = _blendEnde.length();
+    if (bodenAb < R + 0.6) _blendEnde.multiplyScalar((R + 0.6) / (bodenAb || 1));
+    if (blendLaeuft && modusBlend.von === 'planet') {
+      // Drehen-vor-Zoomen rückwärts: Richtung zuerst auf Kugelschale um den
+      // (sich bewegenden) Look, Abstand überlappend danach. Slerp-Fallback.
+      _blendEnde.copy(modusBlend.startDir).lerp(modusBlend.endDir, drehMix);
+      if (_blendEnde.lengthSq() < 1e-8) _blendEnde.copy(modusBlend.endDir);
+      _blendEnde.normalize();
+      const distNeu = modusBlend.startDist + (modusBlend.endDist - modusBlend.startDist) * zoomMix;
+      camPos.copy(zielPunkt).addScaledVector(_blendEnde, distNeu);
+      cam.dist = distNeu;
+      if (modusBlend.t >= BLEND_DAUER) {
+        modusBlend.aktiv = false;
+        cam.yaw = modusBlend.endYaw;
+        camZiel.yaw = modusBlend.endYaw;
+        cam.pitch = MODES.charakter.pitch;
+        camZiel.pitch = MODES.charakter.pitch;
+        cam.dist = MODES.charakter.dist;
+        camZiel.dist = MODES.charakter.dist;
+        camPos.copy(modusBlend.endPos);
+        zielPunkt.copy(modusBlend.endLook);
+        // Up noch 0,25 s nachblenden statt hart umschalten (gegen Roll-Snap).
+        modusBlend.upNach = 0.25;
+      }
+    } else {
+      camPos.copy(_blendEnde);
+    }
     _kamBlick.subVectors(zielPunkt, camPos).normalize();
   }
   camera.position.copy(camPos);
   // Radiales Up gegen den Pol-Flip: Up = N projiziert auf die Bildebene.
   // Am Pol ist der Welt-Y-Up parallel zur Blickrichtung → lookAt rollt.
   // In beiden Modi dreht Up radial mit (Charakter-Horizont = Tangentialebene).
-  if (mode === 'planet') {
+  // Während der Fahrt Up weich vom Start-Up zum Ziel-Up blenden (kein Roll-Snap).
+  // Nach dem Rückweg noch 0,25 s nachblenden, sonst Jump im letzten Frame.
+  if (modusBlend.upNach > 0 && !blendLaeuft) {
+    modusBlend.upNach = Math.max(0, modusBlend.upNach - dt);
+    _upZiel.copy(normal).addScaledVector(_kamBlick, -_kamBlick.dot(normal));
+    if (_upZiel.lengthSq() < 1e-6) _upZiel.copy(normal);
+    _upZiel.normalize();
+    const kNach = 1 - modusBlend.upNach / 0.25;   // 0 → 1
+    camera.up.copy(camera.up).lerp(_upZiel, Math.min(1, dt * 8) * (0.3 + 0.7 * kNach)).normalize();
+  } else if (blendLaeuft) {
+    if (mode === 'planet') {
+      _upHilf.set(0, 1, 0).addScaledVector(_kamBlick, -_kamBlick.y);
+      if (_upHilf.lengthSq() < 1e-6) _upHilf.set(0, 0, _kamBlick.z >= 0 ? -1 : 1);
+    } else {
+      _upHilf.copy(normal).addScaledVector(_kamBlick, -_kamBlick.dot(normal));
+      if (_upHilf.lengthSq() < 1e-6) _upHilf.copy(normal);
+    }
+    _upHilf.normalize();
+    _blendUp.copy(modusBlend.startUp).lerp(_upHilf, posMix).normalize();
+    camera.up.copy(_blendUp);
+  } else if (mode === 'planet') {
     _upHilf.set(0, 1, 0).addScaledVector(_kamBlick, -_kamBlick.y);
     if (_upHilf.lengthSq() < 1e-6) _upHilf.set(0, 0, _kamBlick.z >= 0 ? -1 : 1);
     camera.up.copy(_upHilf.normalize());
@@ -1446,6 +1737,20 @@ requestAnimationFrame(tick);
 window.__aq = {
   get mode() { return mode; },
   get cam() { return { ...cam }; },
+  get blend() {
+    return {
+      aktiv: modusBlend.aktiv,
+      t: modusBlend.t,
+      von: modusBlend.von,
+      rest: modusBlend.aktiv
+        ? Math.hypot(
+            modusBlend.endPos.x - modusBlend.startPos.x,
+            modusBlend.endPos.y - modusBlend.startPos.y,
+            modusBlend.endPos.z - modusBlend.startPos.z,
+          ) * (1 - posMixFaktor())
+        : 0,
+    };
+  },
   get figur() { return figur.position.toArray(); },
   get istP() { return { ...istP }; },
   get zielP() { return { ...zielP }; },

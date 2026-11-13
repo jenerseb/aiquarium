@@ -1055,6 +1055,14 @@ test('db: Pruning löscht alte Rohticks und überzählige Gedanken', () => {
     'Gedanken nicht auf 500 gekappt');
 });
 
+test('config: Modell-Default ist Nemotron Free (ohne Env-Override)', () => {
+  delete process.env.AIQUARIUM_MODEL;
+  delete require.cache[require.resolve('../src/config')];
+  const cfg = require('../src/config');
+  assert.equal(cfg.MODEL.name, 'nvidia/nemotron-3.5-super-vl:free');
+  assert.equal(cfg.modellKurz(), 'nemotron');
+});
+
 test('config: modellKurz schneidet Anbieter und Variante ab', () => {
   assert.equal(modellKurz('google/gemma-4-26b-a4b-it'), 'gemma');
   assert.equal(modellKurz('xiaomi/mimo-v2.6-pro'), 'mimo');
