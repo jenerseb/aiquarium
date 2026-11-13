@@ -16,10 +16,10 @@ Sebastian per Copy-paste (Caddy-Site, systemd-`enable`), alles im Home kann Herm
 
 ## 2. Erstanlage (Hermes als User `seb`, kein sudo)
 
-Vorher Root (einmalig — `/home/seb` gehört `seb`, Hermes darf dort nicht schreiben):
+Vorher Root (einmalig — `/home/seb` gehört `seb`, Hermes schreibt als anderer User):
 
 ```bash
-install -d -o seb -g seb /home/seb/aiquarium
+sudo install -d -o seb -g seb-share -m 2775 /home/seb/aiquarium
 ```
 
 Danach Hermes als `seb`:
@@ -27,9 +27,8 @@ Danach Hermes als `seb`:
 ```bash
 cd /home/seb/aiquarium
 git clone https://github.com/jenerseb/aiquarium.git .
-# Der Clone legt `aiquarium/` an — Repo-Root ist `aiquarium/aiquarium-app/`
-# (`.git` liegt darin). Pfade unten nutzen das:
-cd aiquarium/aiquarium-app
+# Repo-Wurzel = App-Root (AGENTS.md, package.json, src/, public/ … liegen direkt hier,
+# `.git` auch). `aiquarium-app/` ist nur der lokale Ordnername im Dev-Container.
 cp .env.example .env   # OPENROUTER_API_KEY eintragen — nie committen
 node --version         # ≥ 22.5
 npm run check && npm test   # check grün, 80/85 (5 rot = Paket R, bekannt)
@@ -48,7 +47,7 @@ After=network.target
 
 [Service]
 User=seb
-WorkingDirectory=/home/seb/aiquarium/aiquarium-app
+WorkingDirectory=/home/seb/aiquarium
 ExecStart=/usr/bin/node src/server.js
 Restart=always
 RestartSec=5
@@ -89,7 +88,7 @@ Danach: `caddy reload` (oder `systemctl reload caddy`), TLS kommt automatisch.
 ## 5. Release-Flow (jedes Mal gleich)
 
 ```bash
-cd /home/seb/aiquarium/aiquarium-app
+cd /home/seb/aiquarium
 git pull --ff-only
 npm run check && npm test   # bei Rot: Abbruch, kein Restart (80/85 erwartet, 5 rot = Paket R)
 systemctl restart aiquarium   # Root — oder Hermes ruft Sebastian
