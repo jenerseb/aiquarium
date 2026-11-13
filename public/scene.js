@@ -1217,8 +1217,11 @@ renderer.domElement.addEventListener('wheel', (e) => {
 // ---------------------------------------------------------------- Daten
 let letzterState = null;
 let letzterGedanke = null;
-const zielP = { x: 0, y: R, z: 0 };   // wohin die Figur laufen soll (Kugelpunkt)
-const istP = { x: 0, y: R, z: 0 };    // wo sie gerade ist
+// Start im Cluster (Kapsel-Nähe), nicht am Pol — echter Wert kommt per SSE/Sync,
+// aber bis dahin soll kein Nordpol-Frame stehen (ersterSync setzt weich um).
+const CLUSTER_START = { x: 92.8, y: 66.3, z: 37.4 };
+const zielP = { ...CLUSTER_START };   // wohin die Figur laufen soll (Kugelpunkt)
+const istP = { ...CLUSTER_START };    // wo sie gerade ist
 let laeuft = false;
 let ersterSync = true;           // beim ersten Paket nicht von (0,0) loslaufen
 let letzterPilot = null;         // Name+Zyklus, um einen Respawn zu erkennen
@@ -1331,8 +1334,12 @@ function feedText(e) {
   let t = {};
   try { t = JSON.parse(e.payload_json); } catch { /* egal */ }
   switch (e.type) {
-    case 'thought': return (t.thought || '(kein Gedanke)')
-      + (t.musing ? ` <span class="musing">· ${t.musing}</span>` : '');
+    case 'thought': {
+      // Modell-Stille (null-Gedanke aus stale/fallback) nicht als "(kein Gedanke)"
+      // in den Feed spammen — der Debug-Log zeigt sie, der Feed nur echte Gedanken.
+      if (!t.thought) return null;
+      return t.thought + (t.musing ? ` <span class="musing">· ${t.musing}</span>` : '');
+    }
     case 'death': return `${t.name} ist tot — ${NAMEN[t.cause] || t.cause}`;
     case 'spawn': return `Neuer Pilot: ${t.name} (Zyklus ${t.cycle})`;
     case 'discovery': return `Erster Fußabdruck: ${t.name}`;
@@ -1348,8 +1355,11 @@ function feedText(e) {
 
 function zeichneFeed(feed) {
   if (!feed) return;
-  document.getElementById('feed').innerHTML = feed.map((e) =>
-    `<div class="eintrag ${e.type}"><small>Tick ${e.tick}</small>${feedText(e)}</div>`).join('');
+  document.getElementById('feed').innerHTML = feed.map((e) => {
+    const text = feedText(e);
+    if (text == null) return '';
+    return `<div class="eintrag ${e.type}"><small>Tick ${e.tick}</small>${text}</div>`;
+  }).join('');
   const letzte = feed.find((e) => e.type === 'thought');
   if (letzte) {
     try {
