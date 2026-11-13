@@ -1151,8 +1151,10 @@ class Engine {
         };
       }),
       feed: q.feed(this.db, 40),
-      // Inventar: alle Funde mit Fund-Tick, älteste zuerst (Bauteil-Zähler aus Paket F zählt separat)
-      inventar: this.db.prepare("SELECT tick, payload_json FROM events WHERE type='find' ORDER BY tick ASC").all()
+      // Inventar: höchstens 10 Funde, ältestes zuerst (FIFO — ältestes Item droppen).
+      // Bauteil-Zähler aus Paket F zählt separat.
+      inventar: this.db.prepare("SELECT tick, payload_json FROM events WHERE type='find' ORDER BY tick DESC LIMIT 10").all()
+        .reverse()
         .map((r) => {
           let fund = {};
           try { fund = JSON.parse(r.payload_json || '{}'); } catch { /* kaputtes Payload — Tick bleibt */ }
