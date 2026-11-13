@@ -9,7 +9,7 @@ const {
   ERDE, FINSTERNIS, finsternisStufe,
 } = require('./config');
 const { q, logEvent } = require('./db');
-const { uniqueName, randomHue } = require('./names');
+const { uniqueName, randomHue, nextHue } = require('./names');
 const { whitelistFor, buildPrompt, waehleMusingThema } = require('./prompt');
 const { phraseBelief, fallbackText } = require('./belief');
 const brain = require('./brain');
@@ -399,7 +399,7 @@ function step(state, dt = 1, opts = {}) {
         if (fund) {
           pilot.psyche += fund;
           events.push({ type: 'find', in_feed: true,
-            payload: { id: 'wrack', text: 'Zwischen den Blechen: ein heiler Schraubenschlüssel.' } });
+            payload: { id: 'wrack', text: 'Zwischen den Blechen: ein heiler Schraubenschlüssel.', pilot_id: pilot.id ?? null } });
         }
       }
       if (anlass === 'read_note') {
@@ -617,7 +617,7 @@ function spawn(state, tick, previous) {
     pos_z: kapsel.z,
     heading: null,
     mania_until_tick: null,
-    accent_hue: randomHue(),
+    accent_hue: nextHue(previous?.accent_hue ?? null),
     current_action: 'idle',
     action_started_tick: null,
     action_duration_s: 0,
@@ -1151,9 +1151,14 @@ class Engine {
         };
       }),
       feed: q.feed(this.db, 40),
-      // Inventar: höchstens 10 Funde, ältestes zuerst (FIFO — ältestes Item droppen).
+      // Inventar: pilotengebunden (neuer Pilot startet leer — sein Vorgänger hat
+      // alles mit ins Grab genommen), höchstens 10 Funde, ältestes zuerst
+      // (FIFO — ältestes Item droppen). Alt-Events ohne pilot_id zählen mit.
       // Bauteil-Zähler aus Paket F zählt separat.
-      inventar: this.db.prepare("SELECT tick, payload_json FROM events WHERE type='find' ORDER BY tick DESC LIMIT 10").all()
+      inventar: this.db.prepare(`SELECT tick, payload_json FROM events WHERE type='find'
+        AND (json_extract(payload_json, '$.pilot_id') IS NULL
+          OR json_extract(payload_json, '$.pilot_id') = ?)
+        ORDER BY tick DESC LIMIT 10`).all(p.id)
         .reverse()
         .map((r) => {
           let fund = {};

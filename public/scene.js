@@ -1286,7 +1286,9 @@ function zeichneHud(s) {
   inventarAnzeigen(s.inventar);
   if (DEV) devWerteSpiegeln(p);
 
-  korperMat.color.setHSL(((p.accent_hue || 200) / 360) * 0.35 + 0.09, 0.35, 0.72);
+  // Anzug-Farbe: Vollton aus accent_hue — jeder Pilot eine deutlich andere Farbe
+  korperMat.color.setHSL((p.accent_hue ?? 200) / 360, 0.85, 0.55);
+  helmMat.color.setHSL((p.accent_hue ?? 200) / 360, 0.25, 0.16);
   const neuerPilot = letzterPilot && (letzterPilot.name !== p.name || letzterPilot.cycle !== p.cycle_num);
   letzterPilot = { name: p.name, cycle: p.cycle_num };
   // Namensschild über der Figur: Text nur bei Wechsel neu bauen (Texture kostet)

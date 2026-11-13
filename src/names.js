@@ -48,4 +48,13 @@ function randomHue(rnd = Math.random, base = 200, spread = 25) {
   return Math.round(base + (rnd() * 2 - 1) * spread);
 }
 
-module.exports = { baseName, uniqueName, roman, randomHue, FIRST, A, B };
+// Nachfolger-Hue: 60–120° Abstand zum Vorgänger (deutlich, aber harmonisch),
+// zufällige Richtung. Ergebnis auf 0–360 gewickelt.
+function nextHue(prevHue, rnd = Math.random, minDelta = 60, maxDelta = 120) {
+  const prev = typeof prevHue === 'number' ? prevHue : rnd() * 360;
+  const delta = minDelta + rnd() * (maxDelta - minDelta);
+  const richtung = rnd() < 0.5 ? -1 : 1;
+  return Math.round(((prev + richtung * delta) % 360 + 360) % 360);
+}
+
+module.exports = { baseName, uniqueName, roman, randomHue, nextHue, FIRST, A, B };
