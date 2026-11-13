@@ -470,8 +470,8 @@ const MODEL = {
   timeoutMs: 30000,
   temperature: 0.85,
   retryTemperature: 0.55,
-  maxTokens: 800,         // Entscheidung: Reasoning frisst Budget (super-vl: ~110 Tokens bei Miniprompt)
-  maxTokensBelief: 400,   // Glaubenssatz: dito, kleinerer Prompt
+  maxTokens: 2000,        // Nemotron verbrät ~800 im Reasoning, bevor Inhalt entsteht (finish=length, roh="")
+  maxTokensBelief: 800,   // Glaubenssatz: dito, kleinerer Prompt
   reasoningExclude: true, // Reasoning aus content halten (OpenRouter: reasoning.exclude)
   maxWords: 20,          // Gedanken: höchstens 20 Wörter, 1–2 Sätze
   maxWordsMusing: 10,

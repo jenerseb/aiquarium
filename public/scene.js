@@ -1465,10 +1465,18 @@ function dbgText(e) {
       return `${z} ✓ <b>${KURZ[t.action] || t.action}</b> fertig nach ${t.dur}s (begonnen ${e.tick - t.dur})`
         + (typeof t.stress_delta === 'number'
           ? ` · Stress ${t.stress_delta > 0 ? '+' : ''}${Math.round(t.stress_delta * 10) / 10}` : '');
-    case 'stale':
+    case 'stale': {
+      const comp = t.usage?.completion_tokens ?? t.completion_tokens;
+      const reas = t.usage?.completion_tokens_details?.reasoning_tokens
+        ?? t.completion_tokens_details?.reasoning_tokens;
+      const diag = [t.finish ? `finish=${t.finish}` : null,
+        typeof comp === 'number' ? `tok=${comp}` : null,
+        typeof reas === 'number' ? `reas=${reas}` : null].filter(Boolean).join(' ');
       return `${z} <span class="w">Modell still</span>: ${t.reason || ''}`
         + (t.failures ? ` [${t.failures.join(',')}]` : '') + tempo
+        + (diag ? ` <span class="t">${diag}</span>` : '')
         + (t.roh ? `<br>↳ <code>${esc(t.roh)}</code>` : '');
+    }
     case 'mind':
       return `${z} ~ Zustand: <b>${t.state}</b>`;
     case 'belief':
