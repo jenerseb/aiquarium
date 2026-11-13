@@ -16,14 +16,23 @@ Sebastian per Copy-paste (Caddy-Site, systemd-`enable`), alles im Home kann Herm
 
 ## 2. Erstanlage (Hermes als User `seb`, kein sudo)
 
+Vorher Root (einmalig — `/home/seb` gehört `seb`, Hermes darf dort nicht schreiben):
+
 ```bash
-cd /home/seb
-git clone https://github.com/jenerseb/aiquarium.git
-# Repo-Root ist aiquarium-app/ (`.git` liegt darin):
-cd aiquarium-app
+install -d -o seb -g seb /home/seb/aiquarium
+```
+
+Danach Hermes als `seb`:
+
+```bash
+cd /home/seb/aiquarium
+git clone https://github.com/jenerseb/aiquarium.git .
+# Der Clone legt `aiquarium/` an — Repo-Root ist `aiquarium/aiquarium-app/`
+# (`.git` liegt darin). Pfade unten nutzen das:
+cd aiquarium/aiquarium-app
 cp .env.example .env   # OPENROUTER_API_KEY eintragen — nie committen
 node --version         # ≥ 22.5
-npm run check && npm test   # check grün, 79/84 (5 rot = Paket R, bekannt)
+npm run check && npm test   # check grün, 80/85 (5 rot = Paket R, bekannt)
 PORT=3077 node src/server.js   # Probe: curl http://127.0.0.1:3077/api/health → {"ok":true}
 ```
 
@@ -39,12 +48,14 @@ After=network.target
 
 [Service]
 User=seb
-WorkingDirectory=/home/seb/aiquarium-app
+WorkingDirectory=/home/seb/aiquarium/aiquarium-app
 ExecStart=/usr/bin/node src/server.js
 Restart=always
 RestartSec=5
-# Kein Hardening, das SQLite/WAL oder den Env-Zugriff bricht (ReadWritePaths ok):
-# ProtectSystem=strict + ReadWritePaths=/home/seb/.local/share/aiquarium
+# Hardening (DB im Home — deshalb KEIN ProtectHome=read-only):
+ProtectSystem=full
+NoNewPrivileges=true
+PrivateTmp=true
 
 [Install]
 WantedBy=multi-user.target
@@ -78,9 +89,9 @@ Danach: `caddy reload` (oder `systemctl reload caddy`), TLS kommt automatisch.
 ## 5. Release-Flow (jedes Mal gleich)
 
 ```bash
-cd /home/seb/aiquarium-app
+cd /home/seb/aiquarium/aiquarium-app
 git pull --ff-only
-npm run check && npm test   # bei Rot: Abbruch, kein Restart
+npm run check && npm test   # bei Rot: Abbruch, kein Restart (80/85 erwartet, 5 rot = Paket R)
 systemctl restart aiquarium   # Root — oder Hermes ruft Sebastian
 curl -s https://aiquarium.sebschuster.de/api/health   # {"ok":true}
 ```
