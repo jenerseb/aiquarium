@@ -843,15 +843,18 @@ class Engine {
 
       if (!res.ok) {
         this.staleSince = this.staleSince || Date.now();
+        const rawStr = typeof res.raw === 'string' ? res.raw : '';
         logEvent(this.db, tick, 'stale', {
           reason: res.reason, failures: res.failures,
-          roh: typeof res.raw === 'string' ? res.raw.slice(0, 300) : null,
+          roh: rawStr.slice(0, 2000) || null,
           ms: res.latencyMs ?? null, versuche: res.calls ?? null,
           finish: res.finish ?? null, usage: res.usage ?? null,
         }, false);
         const fallback = this.fallbackAction(s, whitelist);
         this.applyAction(s, fallback, null, tick, 'fallback', whitelist, null,
-          { ms: res.latencyMs ?? null, versuche: res.calls ?? null });
+          { ms: res.latencyMs ?? null, versuche: res.calls ?? null,
+            finish: res.finish ?? null, usage: res.usage ?? null,
+            roh: rawStr.slice(0, 2000) || null });
         console.error(`[stale] tick ${tick}: ${res.reason} [${(res.failures || []).join(',')}]`
           + ` ms=${res.latencyMs ?? '?'} versuche=${res.calls ?? '?'}`
           + ` finish=${res.finish ?? '?'} tok=${JSON.stringify(res.usage ?? {})}`
@@ -871,7 +874,9 @@ class Engine {
           .run(s.pilot.id);
       }
       this.applyAction(s, res.action, gedanke, tick, 'model', whitelist, zusatz,
-        { ms: res.latencyMs ?? null, versuche: res.calls ?? null });
+        { ms: res.latencyMs ?? null, versuche: res.calls ?? null,
+          finish: res.finish ?? null, usage: res.usage ?? null,
+          roh: typeof res.raw === 'string' ? res.raw.slice(0, 2000) : null });
       console.log(`[modell:${modellKurz()}] tick ${tick}: ${res.action} (${res.calls ?? '?'}V, ${Math.round(res.latencyMs ?? 0)}ms)`
         + ` „${gedanke || ''}"${zusatz ? ` ↳ ${zusatz}` : ''}`);
       if (offene.length) {

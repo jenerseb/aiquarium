@@ -1449,33 +1449,42 @@ function dbgText(e) {
   const z = `<span class="t">${e.tick}</span>`;
   const tempo = (typeof t.ms === 'number' && typeof t.versuche === 'number')
     ? ` · ${Math.round(t.ms)}ms/${t.versuche}V` : '';
+  // Tokenverbrauch: prompt + completion + reasoning (falls Provider sie meldet)
+  const u = t.usage || {};
+  const det = u.completion_tokens_details || t.completion_tokens_details || {};
+  const tokStr = (typeof u.prompt_tokens === 'number' || typeof u.completion_tokens === 'number')
+    ? ` · <span class="t">tok p${u.prompt_tokens ?? '?'}→c${u.completion_tokens ?? '?'}`
+      + (typeof det.reasoning_tokens === 'number' ? ` (reas ${det.reasoning_tokens})` : '')
+      + `</span>`
+    : '';
+  // Komplette Raw-Antwort, eingeklappt (Details/Summary, kein JS nötig)
+  const rohDetail = (typeof t.roh === 'string' && t.roh.length)
+    ? `<br><details><summary>raw (${t.roh.length} Zeichen)</summary><code>${esc(t.roh)}</code></details>`
+    : '';
   switch (e.type) {
     case 'decision':
       return `${z} → <b>${KURZ[t.action] || t.action}</b>`
         + (t.target ? ` @ ${t.target}` : '')
         + (t.dur ? ` · ${t.dur}s` : '')
-        + ` · ${t.source}${t.source === 'fallback' ? ' <span class="w">(Ersatz)</span>' : ''}${tempo}`
+        + ` · ${t.source}${t.source === 'fallback' ? ' <span class="w">(Ersatz)</span>' : ''}${tempo}${tokStr}`
         + ` · Auswahl ${t.auswahl}`
+        + (t.source === 'model' && t.finish ? ` · finish=${t.finish}` : '')
         + (t.source === 'model' ? ` [${(t.whitelist || []).join(', ')}]` : '')
         + (typeof t.hunger === 'number'
           ? ` · H${t.hunger} E${t.exhaustion} S${t.stress}` : '')
         + (t.thought ? `<br>„${t.thought}“` : '')
-        + (t.musing ? `<br>↳ ${t.musing}` : '');
+        + (t.musing ? `<br>↳ ${t.musing}` : '')
+        + (t.source === 'fallback' ? rohDetail : '');
     case 'action':
       return `${z} ✓ <b>${KURZ[t.action] || t.action}</b> fertig nach ${t.dur}s (begonnen ${e.tick - t.dur})`
         + (typeof t.stress_delta === 'number'
           ? ` · Stress ${t.stress_delta > 0 ? '+' : ''}${Math.round(t.stress_delta * 10) / 10}` : '');
     case 'stale': {
-      const comp = t.usage?.completion_tokens ?? t.completion_tokens;
-      const reas = t.usage?.completion_tokens_details?.reasoning_tokens
-        ?? t.completion_tokens_details?.reasoning_tokens;
-      const diag = [t.finish ? `finish=${t.finish}` : null,
-        typeof comp === 'number' ? `tok=${comp}` : null,
-        typeof reas === 'number' ? `reas=${reas}` : null].filter(Boolean).join(' ');
+      const diag = [t.finish ? `finish=${t.finish}` : null].filter(Boolean).join(' ');
       return `${z} <span class="w">Modell still</span>: ${t.reason || ''}`
-        + (t.failures ? ` [${t.failures.join(',')}]` : '') + tempo
+        + (t.failures ? ` [${t.failures.join(',')}]` : '') + tempo + tokStr
         + (diag ? ` <span class="t">${diag}</span>` : '')
-        + (t.roh ? `<br>↳ <code>${esc(t.roh)}</code>` : '');
+        + rohDetail;
     }
     case 'mind':
       return `${z} ~ Zustand: <b>${t.state}</b>`;
