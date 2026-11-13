@@ -10,7 +10,7 @@ Ausführliche Bewertung + Reihenfolge: [[01 Umsetzung#Gebaut (2026-11-14, 84 Tes
 - [x] **Dev-Linien Planet→Sonne + Planet→Erde** — gebaut 2026-11-14. Nur `?mode=dev`, Deckung < 3,2° färbt rot (Finsternis-Debug).
 - [x] **Kamera-Flip über den Polen (4b)** — gebaut 2026-11-14. Radiales Up im Planet-Modus, Charakter-Modus Welt-Y. Pole ohne Flip begehbar.
 
-## Welt-Layout
+## Welt-Layout .
 
 - [x] **Orte weg vom Nordpol, aufs obere Cluster** — gebaut 2026-11-14 (`CLUSTER` 35°N/20°O, 84 Tests grün). Idee: HUD „Gründe statt Prozent" gehört hierher.
 - [ ] **Map auf ganzen Planeten erweitern** — geplant → Paket J (Fibonacci-Sphere).
@@ -36,4 +36,4 @@ neu: feddback einer anderen ki:
 
  three js libs: größter Hebel. OrbitControls würde deinen handgerollten Kamera-Code (ziehen/zoomen, Pole-Flip-Bug aus den Nice-to-Haves!) massiv vereinfachen, GLTFLoader brauchst du sowieso für Figur-Modelle (Nager/Slime). Kein npm nötig, einfach zwei Dateien neben three.module.js legen
 
- andere libs etc für uns AUCH HILFREICH? ich will zwar wenig dependencies, aber auch nicht rad neu erfinden immer wieder!
+ andere libs etc für uns AUCH HILFREICH? ich will zwar wenig dependencies, aber auch nicht rad neu erfinden immer wieder! ...
