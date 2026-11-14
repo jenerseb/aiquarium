@@ -184,6 +184,26 @@ OFFEN (WE 2/3): epitaph NULL · "Seit Besuch" fehlt · Sprungmarken fehlen · GL
 FORSCHER: F Fernziel · G Fragen · H Welt-Beliefs (brauchen A–E).
 RAND: Dev-Grid jeden 2. Kreis · Freeze ab 60 s · kein Auth (Dev nur 127.0.0.1) · Key-Test nur Unit · discovery Start = Kapsel (gewollt).
 
+## TODO / Known Issues — Prompt-Caching (Stand 2026-11-14)
+
+Externer Vorschlag war: Prompt in **statischen** (byte-identisch, cachebar) und
+**dynamischen** Block trennen — Wesen + Aktions-Lexikon oben als System-Prompt,
+Situation + Whitelist unten als User-Prompt, Whitelist zusätzlich als
+`json_schema`-Enum. **Bewusst NICHT umgesetzt**, Gründe:
+
+- `buildPrompt` mischt heute alles in einem User-Prompt (`zeitZeile/vorhaben/weg`
+  stehen sogar VOR `Dein Wesen`). Umbau lohnt erst mit gemessenem Token-Preis.
+- Dynamisches `enum` im Schema bricht das Caching des Schema-Teils ohnehin —
+  nur der System-Prefix bliebe stabil. Erwartung also: max. Prefix-Cache.
+- `json_schema` strict tragen nicht alle Free-Modelle — Pflicht würde dev
+  (Nemotron free) aussperren. Erst als Versuch-mit-Fallback, nie als Pflicht.
+- `response_format: json_object` + eigene `validateDecision` gegen Whitelist
+  bleibt bis dahin die tragende Wand.
+
+Wenn angehen: 1) System/User splitten, 2) Aktions-Lexikon oben ergänzen,
+3) Zahlen-Helper für dynamischen Text, 4) Schema-Versuch mit Fallback messen.
+Messlatte danach: 50er-Lauf + Token-Zählung aus `usage` (steht im Debug-Log).
+
 ## Messlatte (50 Entscheidungen, echter Schluessel)
 
 Skript `tools/messung-runde3.js`: Objekt-Eroeffnung < 30 % · Beduerfnis < 10 % · 3-Satz < 40 % · Top-3 < 25 % · ohne Text 0 · Vorhaben gezaehlt · nachdenken 1–3/Tag · keine Aktion > 40 % · Zielbezug > 30 %. Nach jedem Paket gleichen Lauf wiederholen.

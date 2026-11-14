@@ -1,0 +1,10 @@
+{
+  "_kommentar": "Modell-Routing (kein Secret — der Key steht nur in .env). Prio: AIQUARIUM_DEV_MODEL > AIQUARIUM_MODEL > dev/primary aus dieser Datei.",
+  "primary": { "model": "z-ai/glm-5.3-flash", "reasoningExclude": false },
+  "fallback": { "model": "openai/gpt-oss-120b", "reasoningExclude": false },
+  "dev": { "model": "nvidia/nemotron-3.5-super-vl:free", "reasoningExclude": true },
+  "temperature": 0.85,
+  "retryTemperature": 0.55,
+  "maxTokens": 2000,
+  "maxTokensBelief": 800
+}

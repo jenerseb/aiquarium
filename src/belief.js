@@ -3,7 +3,7 @@
 // (Aktion, Anzahl, Richtung des Nerven-Deltas), den Satz schreibt das Modell.
 // Fällt es aus, greift ein knapper Ersatzsatz — aber erst nach mehreren Versuchen.
 const { wordCount, hasCJK, englishHits } = require('./checks');
-const { MODEL } = require('./config');
+const { MODEL, aktiverSlot } = require('./config');
 
 const FALLBACK = {
   sit_shade: { pos: 'Im Schatten zu sitzen beruhigt mich', neg: 'Sitzen im Schatten, wenn ich wach bin, macht mich kribbelig' },
@@ -54,6 +54,8 @@ function fallbackText(action, positive) {
 async function phraseBelief(opts) {
   const { action, runs, avgDelta, recentThoughts = [], apiKey, baseUrl, model, timeline, timeoutMs } = opts;
   if (!apiKey) return { ok: false, reason: 'no_key' };
+  // Slot: explizites Modell gewinnt, sonst der jeweils aktive (dev-Prio).
+  const slot = model ? { model, reasoningExclude: MODEL.reasoningExclude } : aktiverSlot();
 
   const besser = avgDelta > 0;
   const prompt = `Du bist ein rundliches Wesen im Raumanzug auf einem kleinen Mond. Du sprichst nie in Zahlen.
@@ -74,10 +76,10 @@ Antworte STRIKT in diesem JSON, nichts davor, nichts danach:
       method: 'POST',
       headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        model: model || MODEL.name,
+        model: slot.model,
         temperature: 0.8,
         max_tokens: MODEL.maxTokensBelief,
-        ...(MODEL.reasoningExclude ? { reasoning: { exclude: true } } : {}),
+        ...(slot.reasoningExclude ? { reasoning: { exclude: true } } : {}),
         response_format: { type: 'json_object' },
         messages: [{ role: 'user', content: prompt }],
       }),

@@ -840,7 +840,7 @@ class Engine {
 
       const res = await brain.decide({
         prompt, whitelist, recentThoughts, apiKey: this.apiKey,
-        baseUrl: process.env.OPENROUTER_BASE_URL, model: process.env.AIQUARIUM_MODEL,
+        baseUrl: process.env.OPENROUTER_BASE_URL,
         musing: !!musing,
         // Paket B-Rest: Ortsnamen für die Musterbremse (Objekt-Eröffnung)
         orte: s.entities.map((e) => e.name),
@@ -987,7 +987,6 @@ class Engine {
         recentThoughts: q.lastThoughts(this.db, 5, s.pilot.id),
         apiKey: this.apiKey,
         baseUrl: process.env.OPENROUTER_BASE_URL,
-        model: process.env.AIQUARIUM_MODEL,
       });
 
       let text = null;

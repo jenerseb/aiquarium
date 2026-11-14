@@ -29,6 +29,7 @@ Bedienung (Stoppen, Debug-Log, Dev-Werkzeuge, Problemlösung): siehe [BEDIENUNG.
 | Datei | Aufgabe |
 |---|---|
 | `src/config.js` | alle Zahlen an einer Stelle: Verbrauch, Aktionsdauern, Schwellen, Orte, Tag/Nacht, Finsternis |
+| `model.json` | Modell-Routing (eingecheckt, kein Secret): `primary`/`fallback`/`dev` je mit `model` + `reasoningExclude`, dazu Temperaturen/Tokens — Env (`AIQUARIUM_[DEV_]MODEL`, `AIQUARIUM_FALLBACK_MODEL`, `AIQUARIUM_DEV=0`) überstimmt |
 | `src/db.js` | Schema, Seed, Abfragen, Pruning |
 | `src/engine.js` | Tick, Werte, Bewegung, Tod, Neustart, Stupor/Wahn, Catch-up, Vorhaben, Tag/Nacht |
 | `src/prompt.js` | Whitelist/AVAIL, Körpersprache, Forscher-Baukasten (spec'd), Tag/Nacht-Zeilen |

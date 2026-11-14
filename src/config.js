@@ -470,17 +470,77 @@ const RESPAWN_DELAY_S = 600;
 const START = { body: 100, psyche: 0 };
 
 // --- Modell ----------------------------------------------------------------
-// Default: Free-Tier-Modell. Gültiges Modell kommt bevorzugt aus der
-// Umgebung (AIQUARIUM_MODEL in der .env überschreibt diesen Default).
+// Routing: primary -> fallback, dev hat Prio (sicherer Free-Default).
+// Quelle: model.json (kein Secret, eingecheckt). Der Key steht nur in .env.
+// Prio aktiv: AIQUARIUM_DEV_MODEL > dev (aus Datei,
+//   solange AIQUARIUM_DEV nicht '0'/'false'/'aus') > AIQUARIUM_MODEL > primary.
+// Default ist dev — Alpha/Beta laufen damit kostenlos unbegrenzt.
+// Messlauf mit GLM: AIQUARIUM_DEV=0 setzen (dann greift AIQUARIUM_MODEL/primary).
+// Fallback: AIQUARIUM_FALLBACK_MODEL > fallback (aus Datei).
+// reasoningExclude steht PRO SLOT (nemotron:free braucht true, GLM/gpt-oss
+// brauchen Reasoning = false). Temperaturen/Tokens stehen hier zentral in
+// model.json (eingecheckt, kein Secret), nur der Key liegt in .env.
+const MODEL_DATEI = (() => {
+  try {
+    const p = require('node:path').join(__dirname, '..', 'model.json');
+    return JSON.parse(require('node:fs').readFileSync(p, 'utf8'));
+  } catch { return {}; } // fehlt/kaputt -> hart kodierte Defaults greifen
+})();
+const SLOT_DEFAULTS = {
+  primary: { model: 'z-ai/glm-5.3-flash', reasoningExclude: false },
+  fallback: { model: 'openai/gpt-oss-120b', reasoningExclude: false },
+  dev: { model: 'nvidia/nemotron-3.5-super-vl:free', reasoningExclude: true },
+};
+function slotLesen(name) {
+  const d = SLOT_DEFAULTS[name];
+  const f = (MODEL_DATEI && MODEL_DATEI[name]) || {};
+  const model = (typeof f === 'string' ? f : f.model) || d.model;
+  const reasoningExclude = (typeof f === 'object' && f.reasoningExclude !== undefined)
+    ? !!f.reasoningExclude : d.reasoningExclude;
+  return { model, reasoningExclude };
+}
+const SLOT_PRIMARY = slotLesen('primary');
+const SLOT_FALLBACK = slotLesen('fallback');
+const SLOT_DEV = slotLesen('dev');
+// Hinweis: Env-Overrides für die Slots bewusst NICHT hier beim Import in die
+// SLOT_-Objekte schreiben — aktiverSlot()/fallbackSlot() lesen sie zur Laufzeit,
+// sonst würden Tests mit wechselnden Env-Werten den falschen Slot sehen.
+function devPrioAn() {
+  const v = String(process.env.AIQUARIUM_DEV ?? '').toLowerCase();
+  return !(v === '0' || v === 'false' || v === 'nein' || v === 'aus');
+}
+// Aktiver Slot: explizite Dev-Overrides zuerst (dev hat Prio), dann Env,
+// dann primary. Env-Werte werden zur Laufzeit gelesen (nicht nur beim Import),
+// damit Tests und Messläufe ohne Neustart des Moduls umschalten können.
+function aktiverSlot() {
+  if (process.env.AIQUARIUM_DEV_MODEL) {
+    return { model: process.env.AIQUARIUM_DEV_MODEL, reasoningExclude: SLOT_DEV.reasoningExclude, herkunft: 'env-dev' };
+  }
+  if (devPrioAn() && SLOT_DEV.model) return { ...SLOT_DEV, herkunft: 'dev' };
+  if (process.env.AIQUARIUM_MODEL) {
+    return { model: process.env.AIQUARIUM_MODEL, reasoningExclude: SLOT_PRIMARY.reasoningExclude, herkunft: 'env' };
+  }
+  return { ...SLOT_PRIMARY, herkunft: 'primary' };
+}
+function fallbackSlot() {
+  if (process.env.AIQUARIUM_FALLBACK_MODEL) {
+    return { model: process.env.AIQUARIUM_FALLBACK_MODEL, reasoningExclude: SLOT_FALLBACK.reasoningExclude, herkunft: 'env-fallback' };
+  }
+  return { ...SLOT_FALLBACK, herkunft: 'fallback' };
+}
+const AKTIV = aktiverSlot();
 const MODEL = {
   baseUrl: process.env.OPENROUTER_BASE_URL || 'https://openrouter.ai/api/v1/chat/completions',
-  name: process.env.AIQUARIUM_MODEL || 'nvidia/nemotron-3.5-super-vl:free',
+  name: AKTIV.model, // Rückwärts-kompatibel: das jeweils aktive Modell
+  primary: SLOT_PRIMARY.model,
+  fallback: SLOT_FALLBACK.model,
+  dev: SLOT_DEV.model,
+  reasoningExclude: AKTIV.reasoningExclude, // dito: Flag des aktiven Slots
   timeoutMs: 30000,
-  temperature: 0.85,
-  retryTemperature: 0.55,
-  maxTokens: 2000,        // Nemotron verbrät ~800 im Reasoning, bevor Inhalt entsteht (finish=length, roh="")
-  maxTokensBelief: 800,   // Glaubenssatz: dito, kleinerer Prompt
-  reasoningExclude: true, // Reasoning aus content halten (OpenRouter: reasoning.exclude)
+  temperature: Number(MODEL_DATEI.temperature ?? 0.85),
+  retryTemperature: Number(MODEL_DATEI.retryTemperature ?? 0.55),
+  maxTokens: Number(MODEL_DATEI.maxTokens ?? 2000),        // Nemotron verbrät ~800 im Reasoning, bevor Inhalt entsteht (finish=length, roh="")
+  maxTokensBelief: Number(MODEL_DATEI.maxTokensBelief ?? 800),   // Glaubenssatz: dito, kleinerer Prompt
   maxWords: 20,          // Gedanken: höchstens 20 Wörter, 1–2 Sätze
   maxWordsMusing: 10,
   maxBeliefs: 3,
@@ -586,6 +646,6 @@ module.exports = {
   sichtStufe, richtungWort, sonnenVektor, lichtAn, lichtPhase, tagesNummer,
   erdeSichtbarVon, TAG, ERDE, ERDE_HORIZONT, FINSTERNIS, finsternisStufe,
   ankerPos, VERSATZ, STUFE_RANG, entityLabel, haltAbstand, wuerfelImpuls, IMPULS_WAHL,
-  RESPAWN_DELAY_S, START, MODEL, modellKurz, WORLD_RADIUS, PLANET_R, ENTITIES,
+  RESPAWN_DELAY_S, START, MODEL, aktiverSlot, fallbackSlot, devPrioAn, modellKurz, WORLD_RADIUS, PLANET_R, ENTITIES,
   CLUSTER, CLUSTER_R, clusterPos, SPAWN_ABSTAND_M, spawnPos, lichtFaktor,
 };

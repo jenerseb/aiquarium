@@ -8,6 +8,21 @@ Kurz und praktisch. Das Repo liegt in `aiquarium-app/`, die Datenbank **außerha
 cd /workspaces/seb-dev/aiquarium/aiquarium-app
 ```
 
+## Modell-Routing (model.json, kein Secret)
+
+Default ist der **dev**-Slot (Free-Modell, unbegrenzt): `nvidia/nemotron-3.5-super-vl:free`.
+Versuche pro Entscheidung: 1) aktiver Slot normal (`temperature 0.85`), 2) gleicher Slot
+kühler (`retryTemperature 0.55`), 3) **Fallback**-Slot kühler (`openai/gpt-oss-120b`) —
+danach deterministische Ersatzaktion + `stale`. `primary` (`z-ai/glm-5.3-flash`,
+Reasoning an) greift nur bei `AIQUARIUM_DEV=0`, z. B. für den 50er-Messlauf:
+
+```
+AIQUARIUM_DEV=0 node src/server.js
+```
+
+Einzelne Slots überstimmen: `AIQUARIUM_MODEL`, `AIQUARIUM_FALLBACK_MODEL`, `AIQUARIUM_DEV_MODEL`.
+`reasoningExclude` steht pro Slot (nemotron:free `true`, GLM/gpt-oss `false`).
+
 (Nach einem Vault-Umzug Windows → Linux/Docker bricht nichts an Node — häufigste
 Ursache ist nur das falsche Verzeichnis: `node src/server.js` im falschen Ordner
 meldet `Cannot find module '.../src/server.js'`.)

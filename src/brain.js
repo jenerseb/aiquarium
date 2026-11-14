@@ -1,11 +1,14 @@
 'use strict';
 // Der einzige Ort, an dem das Modell aufgerufen wird. Timeout, Retry, Validierung.
+// Routing: 1) aktiver Slot (dev-Prio) normal, 2) gleicher Slot kühler (retryTemperature),
+// 3) Fallback-Slot kühler — erst dann deterministisch + stale.
 const { validateDecision } = require('./checks');
-const { MODEL } = require('./config');
+const { MODEL, aktiverSlot, fallbackSlot } = require('./config');
 
 const PRICE = { in: 0, out: 0 }; // Free-Tier-Default (Nemotron 3.5 Super VL), Stand 2026-11-13
 
 async function callModel({ prompt, apiKey, baseUrl = MODEL.baseUrl, model = MODEL.name,
+  reasoningExclude = MODEL.reasoningExclude,
   timeoutMs = MODEL.timeoutMs, temperature = MODEL.temperature }) {
   const started = Date.now();
   const res = await fetch(baseUrl, {
@@ -15,7 +18,7 @@ async function callModel({ prompt, apiKey, baseUrl = MODEL.baseUrl, model = MODE
       model,
       temperature,
       max_tokens: MODEL.maxTokens,
-      ...(MODEL.reasoningExclude ? { reasoning: { exclude: true } } : {}),
+      ...(reasoningExclude ? { reasoning: { exclude: true } } : {}),
       response_format: { type: 'json_object' },
       messages: [{ role: 'user', content: prompt }],
     }),
@@ -40,9 +43,12 @@ async function decide(opts) {
     return { ok: false, action: null, thought: '', musing: null, stale: true, reason: 'no_key', failures: ['no_key'] };
   }
 
+  const aktiv = opts.slot || aktiverSlot();
+  const fallback = opts.fallbackSlot || fallbackSlot();
   const attempts = [
-    { temperature: opts.temperature ?? MODEL.temperature, label: 'first' },
-    { temperature: MODEL.retryTemperature, label: 'retry' },
+    { slot: aktiv, temperature: opts.temperature ?? MODEL.temperature, label: 'first' },
+    { slot: aktiv, temperature: MODEL.retryTemperature, label: 'retry' },
+    { slot: fallback, temperature: MODEL.retryTemperature, label: 'fallback' },
   ];
   let last = null;
   const total = { latencyMs: 0, cost: 0, calls: 0 };
@@ -51,14 +57,17 @@ async function decide(opts) {
     let raw;
     let info = {};
     try {
-      const r = await callModel({ ...opts, temperature: a.temperature });
+      const r = await callModel({
+        ...opts, model: a.slot.model, reasoningExclude: a.slot.reasoningExclude,
+        temperature: a.temperature,
+      });
       total.latencyMs += r.latencyMs;
       total.cost += r.cost;
       total.calls += 1;
       raw = r.content;
-      info = { usage: r.usage, finish: r.finish };
+      info = { usage: r.usage, finish: r.finish, modell: a.slot.model, versuch: a.label };
     } catch (err) {
-      last = { ok: false, stale: true, reason: `request: ${err.message}`, failures: ['request'] };
+      last = { ok: false, stale: true, reason: `request: ${err.message}`, failures: ['request'], modell: a.slot.model, versuch: a.label };
       continue;
     }
     const v = validateDecision(raw, {
@@ -72,7 +81,7 @@ async function decide(opts) {
       orte,
       vorhabenAktiv,
     });
-    if (v.ok) return { ...v, stale: false, raw, ...total };
+    if (v.ok) return { ...v, stale: false, raw, ...total, ...info };
     // Leere Antwort eigens benennen: „Modell schweigt" ist etwas anderes als Kauderwelsch
     const leer = !raw || !raw.trim();
     last = { ...v, stale: true, reason: `checks: ${leer ? 'json_leer' : v.failures.join(',')}`, raw, ...info };

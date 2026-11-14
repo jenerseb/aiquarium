@@ -487,10 +487,11 @@ test('brain: gültige Antwort wird übernommen und landet im Feed', async () => 
   m.srv.close();
 });
 
-test('brain: ungültige Antwort -> Retry, dann stale mit Ersatzaktion', async () => {
+test('brain: ungültige Antwort -> Retry + Fallback, dann stale mit Ersatzaktion', async () => {
   const m = await mockServer([
     JSON.stringify({ action: 'fliegen', thought: 'Ich fliege zum Mond.', musing: 'Fort von hier.' }),
     JSON.stringify({ action: 'fliegen', thought: 'Ich fliege nochmal.', musing: 'Nur weg.' }),
+    JSON.stringify({ action: 'fliegen', thought: 'Ich fliege weiter.', musing: 'Immer weg.' }),
   ]);
   process.env.OPENROUTER_BASE_URL = `http://127.0.0.1:${m.port}/v1`;
   const db = frisch();
@@ -501,8 +502,10 @@ test('brain: ungültige Antwort -> Retry, dann stale mit Ersatzaktion', async ()
 
   const res = await e.decide();
   assert.equal(res.ok, false);
-  assert.equal(m.calls.length, 2);
+  assert.equal(m.calls.length, 3);
   assert.equal(res.fallback, 'eat');
+  // 3. Versuch lief auf dem Fallback-Modell
+  assert.equal(m.calls[2].model, 'openai/gpt-oss-120b');
   m.srv.closeAllConnections?.();
   m.srv.close();
 });
@@ -808,7 +811,7 @@ test('brain: kaputte Antwort landet als Rohtext im Ergebnis', async () => {
     assert.equal(res.ok, false);
     assert.ok(res.reason.includes('json'), `unerwarteter Grund: ${res.reason}`);
     assert.ok(res.raw.includes('unfertig'), 'Rohtext fehlt im Ergebnis');
-    assert.equal(res.calls, 2, 'Retry nicht gezählt');
+    assert.equal(res.calls, 3, 'Retry + Fallback nicht gezählt');
   } finally {
     global.fetch = alt;
   }
@@ -1055,12 +1058,68 @@ test('db: Pruning löscht alte Rohticks und überzählige Gedanken', () => {
     'Gedanken nicht auf 500 gekappt');
 });
 
-test('config: Modell-Default ist Nemotron Free (ohne Env-Override)', () => {
+// Routing-Zusatz zum Fallback-Test: 1./2. Versuch = aktiver (dev) Slot,
+// 3. Versuch = Fallback-Modell. Diese Asserts greifen nur, wenn kein Env-Override gesetzt ist.
+test('brain: Routing nutzt dev-Slot zuerst, Fallback zuletzt', async () => {
+  const m = await mockServer([
+    JSON.stringify({ action: 'fliegen', thought: 'Ich fliege zum Mond.', musing: 'Fort von hier.' }),
+    JSON.stringify({ action: 'fliegen', thought: 'Ich fliege nochmal.', musing: 'Nur weg.' }),
+    JSON.stringify({ action: 'fliegen', thought: 'Ich fliege weiter.', musing: 'Immer weg.' }),
+  ]);
   delete process.env.AIQUARIUM_MODEL;
+  delete process.env.AIQUARIUM_DEV_MODEL;
+  process.env.OPENROUTER_BASE_URL = `http://127.0.0.1:${m.port}/v1`;
+  const db = frisch();
+  const e = new Engine(db, { apiKey: 'test' });
+  db.prepare('UPDATE pilots SET current_action=?, body=?, hunger=? WHERE id=?')
+    .run('idle', 30, 60, e.state().pilot.id);
+
+  const res = await e.decide();
+  assert.equal(res.ok, false);
+  assert.equal(m.calls.length, 3);
+  assert.equal(m.calls[0].model, 'nvidia/nemotron-3.5-super-vl:free');
+  // dev-Slot (nemotron:free) schickt reasoning.exclude, Fallback (gpt-oss) nicht
+  assert.ok(m.calls[0].reasoning && m.calls[0].reasoning.exclude === true);
+  assert.ok(!m.calls[2].reasoning);
+  delete process.env.OPENROUTER_BASE_URL;
+  m.srv.closeAllConnections?.();
+  m.srv.close();
+});
+
+test('config: Modell-Default ist dev-Slot (ohne Env-Override)', () => {
+  delete process.env.AIQUARIUM_MODEL;
+  delete process.env.AIQUARIUM_DEV_MODEL;
+  delete process.env.AIQUARIUM_DEV;
   delete require.cache[require.resolve('../src/config')];
   const cfg = require('../src/config');
   assert.equal(cfg.MODEL.name, 'nvidia/nemotron-3.5-super-vl:free');
+  assert.equal(cfg.MODEL.fallback, 'openai/gpt-oss-120b');
+  assert.equal(cfg.MODEL.primary, 'z-ai/glm-5.3-flash');
   assert.equal(cfg.modellKurz(), 'nemotron');
+  assert.equal(cfg.aktiverSlot().herkunft, 'dev');
+  assert.equal(cfg.fallbackSlot().herkunft, 'fallback');
+});
+
+test('config: AIQUARIUM_DEV=0 schaltet primary frei (Messlauf-Modus)', () => {
+  process.env.AIQUARIUM_DEV = '0';
+  delete process.env.AIQUARIUM_MODEL;
+  delete require.cache[require.resolve('../src/config')];
+  const cfg = require('../src/config');
+  assert.equal(cfg.MODEL.name, 'z-ai/glm-5.3-flash');
+  assert.equal(cfg.aktiverSlot().herkunft, 'primary');
+  delete process.env.AIQUARIUM_DEV;
+  delete require.cache[require.resolve('../src/config')];
+});
+
+test('config: AIQUARIUM_MODEL ohne Dev-Prio greift (AIQUARIUM_DEV=0)', () => {
+  process.env.AIQUARIUM_DEV = '0';
+  process.env.AIQUARIUM_MODEL = 'x/y-testmodell';
+  const cfg = require('../src/config');
+  assert.equal(cfg.aktiverSlot().model, 'x/y-testmodell');
+  assert.equal(cfg.aktiverSlot().herkunft, 'env');
+  delete process.env.AIQUARIUM_DEV;
+  delete process.env.AIQUARIUM_MODEL;
+  delete require.cache[require.resolve('../src/config')];
 });
 
 test('config: modellKurz schneidet Anbieter und Variante ab', () => {
