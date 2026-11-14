@@ -531,23 +531,24 @@ function ankerPos(e) {
   return { pos_x: n.x * WORLD_RADIUS, pos_y: n.y * WORLD_RADIUS, pos_z: n.z * WORLD_RADIUS };
 }
 
-// Spawn: 10 m östlich der Kapsel-Logikposition (Bogenlänge), nicht exakt drauf —
-// sonst klebt die Figur im Kapsel-Anker (Versatz 3,4/3,0 ≈ 4,5 m + Nahkreis).
-// Muss nach clusterPos/tangentialRahmen/norm3 stehen.
-const SPAWN_ABSTAND_M = 10;
+// Spawn: neben dem SICHTBAREN Kapsel-Anker (nicht der Logikposition), 15 m
+// tangential raus — sonst steht die Figur im Glas (Anker-Versatz 4,5 m + Mesh-Radius).
+// Muss nach clusterPos/tangentialRahmen/norm3/ankerPos stehen.
+const SPAWN_ABSTAND_M = 15;
 function spawnPos() {
-  const mitte = clusterPos(0, 0);
-  const { ost } = tangentialRahmen(mitte);
+  const anker = ankerPos({ type: 'capsule', pos_x: clusterPos(0, 0).x, pos_y: clusterPos(0, 0).y, pos_z: clusterPos(0, 0).z });
+  const P = { x: anker.pos_x, y: anker.pos_y, z: anker.pos_z };
+  const { ost } = tangentialRahmen(P);
   const winkel = SPAWN_ABSTAND_M / WORLD_RADIUS;   // Bogenlänge → Winkel
   const cos = Math.cos(winkel), sin = Math.sin(winkel);
-  const n = norm3(mitte);
-  // Rodrigues-Rotation von mitte um Achse (n × ost) — bleibt exakt auf der Kugel
+  const n = norm3(P);
+  // Rodrigues-Rotation von P um Achse (n × ost) — bleibt exakt auf der Kugel
   const ax = n.y * ost.z - n.z * ost.y;
   const ay = n.z * ost.x - n.x * ost.z;
   const az = n.x * ost.y - n.y * ost.x;
-  const px = mitte.x * cos + (ay * mitte.z - az * mitte.y) * sin;
-  const py = mitte.y * cos + (az * mitte.x - ax * mitte.z) * sin;
-  const pz = mitte.z * cos + (ax * mitte.y - ay * mitte.x) * sin;
+  const px = P.x * cos + (ay * P.z - az * P.y) * sin;
+  const py = P.y * cos + (az * P.x - ax * P.z) * sin;
+  const pz = P.z * cos + (ax * P.y - ay * P.x) * sin;
   return { pos_x: px, pos_y: py, pos_z: pz };
 }
 

@@ -867,17 +867,24 @@ class Engine {
       // das 14-Wörter-Limit, obwohl beide Teile einzeln geprüft sind.
       const gedanke = res.thought;
       const zusatz = res.musing || null;
+      // Frisch gespawnt: erste Entscheidung raus aus dem Bauwerk — sonst läuft er
+      // vom 15-m-Spawn sofort zum Kapsel-Anker zurück (eat/check_stock zielen dorthin).
+      let aktion = res.action;
+      if ((s.world.world_tick - (s.pilot.created_tick || 0)) <= 2 && whitelist.includes('streifen')
+        && (aktion === 'eat' || aktion === 'check_stock' || aktion === 'sit_shade')) {
+        aktion = 'streifen';
+      }
       if (gedanke) {
         this.db.prepare('INSERT INTO thoughts (pilot_id, tick, text) VALUES (?,?,?)')
           .run(s.pilot.id, tick, gedanke);
         this.db.prepare('UPDATE pilots SET psyche = MIN(100, psyche + 0.5) WHERE id = ? AND psyche < 0')
           .run(s.pilot.id);
       }
-      this.applyAction(s, res.action, gedanke, tick, 'model', whitelist, zusatz,
+      this.applyAction(s, aktion, gedanke, tick, 'model', whitelist, zusatz,
         { ms: res.latencyMs ?? null, versuche: res.calls ?? null,
           finish: res.finish ?? null, usage: res.usage ?? null,
           roh: typeof res.raw === 'string' ? res.raw.slice(0, 2000) : null });
-      console.log(`[modell:${modellKurz()}] tick ${tick}: ${res.action} (${res.calls ?? '?'}V, ${Math.round(res.latencyMs ?? 0)}ms)`
+      console.log(`[modell:${modellKurz()}] tick ${tick}: ${aktion} (${res.calls ?? '?'}V, ${Math.round(res.latencyMs ?? 0)}ms)`
         + ` „${gedanke || ''}"${zusatz ? ` ↳ ${zusatz}` : ''}`);
       if (offene.length) {
         this.db.prepare('UPDATE world_entities SET unfinished_thought=NULL WHERE unfinished_thought IS NOT NULL')
