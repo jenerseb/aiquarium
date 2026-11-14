@@ -778,6 +778,7 @@ function namensLabel(text) {
   }));
   sp.scale.set(w / h * 3.4, 3.4, 1);
   sp.renderOrder = 30;
+  sp.userData.base = sp.scale.clone();
   return sp;
 }
 const namensSchild = namensLabel('…');
@@ -1343,9 +1344,8 @@ function zeichneHud(s) {
   // Namensschild über der Figur: Text nur bei Wechsel neu bauen (Texture kostet)
   if (figur.userData.schild && figur.userData.schildText !== p.name) {
     const alt = figur.userData.schild;
-    const neu = label(p.name);
+    const neu = namensLabel(p.name);
     neu.position.copy(alt.position);
-    neu.userData.base = alt.userData.base;
     figur.remove(alt);
     alt.material.map?.dispose();
     alt.material.dispose();
@@ -1997,7 +1997,7 @@ function tick() {
   }
 
   // Namensschild der Figur: gleiche Entfernungs-Skalierung wie Ortschilder
-  if (figur.userData.schild?.visible) {
+  if (figur.userData.schild?.visible && figur.userData.schild.userData.base) {
     const d = camera.position.distanceTo(figur.position);
     const f = Math.min(2.2, Math.max(0.28, d / 42));
     figur.userData.schild.scale.set(
