@@ -1331,13 +1331,18 @@ test('config: Cluster hängt an der oberen Hemisphäre, fernab beider Pole', () 
   }
   const kapsel = clusterPos(0, 0);
   assert.ok(Math.hypot(kapsel.x, kapsel.y, kapsel.z) - 120 < 0.01, 'Kapsel nicht auf der Kugel');
-  // Spawn = Kapsel (kein Nordpol-Spawn mehr)
+  // Spawn = 15 m neben dem SICHTBAREN Kapsel-Anker (nicht im Glas)
   const { Engine } = require('../src/engine');
+  const { ankerPos: ankerPosTest, spawnPos: spawnPosTest } = require('../src/config');
   const db = frisch();
   const eng = new Engine(db, { apiKey: 'test' });
   const s = eng.state();
-  const d = dist3(s.pilot, { pos_x: kapsel.x, pos_y: kapsel.y, pos_z: kapsel.z });
-  assert.ok(d < 1, `Spawn nicht an der Kapsel: ${d} m daneben`);
+  const anker = ankerPosTest({ type: 'capsule', pos_x: kapsel.x, pos_y: kapsel.y, pos_z: kapsel.z });
+  const soll = spawnPosTest();
+  const dAnker = dist3(s.pilot, { pos_x: anker.pos_x, pos_y: anker.pos_y, pos_z: anker.pos_z });
+  const dSoll = dist3(s.pilot, { pos_x: soll.pos_x, pos_y: soll.pos_y, pos_z: soll.pos_z });
+  assert.ok(dSoll < 1, `Spawn nicht am 15-m-Punkt: ${dSoll} m daneben`);
+  assert.ok(dAnker > 10 && dAnker < 25, `Spawn klebt im Anker: ${dAnker} m`);
 });
 
 

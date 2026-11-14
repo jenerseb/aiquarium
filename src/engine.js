@@ -6,7 +6,7 @@ const {
   CATCHUP_WRITE_EVERY, FREEZE_S, RESPAWN_DELAY_S, MODEL, SICHT, sichtStufe, ankerPos,
   STUFE_RANG, entityLabel, haltAbstand, dist3, vec3, norm3, wuerfelImpuls, WORLD_RADIUS, modellKurz,
   TAG, sonnenVektor, lichtAn, lichtPhase, tagesNummer, erdeSichtbarVon, clusterPos, spawnPos,
-  ERDE, FINSTERNIS, finsternisStufe,
+  ERDE, FINSTERNIS, finsternisStufe, lichtFaktor,
 } = require('./config');
 const { q, logEvent } = require('./db');
 const { uniqueName, randomHue, nextHue } = require('./names');
@@ -154,8 +154,14 @@ function loadState(db) {
       ? [pilot.heading_x, pilot.heading_y, pilot.heading_z] : null;
   }
   const entities = q.entities(db);
-  const recentActions = db.prepare("SELECT payload_json FROM events WHERE type='action' ORDER BY id DESC LIMIT 10")
-    .all()
+  // Nur Aktionen SEIT dem Respawn zählen — sonst erbt ein Neugespawnter die
+  // Sperren/Monotonie seines toten Vorgängers. Tick-Filter nur, wenn der Pilot
+  // wirklich nach Tick 0 gespawnt wurde (frische DB: kein Abschneiden).
+  const seitTick = pilot ? (pilot.created_tick || 0) : 0;
+  const recentRows = seitTick > 0
+    ? db.prepare("SELECT payload_json FROM events WHERE type='action' AND tick >= ? ORDER BY id DESC LIMIT 10").all(seitTick)
+    : db.prepare("SELECT payload_json FROM events WHERE type='action' ORDER BY id DESC LIMIT 10").all();
+  const recentActions = recentRows
     .map((r) => { try { return JSON.parse(r.payload_json).action; } catch { return null; } })
     .filter(Boolean)
     .reverse();
@@ -191,9 +197,10 @@ function step(state, dt = 1, opts = {}) {
   world.world_tick = tick;
 
   // --- Tag/Nacht: Sonne wandert, eine Umdrehung pro TAG.dauerS -----------------
-  // Der Winkel überlebt Neustarts (world_state.sun_angle) und läuft im
-  // Catch-up normal mit (kein Freeze-Sonderfall — wie hunger).
-  world.sun_angle = ((world.sun_angle ?? 0) + (dt * 2 * Math.PI) / TAG.dauerS) % (Math.PI * 2);
+  // Der Winkel wächst unbegrenzt (kein Modulo): tagesNummer() zählt daraus Tag 1, 2, …
+  // Der Vektor bleibt periodisch (sin/cos), nur der Zähler läuft weiter.
+  // Überlebt Neustarts (world_state.sun_angle), Catch-up wie hunger.
+  world.sun_angle = (world.sun_angle ?? 0) + (dt * 2 * Math.PI) / TAG.dauerS;
   state.sonne = sonnenVektor(world.sun_angle);
   // Finsternis: global, folgt der Sonne (kein Pilot nötig — Himmel, nicht Ort).
   state.finsternis = finsternisStufe(state.sonne).stufe;
@@ -320,7 +327,7 @@ function step(state, dt = 1, opts = {}) {
   const jetztNah = new Set();
   for (const roh of entities) {
     const e = { ...roh, ...ankerPos(roh) };
-    const stufe = sichtStufe(pilot, e);
+    const stufe = sichtStufe(pilot, e, lichtFaktor(state.phase, state.finsternis));
     const rang = STUFE_RANG[stufe] ?? 0;
     if (rang > (roh.sicht || 0)) roh.sicht = rang;
     if (stufe !== 'klar') continue;
@@ -760,8 +767,9 @@ class Engine {
     try {
       const s = this.state();
       if (s.pilot.status !== 'alive' || s.pilot.current_action !== 'idle') return null;
+      const tick = s.world.world_tick;
       const whitelist = this.whitelist(s);
-      const recentThoughts = q.lastThoughts(this.db, 15);
+      const recentThoughts = q.lastThoughts(this.db, 15, s.pilot.id);
 
       const letzteAktion = s.recentActions[s.recentActions.length - 1];
       const beliefs = q.mind(this.db, s.pilot.id)
@@ -773,8 +781,9 @@ class Engine {
       // „was lässt sich damit wohl anfangen?" Die Antwort formuliert er selbst.
       // Paket K: Musing-Rate pro Zone — Flow 75 %, sonst 35 %.
       // Tag/Nacht: Schlaf-Traum — nachts träumt er von Flucht, Funk und Wärme.
-      const offene = s.entities.filter((x) => x.unfinished_thought).map((x) => x.name);
-      const schlaeft = s.pilot.current_action === 'sleep';
+      const offeneIds = s.entities.filter((x) => x.unfinished_thought).map((x) => x.id);
+      const offene = offeneIds.map((id) => (s.entities.find((x) => x.id === id) || {}).name).filter(Boolean);
+      const schlaeft = letzteAktion === 'sleep';
       const thema = offene.length
         ? `Neu entdeckt: ${offene.join(', ')} — was lässt sich damit wohl anfangen?`
         : (schlaeft && (s.phase || 'licht') === 'nacht')
@@ -839,7 +848,6 @@ class Engine {
         vorhabenAktiv: !!(vorhabenText),
       });
       this.lastBrain = res;
-      const tick = s.world.world_tick;
 
       if (!res.ok) {
         this.staleSince = this.staleSince || Date.now();
@@ -870,8 +878,8 @@ class Engine {
       // Frisch gespawnt: erste Entscheidung raus aus dem Bauwerk — sonst läuft er
       // vom 15-m-Spawn sofort zum Kapsel-Anker zurück (eat/check_stock zielen dorthin).
       let aktion = res.action;
-      if ((s.world.world_tick - (s.pilot.created_tick || 0)) <= 2 && whitelist.includes('streifen')
-        && (aktion === 'eat' || aktion === 'check_stock' || aktion === 'sit_shade')) {
+      if (s.recentActions.length === 0 && whitelist.includes('streifen')
+        && !this.targetFor(s, aktion)) {
         aktion = 'streifen';
       }
       if (gedanke) {
@@ -879,6 +887,7 @@ class Engine {
           .run(s.pilot.id, tick, gedanke);
         this.db.prepare('UPDATE pilots SET psyche = MIN(100, psyche + 0.5) WHERE id = ? AND psyche < 0')
           .run(s.pilot.id);
+        s.pilot.psyche = Math.min(100, s.pilot.psyche + (s.pilot.psyche < 0 ? 0.5 : 0));
       }
       this.applyAction(s, aktion, gedanke, tick, 'model', whitelist, zusatz,
         { ms: res.latencyMs ?? null, versuche: res.calls ?? null,
@@ -886,9 +895,10 @@ class Engine {
           roh: typeof res.raw === 'string' ? res.raw.slice(0, 2000) : null });
       console.log(`[modell:${modellKurz()}] tick ${tick}: ${aktion} (${res.calls ?? '?'}V, ${Math.round(res.latencyMs ?? 0)}ms)`
         + ` „${gedanke || ''}"${zusatz ? ` ↳ ${zusatz}` : ''}`);
-      if (offene.length) {
-        this.db.prepare('UPDATE world_entities SET unfinished_thought=NULL WHERE unfinished_thought IS NOT NULL')
-          .run();
+      if (offeneIds.length) {
+        const fragen = offeneIds.map(() => '?').join(',');
+        this.db.prepare(`UPDATE world_entities SET unfinished_thought=NULL WHERE id IN (${fragen})`)
+          .run(...offeneIds);
       }
       return res;
     } finally {
@@ -974,7 +984,7 @@ class Engine {
         action: row.action_key,
         runs: row.times_borne_out,
         avgDelta: row.avg_psyche_delta,
-        recentThoughts: q.lastThoughts(this.db, 5),
+        recentThoughts: q.lastThoughts(this.db, 5, s.pilot.id),
         apiKey: this.apiKey,
         baseUrl: process.env.OPENROUTER_BASE_URL,
         model: process.env.AIQUARIUM_MODEL,
@@ -1150,11 +1160,12 @@ class Engine {
       })),
       entities: s.entities.map((e) => {
         const a = ankerPos(e);   // Frontend zeigt das sichtbare Bauwerk, nicht den Logikpunkt
+        const lfSnap = lichtFaktor(s.phase, s.finsternis);
         return {
           id: e.id, type: e.type, name: e.name,
           x: Math.round(a.pos_x * 10) / 10, y: Math.round(a.pos_y * 10) / 10, z: Math.round(a.pos_z * 10) / 10,
-          stufe: sichtStufe(p, { pos_x: a.pos_x, pos_y: a.pos_y, pos_z: a.pos_z }),
-          label: entityLabel(p, e), discovered: !!e.discovered,
+          stufe: sichtStufe(p, { pos_x: a.pos_x, pos_y: a.pos_y, pos_z: a.pos_z }, lfSnap),
+          label: entityLabel(p, e, lfSnap), discovered: !!e.discovered,
         };
       }),
       feed: q.feed(this.db, 40),

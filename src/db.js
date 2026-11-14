@@ -4,7 +4,7 @@
 const { DatabaseSync } = require('node:sqlite');
 const fs = require('node:fs');
 const path = require('node:path');
-const { ENTITIES, START, clusterPos } = require('./config');
+const { ENTITIES, START, clusterPos, spawnPos } = require('./config');
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS world_state (
@@ -255,6 +255,17 @@ function migrate(db) {
   }
   if (!m.has('needs_text')) db.exec('ALTER TABLE pilot_mind ADD COLUMN needs_text INTEGER DEFAULT 1');
   if (!m.has('text_attempts')) db.exec('ALTER TABLE pilot_mind ADD COLUMN text_attempts INTEGER DEFAULT 0');
+
+  // Festgefahrene Erstpiloten befreien: wer in Tick 0 noch exakt auf
+  // clusterPos(0, 0) steht (idle), kommt einmalig auf spawnPos() (15 m raus).
+  try {
+    const k0 = clusterPos(0, 0);
+    const k1 = spawnPos();
+    db.prepare(`UPDATE pilots SET pos_x = ?, pos_y = ?, pos_z = ?
+      WHERE status = 'alive' AND created_tick = 0 AND current_action = 'idle'
+      AND pos_x = ? AND pos_z = ?`)
+      .run(k1.pos_x, k1.pos_y, k1.pos_z, k0.x, k0.z);
+  } catch { /* alte DB ohne Spalten — seed/migrate oben regelt das */ }
 }
 
 // Welt einmalig anlegen: Zustand, Orte, erster Pilot
@@ -280,10 +291,10 @@ function seed(db) {
 
   const anzahl = db.prepare('SELECT COUNT(*) c FROM pilots').get().c;
   if (!anzahl) {
-    const k = clusterPos(0, 0);   // erster Pilot startet an der Kapsel (Cluster)
+    const k = spawnPos();   // 15 m neben dem sichtbaren Kapsel-Anker, nicht im Glas
     db.prepare(`INSERT INTO pilots (cycle_num, name, body, psyche, created_tick,
       pos_x, pos_y, pos_z)
-      VALUES (1, ?, ?, ?, 0, ?, ?, ?)`).run('Kapitän Meero', START.body, START.psyche, k.x, k.y, k.z);
+      VALUES (1, ?, ?, ?, 0, ?, ?, ?)`).run('Kapitän Meero', START.body, START.psyche, k.pos_x, k.pos_y, k.pos_z);
   }
 }
 
@@ -293,8 +304,11 @@ const q = {
   pilot: (db) => db.prepare('SELECT * FROM pilots ORDER BY id DESC LIMIT 1').get(),
   pilotById: (db, id) => db.prepare('SELECT * FROM pilots WHERE id = ?').get(id),
   entities: (db) => db.prepare('SELECT * FROM world_entities').all(),
-  lastThoughts: (db, n = 15) =>
-    db.prepare('SELECT text FROM thoughts ORDER BY id DESC LIMIT ?').all(n).map((r) => r.text),
+  lastThoughts: (db, n = 15, pilotId = null) =>
+    (pilotId == null
+      ? db.prepare('SELECT text FROM thoughts ORDER BY id DESC LIMIT ?').all(n)
+      : db.prepare('SELECT text FROM thoughts WHERE pilot_id = ? ORDER BY id DESC LIMIT ?').all(pilotId, n)
+    ).map((r) => r.text),
   recentNerve: (db, pilotId, n = 5) =>
     db.prepare('SELECT * FROM nerve_events WHERE pilot_id = ? ORDER BY id DESC LIMIT ?').all(pilotId, n),
   feed: (db, limit = 50) =>

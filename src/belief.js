@@ -20,6 +20,7 @@ const FALLBACK = {
   dig: { pos: 'Graben tut mir gut', neg: 'Graben zehrt an mir' },
   look_earth: { pos: 'Zur Erde zu schauen beruhigt mich', neg: 'Zur Erde zu schauen macht mich sehnsüchtig' },
   run_wild: { pos: 'Rennen macht den Kopf leer', neg: 'Rennen macht alles schlimmer' },
+  hide_capsule: { pos: 'In der Kapsel zu kauern beruhigt mich', neg: 'In der Kapsel zu kauern macht mich kribbelig' },
 };
 
 const HANDLUNG = {
@@ -37,6 +38,7 @@ const HANDLUNG = {
   dig: 'graben',
   look_earth: 'zur Erde schauen',
   run_wild: 'rennen',
+  hide_capsule: 'in die Kapsel flüchten',
 };
 
 function fallbackText(action, positive) {

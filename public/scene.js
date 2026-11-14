@@ -733,9 +733,10 @@ const augeL = new THREE.Mesh(new THREE.SphereGeometry(0.17, 10, 8), augeMat);
 augeL.position.set(-0.33, 4.05, 0.86);
 const augeR = augeL.clone();
 augeR.position.x = 0.33;
+const helmMat = new THREE.MeshStandardMaterial({ color: 0x9fb4c9, roughness: 0.35, metalness: 0.6, transparent: true, opacity: 0.5 });
 const helm = new THREE.Mesh(
   new THREE.SphereGeometry(1.35, 20, 14, 0, Math.PI * 2, 0, Math.PI * 0.62),
-  new THREE.MeshStandardMaterial({ color: 0x9fb4c9, roughness: 0.35, metalness: 0.6, transparent: true, opacity: 0.5 }),
+  helmMat,
 );
 helm.position.y = 3.95;
 figur.add(korper, kopf, augeL, augeR, helm);
@@ -1255,6 +1256,12 @@ function inventarAnzeigen(liste) {
     : '<li class="leer">Noch nichts gefunden.</li>';
 }
 
+// Kleine XSS-Hilfe: alles, was vom Server/Modell kommt (Name, Gedanken,
+// Zusatzgedanken, Glaubenssätze), gehört maskiert ins innerHTML.
+function esc(x) {
+  return String(x ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
 function zeichneHud(s) {
   const p = s.pilot;
   const c = s.clock || { day: 1, ageHours: 0 };
@@ -1265,7 +1272,7 @@ function zeichneHud(s) {
     ? ` · Tag ${tag.nr} · ${tag.phase === 'licht' ? 'Tag' : tag.phase === 'nacht' ? 'Nacht' : 'Dämmerung'}`
     : '';
   document.getElementById('name').innerHTML =
-    `<b>${p.name}</b> · Zyklus ${p.cycle_num}${tagZeile} · seit ${h}`;
+    `<b>${esc(p.name)}</b> · Zyklus ${p.cycle_num}${tagZeile} · seit ${h}`;
   const hinweise = [`Tick ${s.world.tick}`, AKTION[p.current_action] || p.current_action];
   // Erde untergegangen → Bake-Tor zu (steht im Prompt, hier als Hinweis)
   if (tag && !tag.erde) hinweise.push('Erde weg');
@@ -1338,7 +1345,7 @@ function feedText(e) {
       // Modell-Stille (null-Gedanke aus stale/fallback) nicht als "(kein Gedanke)"
       // in den Feed spammen — der Debug-Log zeigt sie, der Feed nur echte Gedanken.
       if (!t.thought) return null;
-      return t.thought + (t.musing ? ` <span class="musing">· ${t.musing}</span>` : '');
+      return `${esc(t.thought)}` + (t.musing ? ` <span class="musing">· ${esc(t.musing)}</span>` : '');
     }
     case 'death': return `${t.name} ist tot — ${NAMEN[t.cause] || t.cause}`;
     case 'spawn': return `Neuer Pilot: ${t.name} (Zyklus ${t.cycle})`;
@@ -1372,7 +1379,7 @@ function zeichneFeed(feed) {
 function zeichneGlaube(beliefs) {
   const el = document.getElementById('glaube');
   if (!beliefs || !beliefs.length) { el.innerHTML = ''; return; }
-  el.innerHTML = '<b>Was er glaubt</b>' + beliefs.map((b) => `<div>· ${b.text}</div>`).join('');
+  el.innerHTML = '<b>Was er glaubt</b>' + beliefs.map((b) => `<div>· ${esc(b.text)}</div>`).join('');
 }
 
 // Feed ein-/ausblendbar (Standard: aus, Wahl bleibt im Browser gemerkt)
@@ -1472,6 +1479,7 @@ const KURZ = {
   tend_dome: 'Beet pflegen', call_bake: 'Notruf senden',
   streifen: 'umherschweifen', sinnieren: 'sinnieren',
   look_earth: 'zur Erde schauen', dig: 'graben', run_wild: 'rennen', idle: 'warten',
+  hide_capsule: 'in Kapsel flüchten',
 };
 
 function dbgText(e) {
@@ -1509,8 +1517,8 @@ function dbgText(e) {
         + (t.source === 'fallback' ? rohDetail : '');
     case 'action':
       return `${z} ✓ <b>${KURZ[t.action] || t.action}</b> fertig nach ${t.dur}s (begonnen ${e.tick - t.dur})`
-        + (typeof t.stress_delta === 'number'
-          ? ` · Stress ${t.stress_delta > 0 ? '+' : ''}${Math.round(t.stress_delta * 10) / 10}` : '');
+        + (typeof t.psyche_delta === 'number'
+          ? ` · Psyche ${t.psyche_delta > 0 ? '+' : ''}${Math.round(t.psyche_delta * 10) / 10}` : '');
     case 'stale': {
       const diag = [t.finish ? `finish=${t.finish}` : null].filter(Boolean).join(' ');
       return `${z} <span class="w">Modell still</span>: ${t.reason || ''}`

@@ -70,7 +70,7 @@ function beginntMitOrt(thought, orte = []) {
   const worte = words(thought).slice(0, 3).map((w) => w.toLowerCase());
   return orte.some((o) => {
     const oName = String(o || '').toLowerCase();
-    return oName && worte.some((w) => w.startsWith(oName.slice(0, 4)) || oName.startsWith(w));
+    return oName && worte.some((w) => w.startsWith(oName.slice(0, 4)) || (w.length >= 4 && oName.startsWith(w)));
   });
 }
 

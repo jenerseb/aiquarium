@@ -279,13 +279,21 @@ const NOTEN = ['…Ankunft…', '…nicht öffnen…', '…sie hören zu…'];
 // Tag/Nacht: lichtFaktor 1 (Tag) … 0,5 (Nacht) — verkürzt alle Distanzen.
 // Dämmerung interpoliert dazwischen (Faktor ~0,75). Der Stolperradius bleibt.
 let SICHT = {
-  fernWeit: { winkel: 120, dist: 15 },   // peripheres Bemerken: da ist etwas
-  fernEng:  { winkel: 45,  dist: 30 },   // fokussiertes Bemerken: weiter, aber schmal
-  mittel:   { winkel: 45, dist: 15 },   // erkennen: Vermutung
+  fernWeit: { winkel: 120, dist: 35 },   // peripheres Bemerken: da ist etwas
+  fernEng:  { winkel: 60,  dist: 65 },   // fokussiertes Bemerken: weiter, aber schmal
+  mittel:   { winkel: 45, dist: 25 },    // erkennen: Vermutung
   nah:      { winkel: 45,  dist: 5 },    // genau erkennen: Name
   kontakt:  3,                            // Stolperradius: rundum klar
   vorlauf:  1,                            // Erkennung greift 1 m VOR dem Halt — erst sehen, dann stehenbleiben
 };
+
+// Tageslicht-Faktor für die Sicht (Paket I + Tag/Nacht):
+// Nacht oder totale Finsternis halbiert die Reichweite, Dämmerung dämpft.
+function lichtFaktor(phase = 'licht', finsternis = 0) {
+  if (phase === 'nacht' || finsternis >= 3) return 0.5;
+  if (phase === 'daemmer' || finsternis === 2) return 0.75;
+  return 1.0;
+}
 
 // Leiter-Sanity: Stufen müssen sich staffeln, sonst greift die falsche zuerst.
 // Nur Warnung — eine exotische Leiter darf trotzdem laufen.
@@ -437,9 +445,9 @@ function richtungWort(pilot, e) {
 // Erkanntheitsgrad: einmal Erkanntes vergisst er nicht — Schilder zeigen den
 // höchsten je erreichten Grad, auch hinter seinem Rücken (DB-Spalte `sicht`).
 const STUFE_RANG = { ungesehen: 0, bemerkt: 1, vermutet: 2, klar: 3 };
-function entityLabel(pilot, e) {
+function entityLabel(pilot, e, lichtFaktor = 1) {
   const a = ankerPos(e);
-  const stufe = sichtStufe(pilot, a);
+  const stufe = sichtStufe(pilot, a, lichtFaktor);
   const rang = Math.max(STUFE_RANG[stufe] ?? 0, e.sicht ?? 0);
   if (rang <= 0) return null;
   if (rang === 1) return '?';
@@ -579,5 +587,5 @@ module.exports = {
   erdeSichtbarVon, TAG, ERDE, ERDE_HORIZONT, FINSTERNIS, finsternisStufe,
   ankerPos, VERSATZ, STUFE_RANG, entityLabel, haltAbstand, wuerfelImpuls, IMPULS_WAHL,
   RESPAWN_DELAY_S, START, MODEL, modellKurz, WORLD_RADIUS, PLANET_R, ENTITIES,
-  CLUSTER, CLUSTER_R, clusterPos, SPAWN_ABSTAND_M, spawnPos,
+  CLUSTER, CLUSTER_R, clusterPos, SPAWN_ABSTAND_M, spawnPos, lichtFaktor,
 };
