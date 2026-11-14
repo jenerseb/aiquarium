@@ -741,8 +741,46 @@ const helm = new THREE.Mesh(
 helm.position.y = 3.95;
 figur.add(korper, kopf, augeL, augeR, helm);
 figur.traverse((o) => { if (o.isMesh) { o.castShadow = true; o.receiveShadow = false; } });
-// Namensschild über der Figur (wie Ortsnamen über Orten): Sprite, immer zur Kamera
-const namensSchild = label('…');
+// Namensschild über der Figur (wie Ortsnamen über Orten): Sprite, immer zur Kamera.
+// Eigenes Sprite STATT label(): label() cached pro Text — bei Namensgleichstand
+// mit einem Ort würde das Figur-Schild sonst dessen Orts-Sprite klauen.
+function namensLabel(text) {
+  const c = document.createElement('canvas');
+  const g = c.getContext('2d');
+  const schrift = '600 46px system-ui, sans-serif';
+  g.font = schrift;
+  const w = Math.ceil(g.measureText(text).width) + 48;
+  const h = 78;
+  c.width = w * 2; c.height = h * 2;
+  const g2 = c.getContext('2d');
+  g2.scale(2, 2);
+  g2.font = schrift;
+  g2.textAlign = 'center';
+  g2.textBaseline = 'middle';
+  const grad = g2.createLinearGradient(0, 0, 0, h);
+  grad.addColorStop(0, 'rgba(8,15,26,0.92)');
+  grad.addColorStop(1, 'rgba(16,30,48,0.92)');
+  const r = 20;
+  g2.fillStyle = grad;
+  g2.beginPath();
+  g2.roundRect(2, 8, w - 4, h - 16, r);
+  g2.fill();
+  g2.strokeStyle = 'rgba(140,190,235,0.9)';
+  g2.lineWidth = 3;
+  g2.stroke();
+  g2.fillStyle = '#fff';
+  g2.fillText(text, w / 2, h / 2 + 1);
+  const tex = new THREE.CanvasTexture(c);
+  tex.anisotropy = 4;
+  tex.colorSpace = THREE.SRGBColorSpace;
+  const sp = new THREE.Sprite(new THREE.SpriteMaterial({
+    map: tex, transparent: true, depthTest: false, depthWrite: false,
+  }));
+  sp.scale.set(w / h * 3.4, 3.4, 1);
+  sp.renderOrder = 30;
+  return sp;
+}
+const namensSchild = namensLabel('…');
 namensSchild.position.set(0, 6.2, 0);
 figur.add(namensSchild);
 figur.userData.schild = namensSchild;
@@ -1299,7 +1337,8 @@ function zeichneHud(s) {
   // Anzug-Farbe: Vollton aus accent_hue — jeder Pilot eine deutlich andere Farbe
   korperMat.color.setHSL((p.accent_hue ?? 200) / 360, 0.85, 0.55);
   helmMat.color.setHSL((p.accent_hue ?? 200) / 360, 0.25, 0.16);
-  const neuerPilot = letzterPilot && (letzterPilot.name !== p.name || letzterPilot.cycle !== p.cycle_num);
+  const ersterState = !letzterPilot;
+  const neuerPilot = ersterState || (letzterPilot.name !== p.name || letzterPilot.cycle !== p.cycle_num);
   letzterPilot = { name: p.name, cycle: p.cycle_num };
   // Namensschild über der Figur: Text nur bei Wechsel neu bauen (Texture kostet)
   if (figur.userData.schild && figur.userData.schildText !== p.name) {
@@ -1409,6 +1448,19 @@ es.onmessage = (ev) => {
   zeichneFeed(d.feed);
   zeichneGlaube(d.beliefs);
 };
+
+// Initial-State per Fetch: SSE sendet nur bei Tick/Feed-Aktivitaet — ohne das
+// bleibt das Namensschild stehen, bis sich erstmals etwas bewegt.
+fetch('/api/state').then((r) => r.json()).then((s) => {
+  if (s && s.pilot) {
+    letzterState = s;
+    syncOrte(s.entities);
+    zeichneHud(s);
+    sonneSetzen(s.tag);
+    zeichneFeed(s.feed);
+    zeichneGlaube(s.beliefs);
+  }
+}).catch(() => {});
 
 // Tag/Nacht 2026-11-14: Die Sonne dreht sich um den Planeten, sonst nichts.
 // Kein globales Abdunkeln: Der Nacht wird es dunkel, weil das gerichtete Licht von
