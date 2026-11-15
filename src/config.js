@@ -127,7 +127,7 @@ const MODEL = {
 };
 
 const SLOTS = {
-  dev: { model: 'google/gemma-4-26b', reasoningExclude: true },
+  dev: { model: 'nvidia/nemotron-3-nano-30b-a3b:free', reasoningExclude: true },
   primary: { model: process.env.AIQUARIUM_MODEL || 'google/gemma-4-26b', reasoningExclude: true },
   fallback: { model: 'z-ai/glm-5.3-flash', reasoningExclude: true },
   alltagFree: [

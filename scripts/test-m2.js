@@ -91,13 +91,22 @@ async function main() {
   assert.ok(!schlecht.ok, 'verbotener intent faellt durch');
   console.log('[m2] plan-checks ok');
 
-  // 3) Tick 1+2: walk_to otzentreff + consume ueber Arbiter (Katalog-Cache)
+  // 3) Ticks: walk_to otzentreff (schrittweise, ~28 m/Tick) + consume ueber Arbiter
   const brain12 = mockBrainFuer([PLAN_WALK_CONSUME]);
-  const t1 = await engine.tick(db, deps(brain12), characterId, Date.now());
-  assert.ok(t1.ok && t1.schritt.action === 'walk_to', 'tick1 walk_to, war: ' + JSON.stringify(t1.schritt));
+  let schritte = 0;
+  let t1;
+  for (let i = 0; i < 10; i += 1) {
+    schritte += 1;
+    t1 = await engine.tick(db, deps(brain12), characterId, Date.now());
+    assert.ok(t1.ok, 'tick walk ok');
+    if (engine.ladeCharakter(db, characterId).inside_poi === 'otzentreff') break;
+  }
   assert.strictEqual(engine.ladeCharakter(db, characterId).inside_poi, 'otzentreff', 'angekommen im otzentreff');
+  assert.ok(schritte >= 2, `route braucht mehrere ticks (war: ${schritte})`);
+  assert.ok(t1.route === null || t1.route === undefined, 'route nach ankunft leer');
+  console.log(`[m2] walk schrittweise ok (${schritte} ticks bis otzentreff)`);
   const t2 = await engine.tick(db, deps(brain12), characterId, Date.now());
-  assert.ok(t2.ok && t2.schritt.action === 'consume', 'tick2 consume');
+  assert.ok(t2.ok && t2.schritt.action === 'consume', 'tick consume, war: ' + JSON.stringify(t2.schritt));
   const angebot = db.prepare("SELECT * FROM poi_offers WHERE poi_id = 'otzentreff' AND kind = 'consume'").get();
   assert.ok(angebot, 'angebot in poi_offers gecacht');
   assert.ok(Number(angebot.price) >= 2.5 && Number(angebot.price) <= 12.0, 'preis in kneipen-grenzen: ' + angebot.price);
@@ -120,15 +129,22 @@ async function main() {
   assert.ok(Number(job.wage_per_shift) >= 8 && Number(job.wage_per_shift) <= 18, 'lohn in grenzen: ' + job.wage_per_shift);
   console.log('[m2] zettel+job ok: ' + job.role_title + ' @' + job.poi_id + ' ' + Number(job.wage_per_shift).toFixed(2) + ' EUR');
 
-  // 5) Tick 5-7: work_shift (+lohn) -> walk home -> sleep (+nightly, 1x/Tag)
+  // 5) work_shift (+lohn) -> walk home (schrittweise) -> sleep (+nightly, 1x/Tag)
   const geldVor = Number(engine.ladeCharakter(db, characterId).geld);
   const brain567 = mockBrainFuer([PLAN_SHIFT_SLEEP]);
   const t5 = await engine.tick(db, deps(brain567), characterId, Date.now());
   assert.ok(t5.ok && t5.schritt.action === 'work_shift', 'tick5 work_shift');
   const geldNach = Number(engine.ladeCharakter(db, characterId).geld);
   assert.ok(geldNach > geldVor, `lohn gebucht (${geldVor.toFixed(2)} -> ${geldNach.toFixed(2)})`);
-  const t6 = await engine.tick(db, deps(brain567), characterId, Date.now());
-  assert.ok(t6.ok && t6.schritt.action === 'walk_to', 'tick6 heimweg');
+  let heimSchritte = 0;
+  for (let i = 0; i < 10; i += 1) {
+    heimSchritte += 1;
+    const t = await engine.tick(db, deps(brain567), characterId, Date.now());
+    assert.ok(t.ok, 'tick heimweg ok');
+    if (engine.ladeCharakter(db, characterId).inside_poi === 'apartment') break;
+  }
+  assert.strictEqual(engine.ladeCharakter(db, characterId).inside_poi, 'apartment', 'wieder daheim');
+  console.log(`[m2] heimweg schrittweise ok (${heimSchritte} ticks)`);
   // Nacht-Konsolidierung beim Schlafen daheim (nightly an, Mock ohne Key -> Fallback)
   const depsNightly = { karte, brain: mockBrainFuer([PLAN_SHIFT_SLEEP]), telegram: MOCK_TELEGRAM, nightly: true };
   const t7 = await engine.tick(db, depsNightly, characterId, Date.now());

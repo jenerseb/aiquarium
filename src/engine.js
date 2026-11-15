@@ -142,6 +142,124 @@ function heileDurchSchlaf(ch) {
 
 // --- Schritt ausfuehren (Engine rechnet, Modell spuert nur Konsequenzen) ---------
 
+// --- Routen-State: schrittweises Laufen statt Teleport (Punkt 1) -------------------------------
+// Aktive Route liegt in action_meta_json: { route: [{x,z}...], wegIndex, zielPoi, restM }.
+// Pro Tick läuft die Figur SCHRITT_M (1.4 m/s * 20 s Tick = 28 m).
+const SCHRITT_M = 28;
+const ANKUNFT_M = 1.5; // < 1.5 m Rest = angekommen
+
+function ladeRoute(ch) {
+  try {
+    const meta = JSON.parse(ch.action_meta_json || '{}');
+    if (meta && Array.isArray(meta.route) && meta.route.length > 0) return meta;
+  } catch { /* keine route */ }
+  return null;
+}
+
+function speichereRoute(db, ch, meta) {
+  ch.action_meta_json = meta ? JSON.stringify(meta) : null;
+  db.prepare('UPDATE character SET action_meta_json = ? WHERE id = ?').run(ch.action_meta_json, ch.id);
+}
+
+function restDistanz(route, wegIndex, x, z) {
+  let rest = 0;
+  let px = x;
+  let pz = z;
+  for (let i = wegIndex; i < route.length; i += 1) {
+    rest += Math.hypot(route[i].x - px, route[i].z - pz);
+    px = route[i].x;
+    pz = route[i].z;
+  }
+  return rest;
+}
+
+// Zielwahl für explore_street: 40–130 m entfernt, bevorzugt Richtung unentdeckter POIs.
+function waehleExploreZiel(db, karte, ch) {
+  const knoten = (karte.navGraph && karte.navGraph.nodes) || [];
+  if (knoten.length === 0) return null;
+  const unentdeckt = db.prepare('SELECT pos_x, pos_z FROM pois WHERE discovered = 0').all();
+  let richtung = null;
+  if (unentdeckt.length > 0) {
+    let best = null;
+    let bestD = Infinity;
+    for (const p of unentdeckt) {
+      const d = Math.hypot(Number(p.pos_x) - Number(ch.pos_x), Number(p.pos_z) - Number(ch.pos_z));
+      if (d < bestD) { bestD = d; best = p; }
+    }
+    if (best) richtung = { x: Number(best.pos_x) - Number(ch.pos_x), z: Number(best.pos_z) - Number(ch.pos_z) };
+  }
+  const kands = [];
+  for (const k of knoten) {
+    const d = Math.hypot(Number(k.x) - Number(ch.pos_x), Number(k.z) - Number(ch.pos_z));
+    if (d < 40 || d > 130) continue;
+    let bonus = 0;
+    if (richtung) {
+      const len = Math.hypot(richtung.x, richtung.z) || 1;
+      const skalar = ((Number(k.x) - Number(ch.pos_x)) * richtung.x + (Number(k.z) - Number(ch.pos_z)) * richtung.z) / (len * (d || 1));
+      bonus = skalar;
+    }
+    kands.push({ k, d, wertung: d * 0.01 - bonus * 25 + Math.random() * 8 });
+  }
+  if (kands.length === 0) {
+    let best = null;
+    let bestD = -1;
+    for (const k of knoten) {
+      const d = Math.hypot(Number(k.x) - Number(ch.pos_x), Number(k.z) - Number(ch.pos_z));
+      if (d > bestD) { bestD = d; best = k; }
+    }
+    return best;
+  }
+  kands.sort((a, b) => a.wertung - b.wertung);
+  return kands[0].k;
+}
+
+// Route starten: A* zum Ziel, Waypoints in Meta ablegen.
+function starteRoute(db, karte, ch, zielX, zielZ, zielPoi) {
+  const start = pf.findeWegFuerKoordinaten(karte.navGraph, Number(ch.pos_x), Number(ch.pos_z), Number(zielX), Number(zielZ));
+  const weg = (start && start.weg) || [];
+  if (weg.length < 2) return null;
+  const meta = {
+    route: weg.map((p) => ({ x: Math.round(Number(p.x) * 10) / 10, z: Math.round(Number(p.z) * 10) / 10 })),
+    wegIndex: 0,
+    zielPoi: zielPoi || null,
+    restM: Math.round((start.distanzM || 0) * 10) / 10,
+  };
+  speichereRoute(db, ch, meta);
+  return meta;
+}
+
+// Einen Schritt (SCHRITT_M) entlang der Route laufen.
+function geheSchritt(db, ch, meta) {
+  const route = meta.route;
+  let budget = SCHRITT_M;
+  let i = meta.wegIndex || 0;
+  while (budget > 0.001 && i < route.length) {
+    const ziel = route[i];
+    const dx = ziel.x - Number(ch.pos_x);
+    const dz = ziel.z - Number(ch.pos_z);
+    const d = Math.hypot(dx, dz);
+    if (d < 0.001) { i += 1; continue; }
+    if (d <= budget) {
+      ch.pos_x = ziel.x;
+      ch.pos_z = ziel.z;
+      budget -= d;
+      i += 1;
+    } else {
+      ch.pos_x = Number(ch.pos_x) + (dx / d) * budget;
+      ch.pos_z = Number(ch.pos_z) + (dz / d) * budget;
+      budget = 0;
+    }
+    ch.heading_rad = Math.atan2(dx, dz);
+  }
+  meta.wegIndex = i;
+  meta.restM = Math.round(restDistanz(route, i, Number(ch.pos_x), Number(ch.pos_z)) * 10) / 10;
+  speichereRoute(db, ch, meta);
+  const angekommen = i >= route.length || meta.restM < ANKUNFT_M;
+  return { angekommen, restM: meta.restM };
+}
+
+// --- Schritt ausfuehren (Engine rechnet, Modell spuert nur Konsequenzen) ---------
+
 async function fuehreSchrittAus(db, deps, characterId, schritt, jetztMs) {
   const karte = deps.karte;
   const brain = deps.brain;
@@ -155,34 +273,68 @@ async function fuehreSchrittAus(db, deps, characterId, schritt, jetztMs) {
   if (action === 'walk_to') {
     const ziel = poiVonId(zielId);
     if (!ziel) return { ok: false, grund: 'ziel_unbekannt', notizen };
-    const pois = db.prepare('SELECT id, pos_x, pos_z FROM pois').all();
-    const startPoi = ch.inside_poi || 'apartment';
-    let route = null;
-    try { route = pf.findePoiRoute(karte.navGraph, pois, startPoi, ziel.id); } catch { route = null; }
-    if (!route || !route.weg || route.weg.length === 0) {
-      const d = Math.hypot(Number(ziel.pos_x) - Number(ch.pos_x), Number(ziel.pos_z) - Number(ch.pos_z));
+    // Route fortsetzen oder neu starten (kein Teleport mehr)
+    let meta = (ch.current_action === 'walk_to' || ch.current_action === 'explore_street') ? ladeRoute(ch) : null;
+    if (!meta || meta.zielPoi !== ziel.id) {
+      meta = starteRoute(db, karte, ch, Number(ziel.pos_x), Number(ziel.pos_z), ziel.id);
+      if (!meta) {
+        // Fallback: kein Graph-Weg – direkt, aber als Route mit 1 Punkt (kein Sprung im Frontend)
+        meta = { route: [{ x: Number(ziel.pos_x), z: Number(ziel.pos_z) }], wegIndex: 0, zielPoi: ziel.id, restM: 0 };
+        speichereRoute(db, ch, meta);
+      }
+      notizen.push(`Du machst dich auf den Weg zu ${ziel.name}.`);
+    }
+    ch.current_action = 'walk_to';
+    ch.action_target_poi = ziel.id;
+    lasseZeitVergehen(ch, 20); // ein Tick = 20 s Aquarium-Zeit
+    const schritt = geheSchritt(db, ch, meta);
+    if (!schritt.angekommen) {
+      notizen.push(`unterwegs (${schritt.restM.toFixed(0)} m übrig)`);
+    } else {
       ch.pos_x = Number(ziel.pos_x); ch.pos_z = Number(ziel.pos_z);
       ch.inside_poi = ziel.id;
-      lasseZeitVergehen(ch, dauerFuer(schritt, d));
-      notizen.push(`Du bist zu ${ziel.name} gelaufen (${Math.round(d)} Meter).`);
-    } else {
-      const letzter = route.weg[route.weg.length - 1];
-      ch.pos_x = letzter.x; ch.pos_z = letzter.z;
-      ch.inside_poi = ziel.id;
-      lasseZeitVergehen(ch, dauerFuer(schritt, route.distanzM));
-      notizen.push(`Du bist zu ${ziel.name} gelaufen (${Math.round(route.distanzM)} Meter ueber Buergersteige).`);
+      speichereRoute(db, ch, null);
+      ch.current_action = 'idle';
+      ch.action_target_poi = null;
+      const neu = entdeckeUmgebung(db, ch);
+      for (const n of neu) notizen.push(`Neu entdeckt: ${n.name} (${n.distanzM} m).`);
+      notizen.push(`Angekommen bei ${ziel.name}.`);
     }
-    const neu = entdeckeUmgebung(db, ch);
-    for (const n of neu) notizen.push(`Neu entdeckt: ${n.name} (${n.distanzM} m).`);
-    ch.current_action = 'idle';
   } else if (action === 'explore_street') {
-    lasseZeitVergehen(ch, dauerFuer(schritt));
-    ch.erschoepfung = Math.min(100, Number(ch.erschoepfung) + 6);
-    ch.froh = Math.max(-100, Math.min(100, Number(ch.froh) + 3));
-    notizen.push('Du bist ein Stueck durch die Strassen geschlendert und hast dich umgesehen.');
-    const neu = entdeckeUmgebung(db, ch);
-    for (const n of neu) notizen.push(`Neu entdeckt: ${n.name}.`);
-    ch.current_action = 'idle';
+    let meta = ch.current_action === 'explore_street' ? ladeRoute(ch) : null;
+    if (!meta) {
+      const ziel = waehleExploreZiel(db, karte, ch);
+      if (!ziel) {
+        lasseZeitVergehen(ch, dauerFuer(schritt));
+        notizen.push('Du bist ein Stück durch die Straßen geschlendert.');
+      } else {
+        meta = starteRoute(db, karte, ch, Number(ziel.x), Number(ziel.z), null);
+        if (!meta) {
+          lasseZeitVergehen(ch, dauerFuer(schritt));
+          notizen.push('Du bist ein Stück durch die Straßen geschlendert.');
+        } else {
+          notizen.push(`Du schlenderst los – Richtung ${Math.round(meta.restM)} m unbekannte Ecke.`);
+        }
+      }
+    }
+    if (meta) {
+      ch.current_action = 'explore_street';
+      lasseZeitVergehen(ch, 20);
+      const schritt2 = geheSchritt(db, ch, meta);
+      const neu = entdeckeUmgebung(db, ch);
+      for (const n of neu) notizen.push(`Neu entdeckt: ${n.name}.`);
+      if (schritt2.angekommen) {
+        speichereRoute(db, ch, null);
+        ch.current_action = 'idle';
+        ch.erschoepfung = Math.min(100, Number(ch.erschoepfung) + 6);
+        ch.froh = Math.min(100, Math.max(-100, Number(ch.froh) + 3));
+        notizen.push('Du hast dich umgesehen und atmest durch.');
+      } else {
+        notizen.push(`unterwegs (${schritt2.restM.toFixed(0)} m übrig)`);
+      }
+    } else {
+      ch.current_action = 'idle';
+    }
   } else if (action === 'consume' || action === 'do_activity') {
     const ortId = zielId || ch.inside_poi;
     const poi = poiVonId(ortId);
@@ -221,7 +373,6 @@ async function fuehreSchrittAus(db, deps, characterId, schritt, jetztMs) {
     .run(characterId, 'aktion_' + action, JSON.stringify({ schritt, notizen }));
   return { ok: true, notizen, charakter: ch };
 }
-
 
 // --- Restliche Schritte: Pfand, Jobs, Ruhe, Arzt, Buecher --------------------------
 
@@ -396,7 +547,16 @@ function speichereQueue(db, ch, queue, snapshot) {
     .run(ch.plan_queue_json, ch.plan_start_snapshot_json, ch.id);
 }
 
-async function holeNeuenPlan(db, deps, characterId, jetztMs) {
+function holeNeuenPlan(db, deps, characterId, jetztMs) {
+  return holeNeuenPlanMitMeta(db, deps, characterId, jetztMs).then((r) => r);
+}
+
+// Interne Variante mit KI-Quellennachweis für den Feed (Punkt 7):
+// { thought, retrospective, plan, fallback, fehler, quelle: { source, model, tokens } }
+async function holeNeuenPlanMitMeta(db, deps, characterId, jetztMs) {
+  const META_FALLBACK = { source: 'fallback', model: '', tokens: 0 };
+  const META_QUEUE = { source: 'queue', model: '', tokens: 0 };
+  void META_QUEUE;
   const brain = deps.brain;
   const promptMod = require('./prompt');
   const ch = ladeCharakter(db, characterId);
@@ -416,21 +576,28 @@ async function holeNeuenPlan(db, deps, characterId, jetztMs) {
   if (!brain || typeof brain.decide !== 'function') {
     return { thought: 'Ohne Eingebung mache ich das Naheliegende.', retrospective: '',
       plan: [{ action: 'explore_street', target: null, detail: 'Umschauen' }, { action: 'rest', target: null, detail: 'Verschnaufen' }],
-      fallback: true };
+      fallback: true, quelle: META_FALLBACK };
   }
   const antwort = await brain.decide({
     prompt: gebaut.prompt, whitelist: [], apiKey: process.env.OPENROUTER_API_KEY || 'mock',
     slot: undefined, musing: false, orte: orte.map((o) => o.name),
   });
+  // KI-Quelle für den Dev-Feed (Punkt 7): Modell-Slug + Token aus decide-Antwort
+  const usage = (antwort && (antwort.usage || antwort.tokens)) || {};
+  const quelle = {
+    source: antwort && antwort.stale ? 'fallback' : 'llm',
+    model: String((antwort && (antwort.modell || antwort.model)) || ''),
+    tokens: Number(usage.completion_tokens || usage.total_tokens || antwort.tokens || 0) || 0,
+  };
   let obj = null;
   try { obj = JSON.parse(antwort.raw || '{}'); } catch { obj = null; }
   const geprueft = checks.validatePlan(obj, gebaut.whitelist);
   if (!geprueft.ok) {
     return { thought: geprueft.thought || 'Plan verworfen.', retrospective: geprueft.retrospective || '',
       plan: [{ action: 'rest', target: null, detail: 'Kurze Pause' }, { action: 'explore_street', target: null, detail: 'Umschauen' }],
-      fallback: true, fehler: geprueft.failures };
+      fallback: true, fehler: geprueft.failures, quelle: { ...quelle, source: 'fallback' } };
   }
-  return { thought: geprueft.thought, retrospective: geprueft.retrospective, plan: geprueft.plan, fallback: false, roh: antwort };
+  return { thought: geprueft.thought, retrospective: geprueft.retrospective, plan: geprueft.plan, fallback: false, roh: antwort, quelle };
 }
 
 // Interrupt-Gründe: neuer Chunk unterschritten, Geld reicht nicht, Telegram neu, POI neu.
@@ -507,13 +674,32 @@ async function tick(db, deps, characterId, jetztMs) {
     }
   }
   let gedanke = '';
+  let planQuelle = null; // KI-Nachweis für den Feed (Punkt 7)
   if (queue.length === 0) {
-    const neu = await holeNeuenPlan(db, deps, characterId, jetztMs);
-    gedanke = neu.thought;
-    queue = neu.plan || [];
-    snapshot = { gesund: Number(ch.gesund), geld: Number(ch.geld), froh: Number(ch.froh), summary: neu.retrospective || '' };
-    speichereQueue(db, ch, queue, snapshot);
-    ch = ladeCharakter(db, characterId);
+    // Laufende Route? Dann KEIN neuer Plan – Schritt wiederholt sich, bis angekommen.
+    const laufendeRoute = (ch.current_action === 'walk_to' || ch.current_action === 'explore_street') ? ladeRoute(ch) : null;
+    if (laufendeRoute) {
+      const fort = laufendeRoute.zielPoi
+        ? { action: 'walk_to', target: laufendeRoute.zielPoi, detail: '' }
+        : { action: 'explore_street', target: null, detail: '' };
+      queue = [fort];
+      planQuelle = { source: 'queue', model: '', tokens: 0 };
+      gedanke = 'Weiter geht\u2019s – ein Fuß vor den anderen.';
+    } else {
+      const neu = await holeNeuenPlanMitMeta(db, deps, characterId, jetztMs);
+      gedanke = neu.thought;
+      planQuelle = neu.quelle || null;
+      queue = neu.plan || [];
+      // Plan-Event mit KI-Quelle in den Feed (Dev-Badges)
+      try {
+        db.prepare("INSERT INTO events (character_id, tick, type, payload_json, in_feed) VALUES (?, 0, 'plan', ?, 1)").run(
+          characterId,
+          JSON.stringify({ thought: neu.thought, retrospective: neu.retrospective, plan: queue, quelle: neu.quelle || null }));
+      } catch { /* feed darf nie crashen */ }
+      snapshot = { gesund: Number(ch.gesund), geld: Number(ch.geld), froh: Number(ch.froh), summary: neu.retrospective || '' };
+      speichereQueue(db, ch, queue, snapshot);
+      ch = ladeCharakter(db, characterId);
+    }
   }
   const schritt = queue.shift();
   if (!schritt) return { ok: false, grund: 'leerer_plan', notizen: [] };
@@ -531,6 +717,18 @@ async function tick(db, deps, characterId, jetztMs) {
   }
   const ergebnis = await schrittAusfuehren(db, deps, characterId, schritt, jetztMs);
   ch = ladeCharakter(db, characterId);
+  // Weiter unterwegs? Dann Schritt vorn wieder einreihen (Rest-Queue bleibt dahinter).
+  // Geprüft wird NACH der Ausführung – sonst ginge z. B. „consume“ nach „walk_to“ verloren.
+  try {
+    const nochUnterwegs = (ch.current_action === 'walk_to' || ch.current_action === 'explore_street') && ladeRoute(ch);
+    if (nochUnterwegs && (schritt.action === 'walk_to' || schritt.action === 'explore_street')) {
+      const q = ladeQueue(ch);
+      q.unshift(schritt);
+      let snap = null;
+      try { snap = JSON.parse(ch.plan_start_snapshot_json || 'null'); } catch { snap = null; }
+      speichereQueue(db, ch, q, snap);
+    }
+  } catch { /* queue bleibt wie sie ist */ }
   // Nächtliche Konsolidierung: schläft er daheim, läuft 1x/Tag der Nightly-Call
   let nightlyNotiz = null;
   if (ergebnis && ergebnis.ok && schritt.action === 'sleep' && ch.inside_poi === 'apartment' && deps.nightly !== false) {
@@ -547,7 +745,23 @@ async function tick(db, deps, characterId, jetztMs) {
   const neuEntdeckt = entdeckeUmgebung(db, ch);
   const notizen = (ergebnis.notizen || []).concat(neuEntdeckt.map((n) => `Neu entdeckt: ${n.name}.`));
   if (nightlyNotiz) notizen.push(nightlyNotiz);
-  return { ok: true, schritt, ergebnis, notizen, gedanke, nightly: nightlyNotiz };
+  // Aktive Route + Ziel für SSE/Frontend (Punkt 1): Waypoints + Rest + Zielpos
+  let routeInfo = null;
+  try {
+    const meta = ladeRoute(ch);
+    if (meta) {
+      const route = meta.route || [];
+      const idx = Math.min(meta.wegIndex || 0, Math.max(0, route.length - 1));
+      routeInfo = {
+        waypoints: route,
+        wegIndex: meta.wegIndex || 0,
+        restM: meta.restM || 0,
+        zielPoi: meta.zielPoi || null,
+        target_pos: route.length > 0 ? route[Math.min(idx + 1, route.length - 1)] : null,
+      };
+    }
+  } catch { routeInfo = null; }
+  return { ok: true, schritt, ergebnis, notizen, gedanke, nightly: nightlyNotiz, quelle: planQuelle, route: routeInfo };
 }
 
 module.exports = {
@@ -555,8 +769,10 @@ module.exports = {
   ladeCharakter, speichereCharakter, klammereCharakter,
   bekannteOrte, entdeckeUmgebung, ereignisSeit,
   dauerFuer, lasseZeitVergehen, heileDurchSchlaf,
+  SCHRITT_M, ANKUNFT_M, ladeRoute, speichereRoute, restDistanz,
+  waehleExploreZiel, starteRoute, geheSchritt,
   fuehreSchrittAus, fuehreSchrittAusTeil2, fuehreSchrittAusTeil3, schrittAusfuehren,
-  ladeQueue, speichereQueue, holeNeuenPlan, interruptGrund,
+  ladeQueue, speichereQueue, holeNeuenPlan, holeNeuenPlanMitMeta, interruptGrund,
   pruefeTod, tick,
 };
 

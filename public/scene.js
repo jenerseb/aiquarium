@@ -22,11 +22,13 @@ scene.fog = new THREE.Fog(0x0a0e13, 320, 900);
 const camera = new THREE.PerspectiveCamera(55, window.innerWidth / window.innerHeight, 0.5, 3000);
 camera.position.set(30, 25, 40);
 
-const hemi = new THREE.HemisphereLight(0xbdd3e6, 0x1c1a16, 0.9);
-scene.add(hemi);
-const sonne = new THREE.DirectionalLight(0xfff2dd, 1.6);
-sonne.position.set(120, 160, 60);
+const sonne = new THREE.DirectionalLight(0xfff2dd, 2.6);
+sonne.position.set(120, 220, 100);
 scene.add(sonne);
+const hemi = new THREE.HemisphereLight(0xbfd8ff, 0x4a453f, 1.4);
+scene.add(hemi);
+const umgebung = new THREE.AmbientLight(0xffffff, 0.45);
+scene.add(umgebung);
 const nachtBlau = new THREE.AmbientLight(0x24344d, 0.0);
 scene.add(nachtBlau);
 
@@ -49,15 +51,18 @@ function hamburgStunde() {
 }
 function istNachtStunde(h) { return h < 6 || h >= 21; }
 
-// Tag/Nacht-Licht: warm leuchtende Fenster bei Abend/Nacht, helle Stadt am Tag
+// Tag/Nacht-Licht: warm leuchtende Fenster bei Abend/Nacht, helle Stadt am Tag.
+// Helleres Setup (Punkt 5): nachts nie unter ~60 % dimmen, Stimmung über Farbe.
 function lichtAnpassen() {
   const h = hamburgStunde();
   const nacht = istNachtStunde(h);
   const daemmer = (h >= 6 && h < 9) || (h >= 17 && h < 21);
-  const tagFaktor = nacht ? 0.25 : daemmer ? 0.7 : 1.0;
-  sonne.intensity = 0.25 + 1.45 * tagFaktor;
-  hemi.intensity = 0.25 + 0.7 * tagFaktor;
-  nachtBlau.intensity = nacht ? 0.55 : 0.0;
+  const tagFaktor = nacht ? 0.6 : daemmer ? 0.85 : 1.0;
+  sonne.intensity = 1.1 + 1.5 * tagFaktor; // 1.1 nachts .. 2.6 tagsüber
+  sonne.color.setHex(nacht ? 0xffd9a0 : daemmer ? 0xffe7c4 : 0xfff2dd);
+  hemi.intensity = 0.7 + 0.7 * tagFaktor; // 0.7 nachts .. 1.4 tagsüber
+  umgebung.intensity = 0.45;
+  nachtBlau.intensity = nacht ? 0.35 : 0.0;
   const warm = nacht ? 0.06 : daemmer ? 0.03 : 0.0;
   scene.background.setRGB(0.039 + warm, 0.055 + warm * 0.5, 0.075);
   scene.fog.color.copy(scene.background);
@@ -79,6 +84,11 @@ function baueBoden() {
 }
 
 function linienBand(punkte, breite, farbe, y) {
+  // Flache Baender direkt in Welt-Metern: Mittelpunkt aus (x, z), keine
+  // Vorzeichen-Flips. Geometrie wird EINMALIG per geo.rotateX(-PI/2) in die
+  // XZ-Ebene gelegt, Ausrichtung danach nur noch per rotation.y (kein
+  // Euler-Mix aus rotation.x + rotation.z, der je nach Euler-Reihenfolge
+  // spiegelt/verdreht).
   const gruppe = new THREE.Group();
   const mat = new THREE.MeshBasicMaterial({ color: farbe });
   for (let i = 1; i < punkte.length; i += 1) {
@@ -89,9 +99,9 @@ function linienBand(punkte, breite, farbe, y) {
     const len = Math.hypot(dx, dz);
     if (len < 0.01) continue;
     const geo = new THREE.PlaneGeometry(len, breite);
+    geo.rotateX(-Math.PI / 2); // XZ-Ebene: lokal X -> Welt-X, lokal Y -> Welt -Z (symmetrisch, ok)
     const m = new THREE.Mesh(geo, mat);
-    m.rotation.x = -Math.PI / 2;
-    m.rotation.z = -Math.atan2(dz, dx);
+    m.rotation.y = -Math.atan2(dz, dx); // lange Achse auf (dx, dz) drehen
     m.position.set((x1 + x2) / 2, y, (z1 + z2) / 2);
     gruppe.add(m);
   }
@@ -103,8 +113,8 @@ function baueStrassen(strassen) {
     const pts = s.points || [];
     if (pts.length < 2) continue;
     const breit = s.kind === 'footway' || s.kind === 'path' ? 2.2 : 5.5;
-    scene.add(linienBand(pts, breit + 1.6, 0x232a30, 0.02)); // Gehweg
-    scene.add(linienBand(pts, breit, 0x101418, 0.05)); // Asphalt
+    scene.add(linienBand(pts, breit + 1.6, 0x232a30, 0.03)); // Gehweg (y = 0.03)
+    scene.add(linienBand(pts, breit, 0x101418, 0.05)); // Asphalt (y = 0.05)
   }
 }
 
@@ -113,14 +123,76 @@ function baueParks(parks) {
   for (const p of parks || []) {
     let mesh = null;
     if (p.kreis) {
-      mesh = new THREE.Mesh(new THREE.CircleGeometry(p.kreis.r, 28), mat);
-      mesh.rotation.x = -Math.PI / 2;
-      mesh.position.set(p.kreis.x, 0.08, p.kreis.z);
+      // Kreismitte direkt aus Welt-Metern (x, z), Fuss y = 0.03
+      const geo = new THREE.CircleGeometry(p.kreis.r, 28);
+
+// --- Straßennamen (Punkt 3): 1–2 Schilder pro Straße an den längsten Abschnitten ----------------
+// Gruppiert Segmente mit identischem Namen, legt das Sprite flach auf den Asphalt (y = 0.25),
+// ausgerichtet entlang des Straßenverlaufs.
+const STRASSEN_SCHILDER = new Set();
+
+function baueStrassennamen(strassen) {
+  for (const s of STRASSEN_SCHILDER) scene.remove(s);
+  STRASSEN_SCHILDER.clear();
+  const gruppen = new Map();
+  for (const s of strassen || []) {
+    const name = String((s && s.name) || '').trim();
+    if (!name) continue;
+    if (!gruppen.has(name)) gruppen.set(name, []);
+    gruppen.get(name).push(s);
+  }
+  for (const [name, liste] of gruppen) {
+    // Längste Abschnitte zuerst
+    const mitLaenge = liste.map((s) => {
+      const pts = s.points || [];
+      let len = 0;
+      for (let i = 1; i < pts.length; i += 1) len += Math.hypot(pts[i][0] - pts[i - 1][0], pts[i][1] - pts[i - 1][1]);
+      return { s, len };
+    }).sort((a, b) => b.len - a.len);
+    const anzahl = mitLaenge.length > 3 ? 2 : 1;
+    for (const { s } of mitLaenge.slice(0, anzahl)) {
+      const pts = s.points || [];
+      if (pts.length < 2) continue;
+      // Längstes Teilsegment dieses Abschnitts finden
+      let bi = 1;
+      let bLen = -1;
+      for (let i = 1; i < pts.length; i += 1) {
+        const l = Math.hypot(pts[i][0] - pts[i - 1][0], pts[i][1] - pts[i - 1][1]);
+        if (l > bLen) { bLen = l; bi = i; }
+      }
+      const [x1, z1] = pts[bi - 1];
+      const [x2, z2] = pts[bi];
+      const mx = (x1 + x2) / 2;
+      const mz = (z1 + z2) / 2;
+      const winkel = Math.atan2(z2 - z1, x2 - x1);
+      const schild = textSprite(name, false);
+      schild.material.rotation = 0;
+      // Flach auf den Asphalt: Sprite liegt → Plane mit Canvas-Textur
+      const ebene = new THREE.Mesh(
+        new THREE.PlaneGeometry(Math.min(34, 8 + name.length * 2.2), 3.4),
+        new THREE.MeshBasicMaterial({ map: schild.material.map, transparent: true, depthTest: true })
+      );
+      ebene.geometry.rotateX(-Math.PI / 2);
+      ebene.position.set(mx, 0.25, mz);
+      ebene.rotation.y = -winkel;
+      scene.add(ebene);
+      STRASSEN_SCHILDER.add(ebene);
+      scene.remove(schild);
+    }
+  }
+}
+
+      geo.rotateX(-Math.PI / 2); // Kreis liegt in XZ, kein Spiegel (symmetrisch)
+      mesh = new THREE.Mesh(geo, mat);
+      mesh.position.set(p.kreis.x, 0.03, p.kreis.z);
     } else if (Array.isArray(p.polygon) && p.polygon.length >= 3) {
-      const form = new THREE.Shape(p.polygon.map(([x, z]) => new THREE.Vector2(x, z)));
-      mesh = new THREE.Mesh(new THREE.ShapeGeometry(form), mat);
-      mesh.rotation.x = -Math.PI / 2;
-      mesh.position.y = 0.08;
+      // Polygon: shapeY = -worldZ (Pflicht-Mapping wie bei Gebaeuden),
+      // danach EINMALIG geo.rotateX(-PI/2); Grundplatte exakt y = 0.03.
+      const form = new THREE.Shape(p.polygon.map(([x, z]) => new THREE.Vector2(x, -z)));
+      const geo = new THREE.ShapeGeometry(form);
+      geo.rotateX(-Math.PI / 2);
+      mesh = new THREE.Mesh(geo, mat);
+      mesh.position.set(0, 0.03, 0);
     }
     if (mesh) scene.add(mesh);
   }
@@ -174,15 +246,27 @@ function baueGebaeude(buildings) {
     let minX = Infinity;
     let maxX = -Infinity;
     for (const [x] of fp) { minX = Math.min(minX, x); maxX = Math.max(maxX, x); }
-    const form = new THREE.Shape(fp.map(([x, z]) => new THREE.Vector2(x, z)));
+    // PFLICHT-MAPPING: shapeX = worldX, shapeY = -worldZ.
+    // Nach rotateX(-PI/2) gilt shapeY -> -worldZ, extrudeDepth 0..h -> +worldY 0..h.
+    // Die Unterkante liegt damit exakt auf y = 0 -> KEIN mesh.position.y-Versatz!
+    const form = new THREE.Shape();
+    form.moveTo(fp[0][0], -fp[0][1]);
+    for (let i = 1; i < fp.length; i += 1) form.lineTo(fp[i][0], -fp[i][1]);
     const geo = new THREE.ExtrudeGeometry(form, { depth: h, bevelEnabled: false });
-    geo.rotateX(-Math.PI / 2); // XZ-Grundriss, Höhe nach +y
+    geo.rotateX(-Math.PI / 2);
+    // Verifikation: Boden exakt y = 0, Oberkante exakt y = height
+    geo.computeBoundingBox();
+    const bb = geo.boundingBox;
+    if (Math.abs(bb.min.y) > 0.001 || Math.abs(bb.max.y - h) > 0.001) {
+      console.warn(`[gebäude ${b.id}] bbox unerwartet: min.y=${bb.min.y.toFixed(3)} max.y=${bb.max.y.toFixed(3)} (erwartet 0 / ${h})`);
+    }
     const mat = new THREE.MeshLambertMaterial({ map: fassadenTextur(maxX - minX, h) });
     const mesh = new THREE.Mesh(geo, mat);
-    mesh.position.y = h; // Extrude läuft nach Rotation nach unten → anheben
-    const dach = new THREE.Mesh(new THREE.ShapeGeometry(form), dachMat);
-    dach.rotation.x = -Math.PI / 2;
-    dach.position.y = h + 0.05;
+    mesh.position.set(0, 0, 0); // exakt auf dem Boden, kein Schweben
+    const dachGeo = new THREE.ShapeGeometry(form);
+    dachGeo.rotateX(-Math.PI / 2);
+    const dach = new THREE.Mesh(dachGeo, dachMat);
+    dach.position.set(0, h + 0.05, 0);
     const gruppe = new THREE.Group();
     gruppe.add(mesh, dach);
     gruppe.userData.gebaeudeId = b.id;
@@ -215,8 +299,89 @@ function setzeIndoorTransparenz(gebaeudeId) {
 }
 
 
-// --- POI-Schilder --------------------------------------------------------------------------
-// Bekannte POIs: Namensschild. Unbekannte: dezentes „?".
+// --- POI-Marker über den Dächern --------------------------------------------------------------------------
+// Jeder POI: farbiger Pin + schwebendes Label ÜBER der Dachkante + Leuchtlinie bis y = 0,
+// damit kein Marker von Häuserwänden verdeckt wird (Punkt 2).
+// Entdeckt: voller Name. Unentdeckt (Fog of War): „?“ (+ Name in Klammern nur im Dev-Modus).
+function gebaeudeHoeheBei(x, z) {
+  let best = null;
+  let bestD = 60;
+  const liste = (Z.karte && Z.karte.buildings) || [];
+  for (const b of liste) {
+    const fp = b.footprint;
+    if (!Array.isArray(fp) || fp.length < 3) continue;
+    let sx = 0;
+    let sz = 0;
+    for (const p of fp) { sx += p[0]; sz += p[1]; }
+    const d = Math.hypot(sx / fp.length - x, sz / fp.length - z);
+    if (d < bestD) { bestD = d; best = b; }
+  }
+  return best ? Math.max(4, Math.min(30, Number(best.height) || 14)) : 14;
+}
+
+function pinMesh(farbe, deckkraft) {
+  const gruppe = new THREE.Group();
+  const mat = new THREE.MeshBasicMaterial({ color: farbe, transparent: deckkraft < 1, opacity: deckkraft });
+  const kegel = new THREE.Mesh(new THREE.ConeGeometry(1.4, 3.2, 12), mat);
+  kegel.rotation.x = Math.PI; // Spitze nach unten
+  gruppe.add(kegel);
+  const stange = new THREE.Mesh(new THREE.CylinderGeometry(0.18, 0.18, 1, 8), mat);
+  stange.position.y = 2.2;
+  gruppe.add(stange);
+  return gruppe;
+}
+
+function bauMarkerGruppe(p) {
+  const bekannt = Number(p.discovered) === 1;
+  const gruppe = new THREE.Group();
+  const hoehe = gebaeudeHoeheBei(Number(p.pos_x), Number(p.pos_z)) + 4.5;
+  const farbe = bekannt ? 0xf5b04c : 0x8b98ab;
+  const pin = pinMesh(farbe, bekannt ? 1 : 0.55);
+  pin.position.y = hoehe;
+  gruppe.add(pin);
+  // Dünne Leuchtlinie/Pin bis zum Boden (y = 0)
+  const linienGeo = new THREE.BufferGeometry().setFromPoints([
+    new THREE.Vector3(0, 0, 0), new THREE.Vector3(0, hoehe, 0),
+  ]);
+  const linie = new THREE.Line(linienGeo, new THREE.LineBasicMaterial({ color: farbe, transparent: true, opacity: bekannt ? 0.8 : 0.4 }));
+  gruppe.add(linie);
+  const labelText = bekannt ? p.name : (DEV ? `? (${p.name})` : '?');
+  const schild = textSprite(labelText, bekannt);
+  schild.position.y = hoehe + 3.4;
+  gruppe.add(schild);
+  gruppe.position.set(Number(p.pos_x), 0, Number(p.pos_z));
+  gruppe.userData.poiId = p.id;
+  return gruppe;
+}
+
+function bauePoiSchilder(pois) {
+  for (const [, sp] of Z.poiSchilder) scene.remove(sp);
+  Z.poiSchilder.clear();
+  Z.pois.clear();
+  for (const p of pois || []) {
+    Z.pois.set(p.id, p);
+    const gruppe = bauMarkerGruppe(p);
+    scene.add(gruppe);
+    Z.poiSchilder.set(p.id, gruppe);
+  }
+}
+
+function aktualisiereSchilder(pois) {
+  for (const p of pois || []) {
+    const alt = Z.pois.get(p.id);
+    Z.pois.set(p.id, p);
+    const wurdeBekannt = Number(p.discovered) === 1 && !(alt && Number(alt.discovered) === 1);
+    if (wurdeBekannt && Z.poiSchilder.has(p.id)) {
+      const alteGruppe = Z.poiSchilder.get(p.id);
+      scene.remove(alteGruppe);
+      const neu = bauMarkerGruppe(p);
+      scene.add(neu);
+      Z.poiSchilder.set(p.id, neu);
+    }
+  }
+}
+
+// Sprite-Label (Canvas → 3D)
 function textSprite(text, gross) {
   const c = document.createElement('canvas');
   const g = c.getContext('2d');
@@ -241,39 +406,8 @@ function textSprite(text, gross) {
   return sp;
 }
 
-function bauePoiSchilder(pois) {
-  for (const [, sp] of Z.poiSchilder) scene.remove(sp);
-  Z.poiSchilder.clear();
-  Z.pois.clear();
-  for (const p of pois || []) {
-    Z.pois.set(p.id, p);
-    const bekannt = Number(p.discovered) === 1;
-    const sp = textSprite(bekannt ? p.name : '?', bekannt);
-    sp.position.set(Number(p.pos_x), 9, Number(p.pos_z));
-    sp.userData.poiId = p.id;
-    scene.add(sp);
-    Z.poiSchilder.set(p.id, sp);
-  }
-}
-
-function aktualisiereSchilder(pois) {
-  for (const p of pois || []) {
-    const alt = Z.pois.get(p.id);
-    Z.pois.set(p.id, p);
-    const wurdeBekannt = Number(p.discovered) === 1 && !(alt && Number(alt.discovered) === 1);
-    if (wurdeBekannt && Z.poiSchilder.has(p.id)) {
-      const sp = Z.poiSchilder.get(p.id);
-      scene.remove(sp);
-      const neu = textSprite(p.name, true);
-      neu.position.set(Number(p.pos_x), 9, Number(p.pos_z));
-      neu.userData.poiId = p.id;
-      scene.add(neu);
-      Z.poiSchilder.set(p.id, neu);
-    }
-  }
-}
-
 // --- Figur (Kiezling) -------------------------------------------------------------------------
+// Vorderseite = +Z (Blickrichtung bei rotation.y = atan2(dx, dz)). Augen auf +Z.
 function baueFigur() {
   const g = new THREE.Group();
   const haut = new THREE.MeshLambertMaterial({ color: 0xd9a37e });
@@ -281,6 +415,16 @@ function baueFigur() {
   const hose = new THREE.MeshLambertMaterial({ color: 0x23262b });
   const kopf = new THREE.Mesh(new THREE.SphereGeometry(0.42, 20, 16), haut);
   kopf.position.y = 2.05;
+  // Zwei Augen auf der Vorderseite (+Z): weiße Augäpfel + dunkle Pupillen (Punkt 4)
+  const weissMat = new THREE.MeshBasicMaterial({ color: 0xffffff });
+  const pupilleMat = new THREE.MeshBasicMaterial({ color: 0x14181f });
+  for (const seite of [-1, 1]) {
+    const apfel = new THREE.Mesh(new THREE.SphereGeometry(0.09, 12, 10), weissMat);
+    apfel.position.set(seite * 0.16, 2.12, 0.35);
+    const pupille = new THREE.Mesh(new THREE.SphereGeometry(0.045, 10, 8), pupilleMat);
+    pupille.position.set(seite * 0.16, 2.12, 0.42);
+    g.add(apfel, pupille);
+  }
   const rumpf = new THREE.Mesh(new THREE.CylinderGeometry(0.34, 0.4, 1.0, 12), jacke);
   rumpf.position.y = 1.25;
   const beinL = new THREE.Mesh(new THREE.CylinderGeometry(0.13, 0.15, 0.8, 8), hose);
@@ -301,30 +445,50 @@ function baueFigur() {
   return g;
 }
 
-// Weiche Bewegung: Figur läuft in Laufrichtung, Position wird pro Frame
-// an das Server-Ziel herangeführt (kein Springen).
+// Weiche Bewegung (Punkt 1): Figur läuft entlang der Server-Waypoints zur
+// Server-Position. Blickrichtung = aktuelle Bewegungsrichtung atan2(dx, dz).
 const FIGUR_ZIEL = new THREE.Vector3(-3, 0, -68);
 let FIGUR_HEADING = 0;
+let FIGUR_ROUTE = null; // { waypoints: [{x, z}], wegIndex }
 function figurZielSetzen(x, z, heading) {
   FIGUR_ZIEL.set(Number(x) || 0, 0, Number(z) || 0);
   if (Number.isFinite(Number(heading))) FIGUR_HEADING = Number(heading);
 }
+function figurRouteSetzen(route) {
+  if (route && Array.isArray(route.waypoints) && route.waypoints.length > 0) {
+    FIGUR_ROUTE = { waypoints: route.waypoints, wegIndex: route.wegIndex || 0 };
+  } else {
+    FIGUR_ROUTE = null;
+  }
+}
 function figurUpdaten(dt) {
   if (!Z.figur) return;
   const f = Z.figur;
-  const dx = FIGUR_ZIEL.x - f.position.x;
-  const dz = FIGUR_ZIEL.z - f.position.z;
+  // Liegt eine Route vor, zielen wir auf den nächsten unbesuchten Waypoint
+  // (weiche Interpolation statt Springen). Sonst direkt aufs Server-Ziel.
+  let zx = FIGUR_ZIEL.x;
+  let zz = FIGUR_ZIEL.z;
+  if (FIGUR_ROUTE) {
+    const wp = FIGUR_ROUTE.waypoints;
+    let i = FIGUR_ROUTE.wegIndex || 0;
+    while (i < wp.length && Math.hypot(wp[i].x - f.position.x, wp[i].z - f.position.z) < 1.0) i += 1;
+    FIGUR_ROUTE.wegIndex = i;
+    if (i < wp.length) { zx = wp[i].x; zz = wp[i].z; }
+    else FIGUR_ROUTE = null;
+  }
+  const dx = zx - f.position.x;
+  const dz = zz - f.position.z;
   const dist = Math.hypot(dx, dz);
   if (dist > 0.05) {
-    const schritt = Math.min(dist, 1.3 * dt); // 1,3 m/s wie Engine
+    const schritt = Math.min(dist, 1.4 * dt); // 1,4 m/s wie Engine
     f.position.x += (dx / dist) * schritt;
     f.position.z += (dz / dist) * schritt;
-    f.rotation.y = Math.atan2(dx, dz); // Blick in Laufrichtung
+    f.rotation.y = Math.atan2(dx, dz); // Blick sauber in Laufrichtung
     // leichtes Wippen beim Gehen
     f.position.y = Math.abs(Math.sin(performance.now() / 180)) * 0.05;
   } else {
     f.position.y *= 0.9;
-    if (Number.isFinite(FIGUR_HEADING)) f.rotation.y = FIGUR_HEADING;
+    if (Number.isFinite(FIGUR_HEADING) && !FIGUR_ROUTE) f.rotation.y = FIGUR_HEADING;
   }
 }
 
@@ -386,16 +550,14 @@ function starteBlende(nach, jetzt) {
   };
   let nachPose;
   if (nach === 'overview') {
-    // Übergangsziel: senkrecht über der Figur → Figur exakt in Bildmitte,
-    // danach frei schwenkbar um (0,0,0). Start-Frame = exakte Fortsetzung.
+    // Übergangsziel: senkrecht über der Figur → Figur exakt in Bildmitte (Punkt 6:
+    // overviewTarget startet auf der Figur, danach frei über den Kiez schiebbar).
     const f = Z.figur ? Z.figur.position : new THREE.Vector3(0, 0, 0);
-    const uebergang = new THREE.Vector3(f.x, 0, f.z);
-    Z.over.ziel.copy(uebergang.length() > 1 ? new THREE.Vector3(0, 0, 0) : uebergang);
-    // Hinweis: Ziel wird SOFORT auf Kiez-Mitte gelegt, Pose startet exakt über der Figur.
-    nachPose = { position: new THREE.Vector3(f.x, 230, f.z), lookAt: new THREE.Vector3(f.x, 0, f.z), up: new THREE.Vector3(0, 0, -1) };
-    // Smootherstep-Variante: up dreht weich von +y nach -z (liegt Fotografie-Trick:
-    // exakt senkrecht ginge nicht mit up=+y, daher kleiner Tilt + sanfter Roll).
-    nachPose.position.x += 0.01;
+    Z.over.ziel.set(f.x, 0, f.z);
+    Z.over.dist = 260;
+    Z.over.theta = 0.01;
+    Z.over.phi = 1.25;
+    nachPose = { position: new THREE.Vector3(f.x + 0.01, 230, f.z), lookAt: new THREE.Vector3(f.x, 0, f.z), up: new THREE.Vector3(0, 0, -1) };
   } else {
     // Zurück zu pilot: theta ±40° zum Blickwinkel, kürzere Seite gewinnt
     const figTheta = Z.figur ? Z.figur.rotation.y : 0;
@@ -431,13 +593,12 @@ function kameraUpdaten(dt, jetzt) {
       camera.up.copy(B.nach.up);
       camera.lookAt(_lookAt);
       if (B.modus === 'overview') {
-        // Ab jetzt frei um Kiez-Mitte: Spherical aus der exakten End-Pose ableiten
-        const z = new THREE.Vector3(0, 0, 0);
-        Z.over.ziel.copy(z);
-        const off = camera.position.clone().sub(z);
-        Z.over.dist = THREE.MathUtils.clamp(off.length(), 60, 700);
+        // Ab jetzt frei um das gemerkte Ziel (Figur-Position beim Wechsel):
+        // Spherical aus der exakten End-Pose ableiten (kein Snap).
+        const off = camera.position.clone().sub(Z.over.ziel);
+        Z.over.dist = THREE.MathUtils.clamp(off.length(), 25, 450);
         Z.over.theta = Math.atan2(off.x, off.z);
-        Z.over.phi = THREE.MathUtils.clamp(Math.asin(THREE.MathUtils.clamp(off.y / off.length(), -1, 1)), 0.35, 1.45);
+        Z.over.phi = THREE.MathUtils.clamp(Math.asin(THREE.MathUtils.clamp(off.y / off.length(), -1, 1)), 0.18, 1.52);
       }
       Z.blende = null;
     }
@@ -477,24 +638,67 @@ function bindeSteuerung() {
   const el = renderer.domElement;
   let drag = null;
   el.style.touchAction = 'none';
+  // Panning im overview-Modus (Punkt 6): Rechts-Drag oder Shift+Links-Drag
+  // verschiebt das Fokus-Ziel flach über XZ (geklemmt ±350 m). Touch: 2 Finger.
+  const PAN_GRENZE = 350;
+  function panUm(dxPx, dyPx) {
+    const sk = Z.over.dist / 500; // weiter weg = schneller schieben
+    const vor = new THREE.Vector3();
+    camera.getWorldDirection(vor);
+    vor.y = 0;
+    if (vor.lengthSq() < 0.001) vor.set(0, 0, -1);
+    vor.normalize();
+    const rechts = new THREE.Vector3().crossVectors(vor, new THREE.Vector3(0, 1, 0)).normalize();
+    Z.over.ziel.addScaledVector(rechts, -dxPx * sk);
+    Z.over.ziel.addScaledVector(vor, dyPx * sk);
+    Z.over.ziel.x = THREE.MathUtils.clamp(Z.over.ziel.x, -PAN_GRENZE, PAN_GRENZE);
+    Z.over.ziel.z = THREE.MathUtils.clamp(Z.over.ziel.z, -PAN_GRENZE, PAN_GRENZE);
+    Z.over.ziel.y = 0;
+  }
   el.addEventListener('pointerdown', (e) => {
-    drag = { x: e.clientX, y: e.clientY };
-    el.setPointerCapture(e.pointerId);
+    drag = { x: e.clientX, y: e.clientY, pan: (e.button === 2) || e.shiftKey };
+    try { el.setPointerCapture(e.pointerId); } catch { /* egal */ }
   });
   el.addEventListener('pointermove', (e) => {
     if (!drag || Z.blende) return;
     const dx = e.clientX - drag.x;
     const dy = e.clientY - drag.y;
-    drag = { x: e.clientX, y: e.clientY };
+    drag = { x: e.clientX, y: e.clientY, pan: drag.pan || e.shiftKey };
     if (Z.modus === 'pilot') {
       Z.pilot.theta -= dx * 0.005;
       // Pitch bleibt konstant (~10°): kein Hoch/Runter beim Drehen
+    } else if (drag.pan) {
+      panUm(dx, dy);
     } else {
+      // Freies Orbit-Drehen & Neigen (Punkt 6): yaw 360°, pitch 0.18..1.52
       Z.over.theta -= dx * 0.005;
-      Z.over.phi = THREE.MathUtils.clamp(Z.over.phi + dy * 0.003, 0.35, 1.45);
+      Z.over.phi = THREE.MathUtils.clamp(Z.over.phi + dy * 0.003, 0.18, 1.52);
     }
   });
-  el.addEventListener('pointerup', () => { drag = null; });
+  const dragEnde = () => { drag = null; };
+  el.addEventListener('pointerup', dragEnde);
+  el.addEventListener('pointercancel', dragEnde);
+  el.addEventListener('contextmenu', (e) => e.preventDefault()); // Rechts-Drag = Pan
+  // WASD/Pfeile schieben das overview-Ziel (Punkt 6)
+  window.addEventListener('keydown', (e) => {
+    if (Z.modus !== 'overview' || Z.blende) return;
+    const schritt = Math.max(4, Z.over.dist * 0.05);
+    const taste = e.key.toLowerCase();
+    if (taste === 'w' || taste === 'arrowup') { Z.over.ziel.z -= schritt; e.preventDefault(); }
+    else if (taste === 's' || taste === 'arrowdown') { Z.over.ziel.z += schritt; e.preventDefault(); }
+    else if (taste === 'a' || taste === 'arrowleft') { Z.over.ziel.x -= schritt; e.preventDefault(); }
+    else if (taste === 'd' || taste === 'arrowright') { Z.over.ziel.x += schritt; e.preventDefault(); }
+    else return;
+    Z.over.ziel.x = THREE.MathUtils.clamp(Z.over.ziel.x, -PAN_GRENZE, PAN_GRENZE);
+    Z.over.ziel.z = THREE.MathUtils.clamp(Z.over.ziel.z, -PAN_GRENZE, PAN_GRENZE);
+    Z.over.ziel.y = 0;
+  });
+  // 2-Finger-Drag auf Touch = Panning
+  el.addEventListener('touchmove', (e) => {
+    if (Z.modus !== 'overview' || Z.blende || e.touches.length !== 2) return;
+    e.preventDefault();
+    panUm(-2, 0);
+  }, { passive: false });
   el.addEventListener('wheel', (e) => {
     e.preventDefault();
     if (Z.blende) return;
@@ -503,8 +707,9 @@ function bindeSteuerung() {
       Z.pilot.dist = THREE.MathUtils.clamp(Z.pilot.dist * f, PILOT_MIN, PILOT_MAX + 20);
       if (Z.pilot.dist > PILOT_MAX) setzeModusButton('overview');
     } else {
-      Z.over.dist = THREE.MathUtils.clamp(Z.over.dist * f, 60, 700);
-      if (Z.over.dist <= 62 && e.deltaY < 0) setzeModusButton('pilot');
+      // Zoom 25..450 m (Punkt 6); erst unter 25 m geht es zurück zu pilot
+      Z.over.dist = THREE.MathUtils.clamp(Z.over.dist * f, 25, 450);
+      if (Z.over.dist <= 25) setzeModusButton('pilot');
     }
   }, { passive: false });
 
@@ -574,14 +779,34 @@ function hudAktualisieren() {
   }
 }
 
-function feedEintrag(typ, text, zeit) {
+function feedEintrag(typ, text, zeit, quelle) {
   const liste = $('feed');
   if (!liste) return;
   const d = document.createElement('div');
   d.className = `eintrag ${typ}`;
-  d.innerHTML = `${esc(text)}<small>${esc(zeit || '')}</small>`;
+  d.innerHTML = `${esc(text)}<small>${esc(zeit || '')}${DEV && quelle ? ' ' + badgeHtml(quelle) : ''}</small>`;
   liste.prepend(d);
   while (liste.children.length > 60) liste.lastChild.remove();
+}
+
+// Dev-Badges (Punkt 7, nur ?mode=dev): [gemma] [free] [148 tok] / [plan-queue] / [fallback]
+// Regel: Teil zwischen „/" und „-" (Fallback: vor erstem „-").
+function badgeHtml(quelle) {
+  if (!quelle || !quelle.source) return '';
+  const badges = [];
+  if (quelle.source === 'queue') badges.push('plan-queue');
+  else if (quelle.source === 'fallback') badges.push('fallback');
+  else if (quelle.source === 'nightly') badges.push('nightly');
+  if (quelle.model) {
+    const slug = String(quelle.model);
+    const nachSlash = slug.includes('/') ? slug.split('/').pop() : slug;
+    const kurz = (nachSlash.split('-')[0] || nachSlash).toLowerCase() || '?';
+    badges.push(kurz);
+    if (slug.includes(':free')) badges.push('free');
+  }
+  if (quelle.tokens) badges.push(`${quelle.tokens} tok`);
+  if (badges.length === 0) return '';
+  return badges.map((b) => `[${esc(b)}]`).join(' ');
 }
 
 function staatAnwenden(s) {
@@ -589,6 +814,7 @@ function staatAnwenden(s) {
   if (!s || !s.charakter) return;
   const ch = s.charakter;
   figurZielSetzen(ch.pos_x, ch.pos_z, ch.heading_rad);
+  figurRouteSetzen(s.route || null); // Waypoints für weiche Interpolation (Punkt 1)
   if (ch.inside_poi) {
     // Indoor: passendes Gebäude transparent (entdeckt + räumlich nah)
     const poi = (s.pois || []).find((p) => p.id === ch.inside_poi);
@@ -751,6 +977,7 @@ async function initialLaden() {
     baueStrassen(karte.streets);
     baueParks(karte.parks);
     baueGebaeude(karte.buildings);
+    baueStrassennamen(karte.streets);
     // Initial-Kamera: pilot, +40° rechts vom Blickwinkel (Start-Frame, siehe Kamera-Kapitel)
     const h0 = 0; // Blickrichtung initial: +z (wird per State überschrieben)
     Z.pilot.theta = h0 + PILOT_START_Versatz;
@@ -772,8 +999,8 @@ async function initialLaden() {
     for (const e of (s.feed || []).slice(0, 8).reverse()) {
       try {
         const p = JSON.parse(e.payload_json || '{}');
-        const text = (p.notizen && p.notizen.join(' ')) || e.type;
-        feedEintrag(e.type.startsWith('nacht') || e.type === 'nightly' ? 'traum' : 'gedanke', String(text).slice(0, 200), e.created_at);
+        const text = (p.notizen && p.notizen.join(' ')) || p.thought || e.type;
+        feedEintrag(e.type.startsWith('nacht') || e.type === 'nightly' ? 'traum' : 'gedanke', String(text).slice(0, 200), e.created_at, p.quelle || null);
       } catch { /* ein Eintrag darf nie alles kaputt machen */ }
     }
   } catch (err) {
@@ -787,8 +1014,9 @@ async function initialLaden() {
         const ev = JSON.parse(msg.data);
         if (ev.typ === 'tick') {
           if (ev.gedanke) Z.gedanke = ev.gedanke;
-          if (ev.schritt) feedEintrag('gedanke', `${ev.schritt.action}${ev.schritt.target ? ' → ' + ev.schritt.target : ''}${ev.schritt.detail ? ': ' + ev.schritt.detail : ''}`, '');
-          for (const n of (ev.notizen || [])) feedEintrag('', String(n).slice(0, 200), '');
+          if (ev.route) figurRouteSetzen(ev.route);
+          if (ev.schritt) feedEintrag('gedanke', `${ev.schritt.action}${ev.schritt.target ? ' → ' + ev.schritt.target : ''}${ev.schritt.detail ? ': ' + ev.schritt.detail : ''}`, '', ev.quelle || null);
+          for (const n of (ev.notizen || [])) feedEintrag('', String(n).slice(0, 200), '', null);
           // Frischen State holen (Figur-Position, Werte, POIs)
           ladeJson('/api/state').then(staatAnwenden).catch(() => {});
         }
