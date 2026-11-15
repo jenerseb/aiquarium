@@ -155,8 +155,41 @@ function validateDecision(raw, opts = {}) {
   return { ok: failures.length === 0, action, thought, musing, failures };
 }
 
+function validatePlan(obj, intents) {
+  const failures = [];
+  if (!obj || typeof obj !== 'object') return { ok: false, failures: ['json'], plan: [] };
+  const thought = typeof obj.thought === 'string' ? obj.thought.trim() : '';
+  const retrospective = typeof obj.retrospective === 'string' ? obj.retrospective.trim() : '';
+  const plan = Array.isArray(obj.plan) ? obj.plan : null;
+  if (!thought) failures.push('thought_leer');
+  else if (wordCount(thought) > 20) failures.push('thought_lang');
+  if (!plan) failures.push('plan_fehlend');
+  else {
+    if (plan.length < 2 || plan.length > 4) failures.push('plan_laenge');
+    const erlaubt = Array.isArray(intents) && intents.length > 0 ? intents : null;
+    let leaveNoteN = 0;
+    plan.forEach((s, i) => {
+      if (!s || typeof s !== 'object') { failures.push('schritt_' + i + '_kein_objekt'); return; }
+      const action = typeof s.action === 'string' ? s.action.trim() : '';
+      if (!action) { failures.push('schritt_' + i + '_ohne_action'); return; }
+      if (erlaubt && !erlaubt.includes(action)) failures.push('schritt_' + i + '_intent_verboten:' + action);
+      if (action === 'walk_to' && !(typeof s.target === 'string' && s.target.trim())) {
+        failures.push('schritt_' + i + '_walk_to_ohne_ziel');
+      }
+      if (action === 'leave_note') leaveNoteN += 1;
+    });
+    if (leaveNoteN > 1) failures.push('leave_note_max_1');
+  }
+  const sauber = (plan || []).slice(0, 4).map((s) => ({
+    action: String(s.action || '').trim(),
+    target: typeof s.target === 'string' && s.target.trim() ? s.target.trim() : null,
+    detail: typeof s.detail === 'string' ? s.detail.trim().slice(0, 280) : '',
+  }));
+  return { ok: failures.length === 0, failures, thought, retrospective, plan: sauber };
+}
+
 module.exports = {
-  validateDecision, jaccard, maxSimilarity, wordCount, words,
+  validateDecision, validatePlan, jaccard, maxSimilarity, wordCount, words,
   hasCJK, englishHits, hasRecentExclamation, beginntMitOrt, hatObjektEroeffnung,
   benenntNurBeduerfnis,
 };
