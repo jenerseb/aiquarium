@@ -81,7 +81,7 @@ async function main() {
   // --- Punkte 2–6: scene.js-Stichworte ---
   const szene = fs.readFileSync(path.join(__dirname, '..', 'public', 'scene.js'), 'utf8');
   const stich = [
-    'bauMarkerGruppe', 'hoehe + 3.4', '? (${p.name})', // 2: Marker + Fog + Dev-Name
+    'bauMarkerGruppe', 'hoehe + 3.4', 'textSpriteZweizeilig', // 2: Marker + Fog + Dev-Zweitzeile
     'baueStrassennamen', 'ebene.rotation.y = -winkel', // 3: Straßennamen
     'pupille', 'apfel.position.set(seite', // 4: Augen
     '220, 100', '2.6', '0xbfd8ff', '0xffffff, 0.45', // 5: Licht

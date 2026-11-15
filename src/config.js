@@ -106,52 +106,78 @@ const MEMORY = {
   decayLong: 0.03,
 };
 
-// ---- OpenRouter-Routing ----
-// Alltag (günstig / Free): gemma + glm-flash + nemotron Free.
-// Nacht (1×/Tag beim Schlafen): mimo-v2.6-pro.
+// ---- OpenRouter-Routing: einheitliche { primary, fallback }-Paare pro Rolle ----
+// Dev-Modus (AIQUARIUM_DEV !== '0', Standard): überall :free-Modelle (0,00 €).
+// Live (AIQUARIUM_DEV === '0'): alltag primary free → fallback paid, Rest fix.
 const OPENROUTER_BASE = 'https://openrouter.ai/api/v1/chat/completions';
 
 const MODEL = {
   baseUrl: process.env.AIQUARIUM_BASE_URL || OPENROUTER_BASE,
-  // Default-Modell für Tagesbetrieb
-  name: process.env.AIQUARIUM_MODEL || 'google/gemma-4-26b',
+  // Default-Modell für Tagesbetrieb (wird von SLOTS.alltag.primary gespiegelt)
+  name: process.env.AIQUARIUM_MODEL || 'google/gemma-4-26b-a4b-it:free',
   timeoutMs: 45000,
   temperature: 0.7,
   retryTemperature: 0.3,
-  maxTokens: 600,
+  maxTokens: 1200,
   maxWords: 20,
   maxWordsMusing: 10,
   jaccardMax: 0.65,
   exclamationWindow: 5,
-  reasoningExclude: true,
+  reasoningExclude: false,
 };
 
 const SLOTS = {
-  dev: { model: 'nvidia/nemotron-3-nano-30b-a3b:free', reasoningExclude: true },
-  primary: { model: process.env.AIQUARIUM_MODEL || 'google/gemma-4-26b', reasoningExclude: true },
-  fallback: { model: 'z-ai/glm-5.3-flash', reasoningExclude: true },
-  alltagFree: [
-    'google/gemma-4-26b',
-    'z-ai/glm-5.3-flash',
-    'nvidia/nemotron-3-nano-30b-a3b:free',
-  ],
-  arbiter: { model: 'z-ai/glm-5.3-flash', reasoningExclude: true },
-  nightly: { model: 'xiaomi/mimo-v2.6-pro', reasoningExclude: false },
+  // Aktiv solange AIQUARIUM_DEV !== '0' (garantiert 0,00 € beim Testen)
+  dev: {
+    primary: { model: process.env.AIQUARIUM_DEV_MODEL || 'nvidia/nemotron-3-nano-30b-a3b:free', reasoningExclude: true, maxTokens: 1800 },
+    fallback: { model: 'google/gemma-4-26b-a4b-it:free', reasoningExclude: false, maxTokens: 1200 },
+  },
+  // Live-Alltag (AIQUARIUM_DEV=0): erst kostenlose Gemma-Variante testen, bei Rate-Limit/Fehler auf Paid-Gemma ausweichen
+  alltag: {
+    primary: { model: process.env.AIQUARIUM_MODEL || 'google/gemma-4-26b-a4b-it:free', reasoningExclude: false, maxTokens: 1200 },
+    fallback: { model: process.env.AIQUARIUM_FALLBACK_MODEL || 'google/gemma-4-26b', reasoningExclude: false, maxTokens: 1200 },
+  },
+  // Welt-Schiedsrichter (Ladenpreise, Job-Zusagen): einheitliches primary/fallback-Paar zum schnellen Tauschen
+  arbiter: {
+    primary: { model: process.env.AIQUARIUM_ARBITER_MODEL || 'z-ai/glm-5.3-flash', reasoningExclude: false, maxTokens: 900 },
+    fallback: { model: process.env.AIQUARIUM_ARBITER_FALLBACK || 'z-ai/glm-5.3-flash', reasoningExclude: false, maxTokens: 900 },
+  },
+  // Nächtliche Schlaf-Konsolidierung (1x pro Tag): einheitliches primary/fallback-Paar
+  nightly: {
+    primary: { model: process.env.AIQUARIUM_NIGHTLY_MODEL || 'xiaomi/mimo-v2.6-pro', reasoningExclude: false, maxTokens: 1400 },
+    fallback: { model: process.env.AIQUARIUM_NIGHTLY_FALLBACK || 'xiaomi/mimo-v2.6-pro', reasoningExclude: false, maxTokens: 1400 },
+  },
 };
 
+// Dev-Prio: AIQUARIUM_DEV !== '0' (Standard an → 0,00 €). Live nur mit explizit '0'.
+function devPrioAn() {
+  return String(process.env.AIQUARIUM_DEV ?? '1') !== '0';
+}
+
+// Zentraler Helper: Rolle → { primary, fallback }.
+// Dev-Modus: IMMER das kostenlose dev-Paar (nie versehentlich paid).
+// Live: das jeweilige Rollen-Paar.
+function getRoleSlots(role) {
+  if (devPrioAn()) return SLOTS.dev;
+  if (role === 'arbiter') return SLOTS.arbiter;
+  if (role === 'nightly') return SLOTS.nightly;
+  return SLOTS.alltag;
+}
+
+// Rückwärtskompatibilität (altes brain.js / Engine): flache Slot-Form { model, reasoningExclude }.
 function aktiverSlot() {
-  return SLOTS.primary;
+  return getRoleSlots('alltag').primary;
 }
 
 function fallbackSlot() {
-  return SLOTS.fallback;
+  return getRoleSlots('alltag').fallback;
 }
 
 function slotFuer(zweck) {
-  if (zweck === 'nightly') return SLOTS.nightly;
-  if (zweck === 'arbiter') return SLOTS.arbiter;
-  if (zweck === 'dev') return SLOTS.dev;
-  return SLOTS.primary;
+  if (zweck === 'nightly') return getRoleSlots('nightly').primary;
+  if (zweck === 'arbiter') return getRoleSlots('arbiter').primary;
+  if (zweck === 'dev') return SLOTS.dev.primary;
+  return getRoleSlots('alltag').primary;
 }
 
 const DB = {
@@ -176,5 +202,7 @@ module.exports = {
   aktiverSlot,
   fallbackSlot,
   slotFuer,
+  devPrioAn,
+  getRoleSlots,
   DB,
 };

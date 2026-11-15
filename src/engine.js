@@ -351,6 +351,13 @@ async function fuehreSchrittAus(db, deps, characterId, schritt, jetztMs) {
     lasseZeitVergehen(ch, dauerFuer(schritt));
     notizen.push(`${angebot.label}: ${angebot.narrative || ''}`.trim() + (res.neu ? ' (Neu im Kiez-Katalog!)' : ''));
     ch.current_action = 'idle';
+    // Arbiter-Quelle für den Dev-Feed (primary vs. fallback sichtbar machen)
+    if (res.quelle && (res.quelle.model || res.quelle.source !== 'fallback')) {
+      try {
+        db.prepare("INSERT INTO events (character_id, tick, type, payload_json, in_feed) VALUES (?, 0, 'arbiter', ?, 1)")
+          .run(characterId, JSON.stringify({ kind: action, label: angebot.label, quelle: res.quelle }));
+      } catch { /* feed darf nie crashen */ }
+    }
   } else if (action === 'leave_note') {
     const ortId = zielId || ch.inside_poi;
     db.prepare("INSERT INTO messages_outbox (character_id, channel, target_poi, content, status, resolve_after_at) VALUES (?, 'leave_note', ?, ?, 'pending', datetime('now', '+2 hours'))")
@@ -580,14 +587,14 @@ async function holeNeuenPlanMitMeta(db, deps, characterId, jetztMs) {
   }
   const antwort = await brain.decide({
     prompt: gebaut.prompt, whitelist: [], apiKey: process.env.OPENROUTER_API_KEY || 'mock',
-    slot: undefined, musing: false, orte: orte.map((o) => o.name),
+    slot: undefined, musing: false, orte: orte.map((o) => o.name), role: 'alltag',
   });
-  // KI-Quelle für den Dev-Feed (Punkt 7): Modell-Slug + Token aus decide-Antwort
+  // KI-Quelle für den Dev-Feed (Punkt 7): usedModel + Tokens aus decide-Antwort
   const usage = (antwort && (antwort.usage || antwort.tokens)) || {};
   const quelle = {
     source: antwort && antwort.stale ? 'fallback' : 'llm',
-    model: String((antwort && (antwort.modell || antwort.model)) || ''),
-    tokens: Number(usage.completion_tokens || usage.total_tokens || antwort.tokens || 0) || 0,
+    model: String((antwort && (antwort.usedModel || antwort.modell || antwort.model)) || ''),
+    tokens: Number(antwort.tokens || usage.completion_tokens || usage.total_tokens || 0) || 0,
   };
   let obj = null;
   try { obj = JSON.parse(antwort.raw || '{}'); } catch { obj = null; }

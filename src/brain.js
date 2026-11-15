@@ -1,14 +1,15 @@
 'use strict';
 // Der einzige Ort, an dem das Modell aufgerufen wird. Timeout, Retry, Validierung.
-// Routing: 1) aktiver Slot (dev-Prio) normal, 2) gleicher Slot kühler (retryTemperature),
-// 3) Fallback-Slot kühler — erst dann deterministisch + stale.
+// Routing (Punkt 2): pro Rolle { primary, fallback } via getRoleSlots(role) –
+// zuerst pair.primary, bei HTTP-Fehler (z. B. 429) oder ungültigem JSON
+// automatisch pair.fallback. Gibt usedModel + Tokens für den Dev-Feed zurück.
 const { validateDecision } = require('./checks');
-const { MODEL, aktiverSlot, fallbackSlot } = require('./config');
+const { MODEL, getRoleSlots } = require('./config');
 
-const PRICE = { in: 0, out: 0 }; // Free-Tier-Default (Nemotron 3.5 Super VL), Stand 2026-11-13
+const PRICE = { in: 0, out: 0 }; // Free-Tier-Default, Stand 2026-11-13
 
 async function callModel({ prompt, apiKey, baseUrl = MODEL.baseUrl, model = MODEL.name,
-  reasoningExclude = MODEL.reasoningExclude,
+  reasoningExclude = MODEL.reasoningExclude, maxTokens = MODEL.maxTokens,
   timeoutMs = MODEL.timeoutMs, temperature = MODEL.temperature }) {
   const started = Date.now();
   const res = await fetch(baseUrl, {
@@ -17,7 +18,7 @@ async function callModel({ prompt, apiKey, baseUrl = MODEL.baseUrl, model = MODE
     body: JSON.stringify({
       model,
       temperature,
-      max_tokens: MODEL.maxTokens,
+      max_tokens: maxTokens,
       ...(reasoningExclude ? { reasoning: { exclude: true } } : {}),
       response_format: { type: 'json_object' },
       messages: [{ role: 'user', content: prompt }],
@@ -30,61 +31,74 @@ async function callModel({ prompt, apiKey, baseUrl = MODEL.baseUrl, model = MODE
   const usage = data?.usage || {};
   const finish = data?.choices?.[0]?.finish_reason ?? data?.choices?.[0]?.native_finish_reason ?? null;
   const cost = (usage.prompt_tokens || 0) * PRICE.in + (usage.completion_tokens || 0) * PRICE.out;
-  return { content, usage, cost, latencyMs: Date.now() - started, finish };
+  return { content, usage, cost, latencyMs: Date.now() - started, finish, usedModel: model };
+}
+
+// Ein Slot-Versuch: callModel + Validierung. Wirft bei HTTP-Fehler, gibt bei
+// ungültigem JSON { ok:false } zurück (Fallback-Kette entscheidet weiter).
+async function versucheSlot({ prompt, apiKey, slot, temperature, label, whitelist, recentThoughts, musing, orte, vorhabenAktiv }) {
+  const r = await callModel({
+    prompt, apiKey, model: slot.model, reasoningExclude: slot.reasoningExclude,
+    maxTokens: slot.maxTokens || MODEL.maxTokens, temperature,
+  });
+  const v = validateDecision(r.content, {
+    whitelist,
+    recentThoughts,
+    maxWords: MODEL.maxWords,
+    maxWordsMusing: MODEL.maxWordsMusing,
+    jaccardMax: MODEL.jaccardMax,
+    exclamationWindow: MODEL.exclamationWindow,
+    musing,
+    orte,
+    vorhabenAktiv,
+  });
+  const info = {
+    usage: r.usage, finish: r.finish, modell: slot.model, usedModel: slot.model,
+    versuch: label, tokens: Number(r.usage.completion_tokens) || 0, totalTokens: Number(r.usage.total_tokens) || 0,
+  };
+  return { v, raw: r.content, info, latencyMs: r.latencyMs, cost: r.cost };
 }
 
 /**
  * Entscheidung holen. Nie werfen: bei Fehlschlag kommt { ok:false, stale:true }
  * zurück und die Engine arbeitet mit der letzten Absicht weiter.
+ * Rolle: 'alltag' | 'arbiter' | 'nightly' – Slots via getRoleSlots(role).
  */
 async function decide(opts) {
-  const { prompt, whitelist = [], recentThoughts = [], apiKey, musing = false, orte = [], vorhabenAktiv = false } = opts;
+  const { prompt, whitelist = [], recentThoughts = [], apiKey, musing = false, orte = [], vorhabenAktiv = false, role = 'alltag' } = opts;
   if (!apiKey) {
     return { ok: false, action: null, thought: '', musing: null, stale: true, reason: 'no_key', failures: ['no_key'] };
   }
 
-  const aktiv = opts.slot || aktiverSlot();
-  const fallback = opts.fallbackSlot || fallbackSlot();
+  const pair = getRoleSlots(role);
   const attempts = [
-    { slot: aktiv, temperature: opts.temperature ?? MODEL.temperature, label: 'first' },
-    { slot: aktiv, temperature: MODEL.retryTemperature, label: 'retry' },
-    { slot: fallback, temperature: MODEL.retryTemperature, label: 'fallback' },
+    { slot: pair.primary, temperature: opts.temperature ?? MODEL.temperature, label: 'primary' },
+    { slot: pair.fallback, temperature: MODEL.retryTemperature, label: 'fallback' },
   ];
   let last = null;
   const total = { latencyMs: 0, cost: 0, calls: 0 };
 
   for (const a of attempts) {
-    let raw;
-    let info = {};
+    let ergebnis;
     try {
-      const r = await callModel({
-        ...opts, model: a.slot.model, reasoningExclude: a.slot.reasoningExclude,
-        temperature: a.temperature,
+      ergebnis = await versucheSlot({
+        prompt, apiKey, slot: a.slot, temperature: a.temperature, label: a.label,
+        whitelist, recentThoughts, musing, orte, vorhabenAktiv,
       });
-      total.latencyMs += r.latencyMs;
-      total.cost += r.cost;
-      total.calls += 1;
-      raw = r.content;
-      info = { usage: r.usage, finish: r.finish, modell: a.slot.model, versuch: a.label };
     } catch (err) {
-      last = { ok: false, stale: true, reason: `request: ${err.message}`, failures: ['request'], modell: a.slot.model, versuch: a.label };
+      // HTTP-Fehler (429 etc.): nahtlos zum Fallback
+      last = { ok: false, stale: true, reason: `request: ${err.message}`, failures: ['request'], modell: a.slot.model, usedModel: a.slot.model, versuch: a.label };
       continue;
     }
-    const v = validateDecision(raw, {
-      whitelist,
-      recentThoughts,
-      maxWords: MODEL.maxWords,
-      maxWordsMusing: MODEL.maxWordsMusing,
-      jaccardMax: MODEL.jaccardMax,
-      exclamationWindow: MODEL.exclamationWindow,
-      musing,
-      orte,
-      vorhabenAktiv,
-    });
+    total.latencyMs += ergebnis.latencyMs;
+    total.cost += ergebnis.cost;
+    total.calls += 1;
+    const { v, raw, info } = ergebnis;
     if (v.ok) return { ...v, stale: false, raw, ...total, ...info };
     // Leere Antwort eigens benennen: „Modell schweigt" ist etwas anderes als Kauderwelsch
     const leer = !raw || !raw.trim();
     last = { ...v, stale: true, reason: `checks: ${leer ? 'json_leer' : v.failures.join(',')}`, raw, ...info };
+    // Bei ungültigem JSON ebenfalls Fallback versuchen (nächste Iteration)
   }
   return { ...(last || { ok: false, stale: true, failures: ['unknown'] }), ...total };
 }

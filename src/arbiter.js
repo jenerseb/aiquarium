@@ -6,7 +6,7 @@
 //  - bewerteBewerbungen: autonomer Ladenbesitzer-Evaluator für leave_note.
 //  - runNightlyConsolidation: 1x/Tag per mimo-v2.6-pro beim Schlafen.
 
-const { ECONOMY, MEMORY, SLOTS } = require('./config');
+const { ECONOMY, MEMORY, getRoleSlots } = require('./config');
 
 function klammere(wert, min, max) {
   return Math.max(min, Math.min(max, Number(wert) || 0));
@@ -77,7 +77,9 @@ function deterministischesAngebot(poi, kind, wunschText) {
 }
 
 
-// Kleiner LLM-Call (arbiter-Slot): plausibilisiert Preis + Wirkung.
+// Kleiner LLM-Call (arbiter-Rolle): plausibilisiert Preis + Wirkung.
+// Primary → Fallback via getRoleSlots('arbiter') (429/JSON-Fehler → Fallback).
+// Gibt { obj, usedModel, tokens } zurück (für Dev-Feed-Transparenz).
 async function arbiterLLM(brain, poi, kind, wunschText) {
   if (!brain || typeof brain.callModel !== 'function') return null;
   const apiKey = process.env.OPENROUTER_API_KEY;
@@ -92,18 +94,22 @@ async function arbiterLLM(brain, poi, kind, wunschText) {
     ' "hunger_delta": -50..-5 (nur consume, sonst 0), "erschoepfung_delta": 2..15 bei Aktivitaet,',
     ' "froh_delta": -8..16, "narrative": "ein Satz" }. Unplausibles -> plausibel:false.',
   ].join('\n');
-  try {
-    const slot = SLOTS.arbiter;
-    const r = await brain.callModel({
-      prompt, apiKey, model: slot.model, reasoningExclude: slot.reasoningExclude,
-      timeoutMs: 20000, temperature: 0.2, maxTokens: 250,
-    });
-    const obj = JSON.parse(r.content);
-    if (!obj || typeof obj !== 'object') return null;
-    return obj;
-  } catch {
-    return null;
+  const pair = getRoleSlots('arbiter');
+  for (const slot of [pair.primary, pair.fallback]) {
+    try {
+      const r = await brain.callModel({
+        prompt, apiKey, model: slot.model, reasoningExclude: slot.reasoningExclude,
+        timeoutMs: 20000, temperature: 0.2, maxTokens: slot.maxTokens || 900,
+      });
+      const obj = JSON.parse(r.content);
+      if (!obj || typeof obj !== 'object') continue; // ungültiges JSON → Fallback
+      const tokens = Number((r.usage && (r.usage.completion_tokens || r.usage.total_tokens)) || 0) || 0;
+      return { obj, usedModel: r.usedModel || slot.model, tokens };
+    } catch {
+      continue; // HTTP-Fehler (429 etc.) → Fallback
+    }
   }
+  return null;
 }
 
 function klammereAngebot(poi, kind, intentKey, vorschlag) {
@@ -137,14 +143,18 @@ async function resolveIntent(db, brain, poi, kind, wunschText) {
   const bekannt = findeAngebot(db, poi.id, kind, key);
   if (bekannt) return { angebot: bekannt, neu: false };
   const llm = await arbiterLLM(brain, poi, kind, wunschText);
+  const llmObj = llm && llm.obj ? llm.obj : null;
   let angebot;
-  if (!llm || llm.plausibel === false) {
+  if (!llmObj || llmObj.plausibel === false) {
     angebot = klammereAngebot(poi, kind, key, deterministischesAngebot(poi, kind, wunschText));
   } else {
-    angebot = klammereAngebot(poi, kind, key, llm);
+    angebot = klammereAngebot(poi, kind, key, llmObj);
   }
   const gespeichert = speichereAngebot(db, angebot);
-  return { angebot: gespeichert, neu: true };
+  const quelle = llm
+    ? { source: 'llm', model: llm.usedModel, tokens: llm.tokens }
+    : { source: 'fallback', model: '', tokens: 0 };
+  return { angebot: gespeichert, neu: true, quelle };
 }
 
 // --- Jobs ----------------------------------------------------------------------
@@ -349,15 +359,25 @@ async function runNightlyConsolidation(db, brain, characterId, tagesLog, jetztMs
   ].join('\n');
   let out = null;
   const apiKey = process.env.OPENROUTER_API_KEY;
+  let nightlyQuelle = { source: 'fallback', model: '', tokens: 0 };
   if (brain && typeof brain.callModel === 'function' && apiKey) {
-    try {
-      const slot = SLOTS.nightly;
-      const r = await brain.callModel({
-        prompt, apiKey, model: slot.model, reasoningExclude: slot.reasoningExclude,
-        timeoutMs: 90000, temperature: 0.5, maxTokens: 800,
-      });
-      out = JSON.parse(r.content);
-    } catch { out = null; }
+    // Nightly-Rolle: primary → fallback (getRoleSlots('nightly'))
+    const pair = getRoleSlots('nightly');
+    for (const slot of [pair.primary, pair.fallback]) {
+      try {
+        const r = await brain.callModel({
+          prompt, apiKey, model: slot.model, reasoningExclude: slot.reasoningExclude,
+          timeoutMs: 90000, temperature: 0.5, maxTokens: slot.maxTokens || 1400,
+        });
+        out = JSON.parse(r.content);
+        if (out && typeof out === 'object') {
+          const tokens = Number((r.usage && (r.usage.completion_tokens || r.usage.total_tokens)) || 0) || 0;
+          nightlyQuelle = { source: 'llm', model: r.usedModel || slot.model, tokens };
+          break;
+        }
+        out = null; // ungültiges JSON → Fallback-Slot
+      } catch { out = null; } // HTTP-Fehler (429 etc.) → Fallback-Slot
+    }
   }
   if (!out || typeof out !== 'object') {
     out = {
@@ -410,8 +430,8 @@ async function runNightlyConsolidation(db, brain, characterId, tagesLog, jetztMs
   }
   markiereKonsolidiert(db, datum);
   db.prepare("INSERT INTO events (character_id, tick, type, payload_json, in_feed) VALUES (?, 0, 'nightly', ?, 1)")
-    .run(characterId, JSON.stringify({ datum, headline }));
-  return { ok: true, datum, headline, roh: out };
+    .run(characterId, JSON.stringify({ datum, headline, quelle: { ...nightlyQuelle, source: nightlyQuelle.source === 'llm' ? 'nightly' : 'fallback' } }));
+  return { ok: true, datum, headline, roh: out, quelle: nightlyQuelle };
 }
 
 module.exports = {

@@ -166,12 +166,14 @@ function baueStrassennamen(strassen) {
       const mz = (z1 + z2) / 2;
       const winkel = Math.atan2(z2 - z1, x2 - x1);
       const schild = textSprite(name, false);
-      schild.material.rotation = 0;
-      // Flach auf den Asphalt: Sprite liegt → Plane mit Canvas-Textur
+      // Fixe, gut lesbare Schildgröße für die Kiez-Ansicht (14 x 3,5 m):
+      // unabhängig von Namenslänge, nie im Asphalt versenkt (depthTest aus,
+      // renderOrder hoch), ausgerichtet entlang des Straßenverlaufs.
       const ebene = new THREE.Mesh(
-        new THREE.PlaneGeometry(Math.min(34, 8 + name.length * 2.2), 3.4),
-        new THREE.MeshBasicMaterial({ map: schild.material.map, transparent: true, depthTest: true })
+        new THREE.PlaneGeometry(14, 3.5),
+        new THREE.MeshBasicMaterial({ map: schild.material.map, transparent: true, depthTest: false })
       );
+      ebene.renderOrder = 5;
       ebene.geometry.rotateX(-Math.PI / 2);
       ebene.position.set(mx, 0.25, mz);
       ebene.rotation.y = -winkel;
@@ -205,7 +207,12 @@ const texturCache = new Map();
 
 function fassadenTextur(breiteM, hoeheM) {
   const licht = (typeof LICHT !== 'undefined' && LICHT.fensterLicht) || 0.25;
-  const key = `${Math.round(hoeheM)}_${licht > 0.6 ? 'nacht' : licht > 0.4 ? 'abend' : 'tag'}`;
+  // Cache-Key enthält Breite+Höhe im Meter-Raster (10 m): gleiche Kachelgröße
+  // teilt sich die Textur, verschiedene Größen bekommen eigenen Repeat (400 %).
+  const bR = Math.max(10, Math.round(breiteM / 10) * 10);
+  const hR = Math.max(10, Math.round(hoeheM / 10) * 10);
+  const lichtStufe = licht > 0.6 ? 'nacht' : licht > 0.4 ? 'abend' : 'tag';
+  const key = `${bR}x${hR}_${lichtStufe}_x4`;
   if (texturCache.has(key)) return texturCache.get(key);
   const c = document.createElement('canvas');
   c.width = 128; c.height = 128;
@@ -228,7 +235,13 @@ function fassadenTextur(breiteM, hoeheM) {
   const tex = new THREE.CanvasTexture(c);
   tex.colorSpace = THREE.SRGBColorSpace;
   tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
-  tex.repeat.set(Math.max(1, Math.round(breiteM / 14)), Math.max(1, Math.round(hoeheM / 12)));
+  // 400 % Skalierung (Zusatz): 4x so große Kacheln wie bisher (14→56 m, 12→48 m),
+  // damit Backstein und Fenster aus der Pilot-Perspektive ruhig wirken.
+  const TEXTUR_FAKTOR = 4;
+  tex.repeat.set(
+    Math.max(1, Math.round(breiteM / (14 * TEXTUR_FAKTOR))),
+    Math.max(1, Math.round(hoeheM / (12 * TEXTUR_FAKTOR)))
+  );
   texturCache.set(key, tex);
   return tex;
 }
@@ -331,6 +344,40 @@ function pinMesh(farbe, deckkraft) {
   return gruppe;
 }
 
+// Dev-Modus (Punkt 1): unentdeckte Orte offenlegen – zweite Zeile mit echtem Namen.
+// Normale Ansicht: nur „?". Dev: „?“ + Name darunter (halbtransparent, kleiner).
+function textSpriteZweizeilig(zeile1, zeile2) {
+  const c = document.createElement('canvas');
+  const g = c.getContext('2d');
+  const schrift1 = '600 44px system-ui, sans-serif';
+  const schrift2 = '500 30px system-ui, sans-serif';
+  g.font = schrift1;
+  const w1 = Math.ceil(g.measureText(zeile1).width);
+  g.font = schrift2;
+  const w2 = Math.ceil(g.measureText(zeile2 || '').width);
+  const w = Math.max(w1, w2) + 36;
+  c.width = w; c.height = 104;
+  const g2 = c.getContext('2d');
+  g2.fillStyle = 'rgba(9,13,19,.82)';
+  g2.beginPath();
+  if (typeof g2.roundRect === 'function') g2.roundRect(0, 8, w, 88, 10);
+  else g2.rect(0, 8, w, 88);
+  g2.fill();
+  g2.textBaseline = 'middle';
+  g2.textAlign = 'center';
+  g2.font = schrift1;
+  g2.fillStyle = '#93a1b5';
+  g2.fillText(zeile1, w / 2, 34);
+  g2.font = schrift2;
+  g2.fillStyle = 'rgba(245,176,76,.85)';
+  g2.fillText(zeile2 || '', w / 2, 72);
+  const tex = new THREE.CanvasTexture(c);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, depthTest: false, transparent: true, opacity: 0.9 }));
+  sp.scale.set(c.width * 0.045, c.height * 0.045, 1);
+  return sp;
+}
+
 function bauMarkerGruppe(p) {
   const bekannt = Number(p.discovered) === 1;
   const gruppe = new THREE.Group();
@@ -345,8 +392,10 @@ function bauMarkerGruppe(p) {
   ]);
   const linie = new THREE.Line(linienGeo, new THREE.LineBasicMaterial({ color: farbe, transparent: true, opacity: bekannt ? 0.8 : 0.4 }));
   gruppe.add(linie);
-  const labelText = bekannt ? p.name : (DEV ? `? (${p.name})` : '?');
-  const schild = textSprite(labelText, bekannt);
+  // Dev-Modus: unentdeckte Orte offenlegen – „?“ + Name in zweiter Zeile darunter
+  const schild = (bekannt || !DEV)
+    ? textSprite(bekannt ? p.name : '?', bekannt)
+    : textSpriteZweizeilig('?', p.name);
   schild.position.y = hoehe + 3.4;
   gruppe.add(schild);
   gruppe.position.set(Number(p.pos_x), 0, Number(p.pos_z));
@@ -392,7 +441,13 @@ function textSprite(text, gross) {
   const g2 = c.getContext('2d');
   g2.fillStyle = 'rgba(9,13,19,.82)';
   g2.beginPath();
-  g2.roundRect(0, 8, w, 48, 10);
+  if (typeof g2.roundRect === 'function') {
+    g2.roundRect(0, 8, w, 48, 10);
+  } else {
+    // Fallback für Firefox / ältere Browser ohne roundRect: eckiges Schild,
+    // gleiche Fläche, gleiche Lesbarkeit (Fix für unsichtbare POI-/Straßenschilder).
+    g2.rect(0, 8, w, 48);
+  }
   g2.fill();
   g2.font = schrift;
   g2.fillStyle = gross ? '#f5b04c' : '#93a1b5';
@@ -971,13 +1026,25 @@ async function initialLaden() {
     box.querySelector('#devTick').addEventListener('click', () => fetch('/api/dev/tick', { method: 'POST' }).catch(() => {}));
     box.querySelector('#devNight').addEventListener('click', () => fetch('/api/dev/nightly', { method: 'POST' }).catch(() => {}));
   }
+  // Block 1: Karte (eigener try/catch) – ein Kartenfehler blockiert NIEMALS State/Feed.
+  await ladeKarte();
+  // Block 2: State (eigener try/catch) – Status („verbinde“) wird hier immer aufgelöst.
+  await ladeState();
+  // Block 3: Live-Updates (eigener try/catch) – Render-Loop läuft auch ohne SSE.
+  starteLiveUpdates();
+}
+
+// --- Block 1: Karte -----------------------------------------------------------------
+async function ladeKarte() {
   try {
+    // Kanonisch: /api/map (sauber). Beide Datei-Aliase bleiben serverseitig aktiv.
     const karte = await ladeJson('/api/map');
     Z.karte = karte;
-    baueStrassen(karte.streets);
-    baueParks(karte.parks);
-    baueGebaeude(karte.buildings);
-    baueStrassennamen(karte.streets);
+    try { baueStrassen(karte.streets); } catch (err) { console.warn('[karte] strassen:', err.message); }
+    try { baueParks(karte.parks); } catch (err) { console.warn('[karte] parks:', err.message); }
+    try { baueGebaeude(karte.buildings); } catch (err) { console.warn('[karte] gebaeude:', err.message); }
+    try { bauePoiSchilder(karte.pois); } catch (err) { console.warn('[karte] poi-marker:', err.message); }
+    try { baueStrassennamen(karte.streets); } catch (err) { console.warn('[karte] schilder:', err.message); }
     // Initial-Kamera: pilot, +40° rechts vom Blickwinkel (Start-Frame, siehe Kamera-Kapitel)
     const h0 = 0; // Blickrichtung initial: +z (wird per State überschrieben)
     Z.pilot.theta = h0 + PILOT_START_Versatz;
@@ -991,8 +1058,12 @@ async function initialLaden() {
     camera.lookAt(_lookAt);
   } catch (err) {
     fehlerBanner('Karte konnte nicht geladen werden: ' + err.message + ' – läuft der Server (npm start)?');
-    return;
+    // KEIN return: State + Live-Feed starten trotzdem (Status/Feed funktionieren ohne Karte).
   }
+}
+
+// --- Block 2: State -------------------------------------------------------------------
+async function ladeState() {
   try {
     const s = await ladeJson('/api/state');
     staatAnwenden(s);
@@ -1006,6 +1077,10 @@ async function initialLaden() {
   } catch (err) {
     fehlerBanner('State konnte nicht geladen werden: ' + err.message);
   }
+}
+
+// --- Block 3: Live-Updates (SSE + State-Refresh) -----------------------------------------
+function starteLiveUpdates() {
   // Live per SSE: nur bei Tick/Feed-Aktivität (Initial-State kam per Fetch)
   try {
     const es = new EventSource('/api/stream');

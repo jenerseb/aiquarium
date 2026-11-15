@@ -156,7 +156,10 @@ function statischeDatei(reqUrl, res) {
   if (!datei.startsWith(pubDir) || !fs.existsSync(datei) || fs.statSync(datei).isDirectory()) return false;
   const ext = path.extname(datei).toLowerCase();
   const typen = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.json': 'application/json', '.png': 'image/png', '.svg': 'image/svg+xml' };
-  res.writeHead(200, { 'Content-Type': typen[ext] || 'application/octet-stream' });
+  const kopf = { 'Content-Type': typen[ext] || 'application/octet-stream' };
+  // Dev-Komfort: HTML/JS nie aus dem Browser-Cache (harter Reload nicht nötig)
+  if (ext === '.html' || ext === '.js') kopf['Cache-Control'] = 'no-store';
+  res.writeHead(200, kopf);
   fs.createReadStream(datei).pipe(res);
   return true;
 }
@@ -167,7 +170,8 @@ function erstelleServer() {
       const url = new URL(req.url, 'http://localhost');
       if (url.pathname === '/api/state' && req.method === 'GET') return json(res, 200, apiState());
       if (url.pathname === '/api/brain' && req.method === 'GET') return json(res, 200, apiBrain());
-      if ((url.pathname === '/api/map' || url.pathname === '/kiez-map.json') && req.method === 'GET') return json(res, 200, apiMap());
+      if ((url.pathname === '/api/map' || url.pathname === '/kiez-map.json' || url.pathname === '/kiez_map.json') && req.method === 'GET') return json(res, 200, apiMap());
+      if (url.pathname === '/favicon.ico') { res.writeHead(204); res.end(); return; }
       if (url.pathname === '/api/stream' && req.method === 'GET') {
         res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', Connection: 'keep-alive' });
         res.write(': verbunden\n\n');
