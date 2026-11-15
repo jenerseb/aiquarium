@@ -1,0 +1,14 @@
+{
+  "name": "aiquarium-app",
+  "version": "0.1.0",
+  "description": "AIquarium Hamburg St. Pauli MVP – Backend-Kern, Datenbank & Kiez-Welt (Meilenstein 1)",
+  "type": "commonjs",
+  "engines": {
+    "node": ">=22.5.0"
+  },
+  "scripts": {
+    "test": "node scripts/test-m1.js",
+    "check": "node --check src/config.js && node --check src/db.js && node --check src/pathfinding.js && node --check src/brain.js && node --check src/checks.js && node --check src/env.js && echo OK"
+  },
+  "dependencies": {}
+}
