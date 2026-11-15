@@ -45,10 +45,14 @@ out skel qt;
 `.trim();
 
 async function fetchOverpass() {
-  const url = 'https://overpass-api.de/api/interpreter';
+  const url = 'https://maps.mail.ru/osm/tools/overpass/api/interpreter';
   const res = await fetch(url, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    headers: { 
+      'Content-Type': 'application/x-www-form-urlencoded',
+      'Accept': 'application/json',
+      'User-Agent': 'AIquarium-Hamburg-MVP/0.1 (local-dev)',
+    },
     body: `data=${encodeURIComponent(OVERPASS_QUERY)}`,
     signal: AbortSignal.timeout(30000),
   });
