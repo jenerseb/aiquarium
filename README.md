@@ -115,12 +115,21 @@ aiquarium-app/
 
 ```bash
 npm start        # Server starten (Port 3077, per PORT=… änderbar)
-npm test         # beide Test-Suiten (Temp-DBs, echte DB bleibt sauber)
+npm test         # alle drei Test-Suiten (Temp-DBs, echte DB bleibt sauber)
 npm run test:m1  # nur DB + Route
 npm run test:m2  # nur Komplettablauf mit Mock
-npm run check    # nur Syntax aller Dateien
+npm run test:m3  # nur 3D-Szene + API-Endpunkte (startet eigenen Server)
 node scripts/fetch-osm.js  # Karte frisch von OpenStreetMap laden
 ```
+
+Danach im Browser öffnen:
+
+- `http://localhost:3077/` – die 3D-Stadt (Charakter-Kamera, HUD, Feed)
+- `http://localhost:3077/?dev` bzw. `?mode=dev` – zusätzlich Dev-Buttons für
+  1 Tick und 1 Nightly-Call
+- `Gehirn`-Button oben rechts – 4 Tabs: Kopf, Character Sheet, Gedächtnis,
+  Chronik
+- Kamera: ziehen = drehen, Rad = zoomen, weit raus = Kiez-Blick von oben
 
 ## Gut zu wissen
 

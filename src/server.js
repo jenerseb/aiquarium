@@ -47,7 +47,28 @@ function apiState() {
   const ch = engine.ladeCharakter(db, characterId);
   const feed = db.prepare('SELECT id, type, payload_json, created_at FROM events WHERE character_id = ? ORDER BY id DESC LIMIT 30').all(characterId);
   const ws = db.prepare('SELECT tick, last_nightly_date, weather, temperature_c FROM world_state WHERE id = 1').get();
-  return { charakter: ch, feed, world: ws, zeit: { berlin: new Date().toISOString(), nacht: istNacht(Date.now()) } };
+  const pois = db.prepare('SELECT id, name, category, pos_x, pos_z, discovered FROM pois ORDER BY id').all();
+  let plan = [];
+  try { plan = JSON.parse(ch.plan_queue_json || '[]'); } catch { plan = []; }
+  return { charakter: ch, feed, world: ws, pois, plan, zeit: { berlin: new Date().toISOString(), nacht: istNacht(Date.now()) } };
+}
+
+// GET /api/map: statische Kiez-Geometrie (buildings, streets, parks, pois + meta).
+// Parks: kiez_map.json hat keine parks-Key – wir leiten Grünflächen aus
+// park-POIs + Umkreis ab (MVP), echte OSM-leisure-Polygone wären Phase 2.
+function apiMap() {
+  const karte = (ZUSTAND && ZUSTAND.karte) || dbMod.ladeKiezKarte() || { buildings: [], streets: [] };
+  const pois = dbMod && ZUSTAND ? ZUSTAND.db.prepare('SELECT id, name, category, pos_x, pos_z, discovered FROM pois ORDER BY id').all() : [];
+  const parks = (karte.parks && Array.isArray(karte.parks)) ? karte.parks : pois
+    .filter((p) => p.category === 'park')
+    .map((p) => ({ id: 'park_' + p.id, name: p.name, kreis: { x: Number(p.pos_x), z: Number(p.pos_z), r: 18 } }));
+  return {
+    meta: karte.meta || null,
+    buildings: karte.buildings || [],
+    streets: karte.streets || [],
+    parks,
+    pois,
+  };
 }
 
 function apiBrain() {
@@ -131,6 +152,7 @@ function erstelleServer() {
       const url = new URL(req.url, 'http://localhost');
       if (url.pathname === '/api/state' && req.method === 'GET') return json(res, 200, apiState());
       if (url.pathname === '/api/brain' && req.method === 'GET') return json(res, 200, apiBrain());
+      if ((url.pathname === '/api/map' || url.pathname === '/kiez-map.json') && req.method === 'GET') return json(res, 200, apiMap());
       if (url.pathname === '/api/stream' && req.method === 'GET') {
         res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', Connection: 'keep-alive' });
         res.write(': verbunden\n\n');
@@ -172,5 +194,5 @@ if (require.main === module) {
   setInterval(loopTick, 20000);
 }
 
-module.exports = { initZustand, erstelleServer, apiState, apiBrain, loopTick, sendeSSE };
+module.exports = { initZustand, erstelleServer, apiState, apiBrain, apiMap, loopTick, sendeSSE };
 
