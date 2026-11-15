@@ -88,7 +88,9 @@ const server = http.createServer((req, res) => {
   // nur, wenn der Loop lebt (setzt lastBeat jede Sekunde). Hinter Caddy öffentlich
   // erreichbar lassen (keine Secrets darin) oder im Caddy auf localhost begrenzen.
   if (url.pathname === '/api/health') {
-    const frisch = Date.now() - lastBeat < 2 * TICK_MS + 5000;
+    // Schwelle 45 s: länger als der längste gemessene legitime Modellaufruf (~15 s),
+    // kurz genug, um einen echten Event-Loop-Hänger schnell zu erkennen.
+    const frisch = Date.now() - lastBeat < 45_000;
     return frisch
       ? sendJson(res, 200, { ok: true })
       : sendJson(res, 500, { ok: false, fehler: 'loop hängt' });
@@ -196,8 +198,9 @@ function broadcastFeed() {
 }
 
 let running = true;
-// Heartbeat für /api/health: wird jede Loop-Runde gesetzt. Bleibt der Event-Loop
-// stehen (hängender Modellaufruf o. Ä.), meldet health 500 statt 200.
+// Heartbeat für /api/health: wird an jeder Wartestelle der Loop-Runde gesetzt
+// (nach jedem Modellaufruf). Bleibt der Event-Loop stehen (echter Hänger), meldet
+// health 500 statt 200 — ein langer, aber lebendiger Modellaufruf zählt nicht mit.
 let lastBeat = Date.now();
 
 async function loop() {
@@ -239,6 +242,7 @@ async function loop() {
 
     if (last && last.needDecide) {
       const d = await engine.decide();
+      lastBeat = Date.now();   // Herzschlag nach langem Modellaufruf — Loop lebt
       if (d && !d.ok) console.warn(`[brain] stale: ${d.reason || d.failures}`);
       // Der Gedanke entsteht im Entscheidungsaufruf, nicht im Tick — deshalb hier Feed nachlegen
       if (d) broadcastFeed();
@@ -247,6 +251,7 @@ async function loop() {
 
     // Fällige Glaubenssätze nebenbei formulieren lassen (nur wenn es welche gibt)
     const neue = await engine.phrasePendingBeliefs();
+    lastBeat = Date.now();   // auch nach diesem Modellaufruf weiterticken
     if (neue.length) broadcastFeed();
 
     const wait = next - Date.now();
