@@ -293,6 +293,16 @@ function baueStrassennamen(strassen) {
       const dx = x2 - x1;
       const dz = z2 - z1;
       const len = Math.hypot(dx, dz) || 1;
+// DIORAMA_V1: warme Hamburger Fassadenpalette (Backstein, Creme, Sandstein, Altbau-Grau)
+const DIORAMA_FASSADEN = ['#b3563f', '#c97e5a', '#e3c893', '#d9b98a', '#9aa0a8', '#8f4f43'];
+// DIORAMA_V1: Daecher (Terrakotta, Schiefer, Kupfergruen)
+const DIORAMA_DAECHER = ['#9c4a3b', '#343942', '#4e786c'];
+function dioramaFarbe(id, palette) {
+  let h = 0;
+  const s = String(id);
+  for (let i = 0; i < s.length; i += 1) h = (h * 31 + s.charCodeAt(i)) >>> 0;
+  return palette[h % palette.length];
+}
       const nx = -dz / len;
       const nz = dx / len;
       const VERSATZ = 5; // 5 m neben die Fahrbahn (Gehweg-Kante)
