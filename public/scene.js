@@ -318,42 +318,46 @@ const texturCache = new Map();
 function berechneLicht(faktor) {
   return Math.max(0, Math.min(1, Number(faktor) || 0));
 }
-function fassadenTextur(breiteM, hoeheM, grundFarbe, faktor = 4) {
-  // Cache-Key enthält Breite+Höhe im Meter-Raster (10 m): gleiche Kachelgröße
-  // teilt sich die Textur, verschiedene Größen bekommen eigenen Repeat (400 %).
+function fassadenTextur(breiteM, hoeheM, grundFarbe, faktor) {
+  // DIORAMA_V1: 1) Farbe zuerst (TDZ-sicher: alles andere nutzt sie)
+  const farbe = grundFarbe || '#b3563f';
+  // 2) Raster + Key
   const bR = Math.max(10, Math.round(breiteM / 10) * 10);
   const hR = Math.max(10, Math.round(hoeheM / 10) * 10);
-  const lichtStufe = (typeof LICHT !== "undefined" && LICHT.fensterLicht > 0.6) ? "nacht" : ((typeof LICHT !== "undefined" && LICHT.fensterLicht > 0.4) ? "abend" : "tag");
-  const farbe = grundFarbe || '#b3563f';
   const key = `Fx${bR}_H${hR}_x${TEXTUR_FAKTOR}_${farbe}`;
   if (texturCache.has(key)) return texturCache.get(key);
+  // 3) Canvas + Gradient (g VOR erster Nutzung deklariert)
+  const bPx = Math.min(256, Math.max(64, Math.round(bR * 2)));
+  const hPx = Math.min(256, Math.max(64, Math.round(hR * 2)));
   const c = document.createElement('canvas');
-  g.fillStyle = toene[Math.floor(Math.random() * toene.length)];
+  c.width = bPx; c.height = hPx;
   const g = c.getContext('2d');
-  const toene = ['#6b4a3a', '#5d4033', '#715039', '#635046'];
-  c.width = 128; c.height = 128;
-  g.fillRect(0, 0, 128, 128);
-  g.fillStyle = 'rgba(0,0,0,.12)';
-  for (let y = 0; y < 128; y += 6) g.fillRect(0, y, 128, 1); // Ziegelreihen
-  const bodenKey = `${bR}x${hR}_${lichtStufe}_x4`;
+  g.fillStyle = farbe;
+  g.fillRect(0, 0, bPx, hPx);
+  // dezente Backstein-Struktur
+  g.fillStyle = 'rgba(255,255,255,0.05)';
+  for (let yy = 8; yy < hPx; yy += 16) g.fillRect(0, yy, bPx, 1);
+  g.fillStyle = 'rgba(0,0,0,0.06)';
+  for (let yy = 0; yy < hPx; yy += 16) g.fillRect(0, yy, bPx, 1);
+  // 4) Fenster + Logos (nutzt lichtStufe aus globalem LICHT)
+  const licht = (typeof LICHT !== 'undefined' && LICHT.fensterLicht) || 0.25;
   for (let fx = 0; fx < 4; fx += 1) {
     for (let fy = 0; fy < 3; fy += 1) {
-  const lichtStufe = berechneLicht((typeof LICHT !== "undefined" && LICHT.fensterLicht) || 0.25);
-      g.fillStyle = an ? `rgba(255,${190 + Math.floor(lichtStufe * 40)},120,${0.5 + lichtStufe * 0.5})` : "rgba(12,18,26,.9)";
+      const an = Math.random() < (0.15 + licht * 0.6);
+      g.fillStyle = an ? `rgba(255,${190 + Math.floor(licht * 40)},120,${0.5 + licht * 0.5})` : 'rgba(12,18,26,.9)';
       g.fillRect(12 + fx * 28, 14 + fy * 36, 16, 22);
-      g.strokeStyle = 'rgba(0,0,0,.5)';
-      g.strokeRect(12 + fx * 28, 14 + fy * 36, 16, 22);
     }
   }
+  // 5) Textur cachen + zurueck
   const tex = new THREE.CanvasTexture(c);
   tex.colorSpace = THREE.SRGBColorSpace;
-  tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
-  texturCache.set(bodenKey, tex);
-  // damit Backstein und Fenster aus der Pilot-Perspektive ruhig wirken.
+  tex.wrapS = THREE.RepeatWrapping;
+  tex.wrapT = THREE.ClampToEdgeWrapping;
   tex.repeat.set(
-    Math.max(1, Math.round(breiteM / (14 * (typeof TEXTUR_FAKTOR !== "undefined" ? TEXTUR_FAKTOR : faktor)))),
-    Math.max(1, Math.round(hoeheM / (12 * (typeof TEXTUR_FAKTOR !== "undefined" ? TEXTUR_FAKTOR : faktor))))
+    Math.max(1, Math.round(breiteM / (14 * (typeof TEXTUR_FAKTOR !== 'undefined' ? TEXTUR_FAKTOR : faktor)))),
+    Math.max(1, Math.round(hoeheM / (12 * (typeof TEXTUR_FAKTOR !== 'undefined' ? TEXTUR_FAKTOR : faktor))))
   );
+  tex.anisotropy = 4;
   texturCache.set(key, tex);
   return tex;
 }
