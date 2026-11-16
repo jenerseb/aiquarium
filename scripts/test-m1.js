@@ -34,9 +34,9 @@ function main() {
   for (const t of ERWARTETE_TABELLEN) assert.ok(tabellen.includes(t), 'tabelle fehlt: ' + t);
   console.log('[m1] tabellen ok (' + ERWARTETE_TABELLEN.length + ')');
 
-  // 2) Seed: 17 POIs (NW/S-Erweiterung), nur apartment entdeckt?
+  // 2) Seed: SEED_POIS.length POIs (dynamisch, waechst mit jedem Batch), nur apartment entdeckt?
   const pois = db.prepare('SELECT * FROM pois ORDER BY id').all();
-  assert.strictEqual(pois.length, 17, '17 seed-POIs erwartet, gefunden: ' + pois.length);
+  assert.strictEqual(pois.length, dbMod.SEED_POIS.length, `${dbMod.SEED_POIS.length} seed-POIs erwartet, gefunden: ` + pois.length);
   const apt = pois.find((p) => p.id === 'apartment');
   assert.ok(apt && apt.discovered === 1, 'apartment muss discovered=1 sein');
   assert.ok(pois.filter((p) => p.id !== 'apartment').every((p) => p.discovered === 0), 'nur apartment entdeckt');

@@ -68,10 +68,10 @@ function main() {
   assert.strictEqual(abweichungen.length, 0, 'bbox-abweichungen: ' + abweichungen.slice(0, 5).join(' | '));
   console.log(`[m3geo] ${buildings.length} gebäude: min.y=0, max.y=height, ecken exakt (kein spiegel, kein schweben)`);
 
-  // --- 2) POI-Deckung: alle Kern-POIs + NW/S-Erweiterung (LoD2-Centroid bevorzugt, ALKIS-Fallback) ---
+  // --- 2) POI-Deckung: KERN + ERWEITERT + alle weiteren Seeds (dynamisch) ---
   const pois = db.prepare('SELECT id, pos_x, pos_z, world_meta_json FROM pois').all();
   const KERN = ['apartment', 'otzentreff', 'kleine_pause', 'gruener_jaeger', 'b_movie', 'spaeti', 'florapark', 'praxis'];
-  const ERWEITERT = ['rote_flora', 'haus73', 'millerntor', 'ume_no_hana', 'pizzeria_gjaeger', 'creperie', 'knust', 'rindermarkthalle', 'feldstrassenbunker'];
+  const ERWEITERT = dbMod.SEED_POIS.map((p) => p.id).filter((id) => !KERN.includes(id));
   let lod2 = null;
   try {
     const roh = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'data', 'hamburg_lod2.json'), 'utf8'));

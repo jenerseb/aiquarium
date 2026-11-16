@@ -150,6 +150,25 @@ Danach im Browser öffnen:
   Chronik
 - Kamera: ziehen = drehen, Rad = zoomen, weit raus = Kiez-Blick von oben
 
+## Neue POIs vorschlagen & übernehmen
+
+`node scripts/poi-vorschlag.js [N] [--kategorie=...]` schlägt die nächsten N
+benannten OSM-Amenities vor, die noch kein POI sind (Default 10, lesend,
+ohne Netz). Filter: nur innerhalb LoD2-Gebäude-BBOX, östlich der
+Max-Brauer-Allee (`x >= -260`), innerhalb Diorama-Radius (`R-4`), mind.
+40 m vom nächsten POI entfernt. Ranking: Gastro/Kultur vor Denkmal, dann
+nah am Apartment. Beispiel: `node scripts/poi-vorschlag.js 10` oder
+`node scripts/poi-vorschlag.js 5 --kategorie=cafe,restaurant`.
+
+1. Block aus der Ausgabe in `src/db.js` ans `SEED_POIS`-Ende kopieren
+   (`discovered: 0`, `public_desc` mit 1 Satz Atmosphäre füllen).
+2. `node scripts/test-poi-snap.js` – erzwingt OSM-Match (`< 1 m`),
+   Straßennähe (`≤ 60 m`) und Route `< 2000 m`.
+3. `node scripts/reseed-pois.js [db]` für Live-DBs, dann
+   `npm run check && npm test` (Counts sind dynamisch via
+   `SEED_POIS.length`, kein Hochzählen nötig).
+
+
 ## Gut zu wissen
 
 - **Kosten:** Tagsüber laufen günstige/Free-Modelle

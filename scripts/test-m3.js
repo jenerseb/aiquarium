@@ -57,7 +57,8 @@ async function main() {
       if (!(k in karte)) throw new Error('/api/map ohne ' + k);
     }
     if (karte.buildings.length < 100) throw new Error('zu wenige gebaeude: ' + karte.buildings.length);
-    if (karte.pois.length !== 17) throw new Error('pois != 17: ' + karte.pois.length);
+    const erwartet = require('../src/db').SEED_POIS.length; // dynamisch, kein hartes Hochzaehlen
+    if (karte.pois.length !== erwartet) throw new Error(`pois != ${erwartet}: ` + karte.pois.length);
     console.log('[m3] /api/map ok (' + karte.buildings.length + ' gebaeude, ' + karte.streets.length + ' strassen, ' + karte.pois.length + ' pois)');
 
     const staat = await hole('/api/state');
