@@ -681,7 +681,7 @@ function textSpriteZweizeilig(zeile1, zeile2) {
   return sp;
 }
 
-function bauMarkerGruppe(p) {
+function bauMarkerGruppe(p, index) {
   const bekannt = Number(p.discovered) === 1;
   const gruppe = new THREE.Group();
   const hoehe = gebaeudeHoeheBei(Number(p.pos_x), Number(p.pos_z)) + 4.5;
@@ -689,6 +689,11 @@ function bauMarkerGruppe(p) {
   const pin = pinMesh(farbe, bekannt ? 1 : 0.55);
   pin.position.y = hoehe;
   gruppe.add(pin);
+  // Bojen-Schweben: Basis-Höhe + individueller Phasenversatz merken,
+  // damit die Pins im Render-Loop nicht unnatürlich synchron wackeln.
+  gruppe.userData.pin = pin;
+  gruppe.userData.pinBaseY = hoehe;
+  gruppe.userData.pinPhase = (Number.isFinite(index) ? index : 0) * 0.9;
   // Dünne Leuchtlinie/Pin bis zum Boden (y = 0)
   const linienGeo = new THREE.BufferGeometry().setFromPoints([
     new THREE.Vector3(0, 0, 0), new THREE.Vector3(0, hoehe, 0),
@@ -710,9 +715,10 @@ function bauePoiSchilder(pois) {
   for (const [, sp] of Z.poiSchilder) scene.remove(sp);
   Z.poiSchilder.clear();
   Z.pois.clear();
-  for (const p of pois || []) {
+  for (let i = 0; i < (pois || []).length; i += 1) {
+    const p = pois[i];
     Z.pois.set(p.id, p);
-    const gruppe = bauMarkerGruppe(p);
+    const gruppe = bauMarkerGruppe(p, i);
     // Kreis-Schnitt: Marker ausserhalb R-4 ausblenden (LoD2/Strassen via Shader).
     const d = Math.hypot(Number(p.pos_x) - DIORAMA.cx, Number(p.pos_z) - DIORAMA.cz);
     gruppe.visible = d <= DIORAMA.r - 4;
@@ -744,7 +750,7 @@ function aktualisiereSchilder(pois) {
     if (wurdeBekannt && Z.poiSchilder.has(p.id)) {
       const alteGruppe = Z.poiSchilder.get(p.id);
       scene.remove(alteGruppe);
-      const neu = bauMarkerGruppe(p);
+      const neu = bauMarkerGruppe(p, Z.poiSchilder.size);
       scene.add(neu);
       Z.poiSchilder.set(p.id, neu);
     }
@@ -788,73 +794,33 @@ function textSprite(text, gross) {
 // Vorderseite = +Z (Blickrichtung bei rotation.y = atan2(dx, dz)). Augen auf +Z.
 // --- DIORAMA_V1: ECHTE Kiez-Bäume (2 InstancedMesh-Draw-Calls) ---
 // Bäume stammen aus data/hamburg_geodata.json (Straßenbaumkataster):
-// Stamm + niedliche, leicht unregelmäßige Low-Poly-Krone, skaliert nach
-// echtem kronendurchmesser + baumhoehe (je ~75 % Diorama-Maßstab).
+// EIN einfacher grüner Zylinder pro Baum (leicht konisch, Basis am Boden).
+// Höhe skaliert nach echtem baumhoehe (~75 % Diorama-Maßstab), Breite bleibt
+// konstanter Standard (nicht nach kronendurchmesser skaliert).
 // (Grasbüschel/Blumen ersatzlos gestrichen – nur Parkflächen + echte Bäume.)
 let baeumeStamm = null;
-let baeumeKrone = null;
-// Warme Grüntöne je Gattung (Linde, Ahorn, Platane, Eiche, ...).
-const BAUM_FARBEN = {
-  linde: 0x6fa055, ahorn: 0x5d8a4a, platane: 0x7fa35a, eiche: 0x4f7a3e,
-  esche: 0x668f4e, hainbuche: 0x5a8a52, pappel: 0x74985c, birke: 0x86a860,
-  ulme: 0x577f45, kastanie: 0x639151,
-};
-function baumFarbeFuer(gattung) {
-  const g = String(gattung || '').toLowerCase();
-  for (const [k, v] of Object.entries(BAUM_FARBEN)) {
-    if (g.includes(k)) return v;
-  }
-  let h = 0;
-  for (let i = 0; i < g.length; i += 1) h = (h * 31 + g.charCodeAt(i)) >>> 0;
-  const palette = Object.values(BAUM_FARBEN);
-  return palette[h % palette.length];
-}
 function baueDioramaBaeume(trees) {
-  // ECHTE Kiez-Bäume: zwei InstancedMesh (Stämme + Low-Poly-Kronen),
-  // jeweils skaliert nach echtem kronendurchmesser / baumhoehe (~75 %).
+  // Ein InstancedMesh: leicht konischer Zylinder (0,35 → 0,5 m Radius).
   const echte = (trees || []).filter((t) => Number.isFinite(Number(t.x)) && Number.isFinite(Number(t.z)));
   const N_BAEUME = Math.max(1, Math.min(1500, echte.length || 90));
   const dummy = new THREE.Object3D();
-  const stGeo = new THREE.CylinderGeometry(0.35, 0.5, 2.6, 6);
-  stGeo.translate(0, 1.3, 0);
-  const stMat = new THREE.MeshLambertMaterial({ color: 0x6b4a3a });
-  baeumeStamm = new THREE.InstancedMesh(stGeo, stMat, N_BAEUME);
-  // Niedliche, leicht unregelmäßige Krone: Low-Poly-Kugel, oben abgeflacht.
-  const krGeo = new THREE.SphereGeometry(2.0, 7, 5);
-  krGeo.scale(1, 0.78, 1);
-  const posA = krGeo.attributes.position;
-  for (let i = 0; i < posA.count; i += 1) {
-    const wackel = ((i * 37) % 11 - 5) / 100; // +/-5 %, deterministisch
-    posA.setXYZ(i, posA.getX(i) * (1 + wackel), posA.getY(i), posA.getZ(i) * (1 - wackel));
-  }
-  krGeo.computeVertexNormals();
-  const krMat = new THREE.MeshLambertMaterial({ color: 0xffffff });
-  baeumeKrone = new THREE.InstancedMesh(krGeo, krMat, N_BAEUME);
-  const baumFarbe = new THREE.Color();
+  const geo = new THREE.CylinderGeometry(0.35, 0.5, 1, 7);
+  geo.translate(0, 0.5, 0); // Basis am Boden (y = 0)
+  const mat = new THREE.MeshLambertMaterial({ color: 0x4f7a3e }); // einfacher Grün-Ton
+  baeumeStamm = new THREE.InstancedMesh(geo, mat, N_BAEUME);
   for (let i = 0; i < N_BAEUME; i += 1) {
     const t = echte.length ? echte[i % echte.length] : null;
-    const kroneM = t ? Math.max(2, Math.min(25, Number(t.kronendurchmesser) || 5)) : 6;
     const hochM = t ? Math.max(4, Math.min(22, Number(t.baumhoehe) || 8)) : 8;
-    const sKrone = (kroneM / 2 / 2.0) * 0.75; // Kugel-Radius 2 m -> echte Halbk Krone, 75 %
-    const sHoch = Math.max(0.5, (hochM * 0.75) / (2.6 + 3.1));
+    const sHoch = hochM * 0.75; // ~75 % Diorama-Maßstab wie bisher
     const bx = t ? Number(t.x) : (i % 2 ? 30 : -30);
     const bz = t ? Number(t.z) : (i % 3 ? 40 : -40);
     dummy.position.set(bx, 0, bz);
-    dummy.scale.set(sHoch, sHoch, sHoch);
-    dummy.rotation.y = (i * 1.7) % 6.28;
+    dummy.scale.set(1, sHoch, 1); // Höhe skaliert, Breite konstanter Standard
     dummy.updateMatrix();
     baeumeStamm.setMatrixAt(i, dummy.matrix);
-    dummy.position.set(bx, (2.6 * sHoch) + 3.1 * sKrone * 0.75, bz);
-    dummy.scale.set(Math.max(0.3, sKrone), Math.max(0.3, sKrone), Math.max(0.3, sKrone));
-    dummy.updateMatrix();
-    baeumeKrone.setMatrixAt(i, dummy.matrix);
-    baeumeKrone.setColorAt(i, baumFarbe.setHex(baumFarbeFuer(t && t.gattung_deutsch)));
   }
-  if (baeumeKrone.instanceColor) baeumeKrone.instanceColor.needsUpdate = true;
   baeumeStamm.instanceMatrix.needsUpdate = true;
-  baeumeKrone.instanceMatrix.needsUpdate = true;
   scene.add(baeumeStamm);
-  scene.add(baeumeKrone);
 }
 function wolkenFaerben() {
   const h = hamburgStunde();
@@ -897,6 +863,16 @@ function baueFigur() {
   ring.rotation.x = Math.PI / 2;
   ring.position.y = 0.12;
   g.add(kopf, rumpf, beinL, beinR, ring);
+  // Dev-Marker: dünne, senkrechte 50-m-Linie an den Füßen — hängt als Child an
+  // der Charakter-Gruppe und bewegt sich damit automatisch mit (auch indoor).
+  const devLineGeo = new THREE.BufferGeometry().setFromPoints([
+    new THREE.Vector3(0, 0, 0), new THREE.Vector3(0, 50, 0),
+  ]);
+  const devLine = new THREE.Line(devLineGeo, new THREE.LineBasicMaterial({
+    color: 0x00e5ff, transparent: true, opacity: 0.85,
+  }));
+  devLine.visible = DEV; // nur in der Dev-Ansicht (?dev / ?mode=dev) sichtbar
+  g.add(devLine);
   g.position.set(-3, 0, -68);
   scene.add(g);
   Z.figur = g;
@@ -958,6 +934,33 @@ function figurUpdaten(dt) {
   }
 }
 
+
+// POI-Pins schweben wie Bojen: sanftes Auf/Ab mit individuellem Phasenversatz.
+// Aktiver Pin (Ort, an dem sich der Charakter aufhält ODER zu dem er unterwegs
+// ist) schwebt prägnanter, damit man ihn auf der Diorama-Scheibe sofort sieht.
+function aktiverPoiId() {
+  const s = Z.staat;
+  if (!s || !s.charakter) return null;
+  if (s.charakter.inside_poi) return s.charakter.inside_poi;
+  const r = s.route;
+  if (r && r.zielPoi) return r.zielPoi;
+  return null;
+}
+function pinsSchweben(nowMs) {
+  const aktiv = aktiverPoiId();
+  for (const [poiId, gruppe] of Z.poiSchilder) {
+    if (!gruppe.visible) continue;
+    const pin = gruppe.userData.pin;
+    if (!pin) continue;
+    const baseY = gruppe.userData.pinBaseY;
+    const phase = gruppe.userData.pinPhase || 0;
+    if (poiId === aktiv) {
+      pin.position.y = baseY + Math.sin(nowMs * 0.0032 + phase) * 1.1;
+    } else {
+      pin.position.y = baseY + Math.sin(nowMs * 0.0022 + phase) * 0.6;
+    }
+  }
+}
 
 // --- 2-Modi-Kamera OHNE Snapping -----------------------------------------------------------------
 // pilot: frei um die Figur drehbar (Distanz 5–45 m, Pitch konstant ~10°).
@@ -1473,9 +1476,13 @@ function gehirnHtml(b, tab) {
       const vs = (e.versuche || []).map((v) =>
         `<div class="karte rot"><b>[${esc(String(v.code || '?'))}] ${esc(String(v.model || '?'))} (${esc(String(v.tier || '?'))})</b><br>`
         + `${esc(String(v.reason || '–'))}<br><pre>${esc(String(v.rawResponse ?? ''))}</pre></div>`).join('');
-      return `<details class="dbg gehirn-dbg"><summary>⚠️ LLM-Fehler #${e.id} (${esc(e.created_at || '')}) – ${(e.fehler || []).map(esc).join(', ') || 'fallback'}</summary>${vs || '<p>–</p>'}</details>`;
+      const pr = e.prompt ? `<details class="dbg"><summary>📥 zugehöriger LLM-Input (Prompt)</summary><pre>${esc(String(e.prompt))}</pre></details>` : '';
+      return `<details class="dbg gehirn-dbg"><summary>⚠️ LLM-Fehler #${e.id} (${esc(e.created_at || '')}) – ${(e.fehler || []).map(esc).join(', ') || 'fallback'}</summary>${vs || '<p>–</p>'}${pr}</details>`;
     }).join('');
-    return `<h3>Tages-Schlagzeilen</h3>${tage || '<p>Noch keine – er muss erst einmal schlafen.</p>'}<h3>Hall of Fame</h3>${ruhm || '<p>Noch niemand gestorben. Gut so.</p>'}<h3>LLM-Fehler (Debug)</h3>${fehler || '<p>Keine Fehler protokolliert.</p>'}`;
+    // LLM-Input-Log (Debug): was die KI bei den letzten Calls als INPUT bekommen hat
+    const inputs = (b.llmInputs || []).map((e) =>
+      `<details class="dbg gehirn-dbg"><summary>📥 LLM-Input #${e.id} (${esc(e.created_at || '')}) – ${esc(e.role || 'alltag')}${e.poi ? ' · ' + esc(e.poi) : ''}${e.kind ? ' · ' + esc(e.kind) : ''}</summary><pre>${esc(String(e.prompt || ''))}</pre></details>`).join('');
+    return `<h3>Tages-Schlagzeilen</h3>${tage || '<p>Noch keine – er muss erst einmal schlafen.</p>'}<h3>Hall of Fame</h3>${ruhm || '<p>Noch niemand gestorben. Gut so.</p>'}<h3>LLM-Input (Debug)</h3>${inputs || '<p>Keine Inputs protokolliert.</p>'}<h3>LLM-Fehler (Debug)</h3>${fehler || '<p>Keine Fehler protokolliert.</p>'}`;
   }
   // kopf (Standard)
   const ch = (Z.staat && Z.staat.charakter) || {};
@@ -1643,6 +1650,7 @@ function loop() {
   letzteZeit = jetzt;
   letztesBild = jetzt;
   figurUpdaten(dt);
+  pinsSchweben(performance.now()); // Bojen-Schweben der POI-Pins (ms-Basis)
   kameraUpdaten(dt, jetzt);
   blasePositionieren();
   renderer.render(scene, camera);

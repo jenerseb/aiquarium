@@ -1,0 +1,49 @@
+{
+  "_lies_mich": [
+    "Modell-Routing: WELCHES Modell ruft WANN — an genau EINER Stelle (dieser Datei).",
+    "",
+    "Reihenfolge der Kette = Fallback-Reihenfolge:",
+    "  Eintrag 1 wird probiert. Bei Fehler (HTTP 429, Timeout, kaputtes JSON) kommt Eintrag 2, dann 3.",
+    "",
+    "provider 'google'     → direkter Google-Call, braucht GEMINI_API_KEY in der .env.",
+    "provider 'openrouter' → OpenRouter-Call, braucht OPENROUTER_API_KEY in der .env.",
+    "Einträge ohne Key werden beim Start automatisch übersprungen (mit Log-Zeile).",
+    "Keys stehen NIE hier, sondern nur in der .env.",
+    "",
+    "Tauschen: einfach den 'modell'-Slug ändern oder eine Zeile löschen/verschieben → npm start neu.",
+    "Beispiel 'nachts zwingend mimo': in rollen.nightly.kette den google-Eintrag löschen."
+  ],
+  "rollen": {
+    "alltag": {
+      "_wofuer": "Tages-Pläne: alle ~20 s ein Plan-Schritt (ca. 150–250 Calls/Tag) — GÜNSTIG/GRATIS HALTEN.",
+      "kette": [
+        { "provider": "google",     "modell": "gemma-4-26b-a4b-it", "maxTokens": 2000 },
+        { "provider": "openrouter", "modell": "nvidia/nemotron-3-ultra-550b-a55b:free", "maxTokens": 7500, "reasoningExclude": true },
+        { "provider": "openrouter", "modell": "google/gemma-4-26b-a4b-it", "maxTokens": 1000 }
+      ]
+    },
+    "arbiter": {
+      "_wofuer": "Welt-Schiedsrichter: neue Wünsche ('Pommes') auf Plausibilität + Preis prüfen — SCHNELL + BILLIG.",
+      "kette": [
+        { "provider": "google",     "modell": "gemma-4-26b-a4b-it", "maxTokens": 2000 },
+        { "provider": "openrouter", "modell": "nvidia/nemotron-3-ultra-550b-a55b:free", "maxTokens": 7500, "reasoningExclude": true },
+        { "provider": "openrouter", "modell": "google/gemma-4-26b-a4b-it", "maxTokens": 1000 }
+      ]
+    },
+    "nightly": {
+      "_wofuer": "Nacht-Call (1×/Tag beim Schlafen): Tages-Zusammenfassung, Sheet-Lernen, Gedächtnis-Aufräumen — DAS STARKE MODELL.",
+      "kette": [
+        { "provider": "openrouter", "modell": "xiaomi/mimo-v2.6-pro", "maxTokens": 3000 },
+        { "provider": "openrouter", "modell": "xiaomi/mimo-v2.6-pro", "maxTokens": 3000 }
+      ]
+    }, 
+    "dev": {
+      "_wofuer": "Dev/Experimente: identisch mit alltag, aber SEPARAT — hier testest du Modelle, ohne den Alltag zu gefährden.",
+      "kette": [
+        { "provider": "google",     "modell": "gemma-4-26b-a4b-it",                "maxTokens": 1800 },
+        { "provider": "openrouter", "modell": "google/gemma-4-26b-a4b-it:free",    "maxTokens": 1800 },
+        { "provider": "openrouter", "modell": "nvidia/nemotron-3.5-super-vl:free", "maxTokens": 1200 }
+      ]
+    } 
+  }
+}

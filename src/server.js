@@ -148,10 +148,22 @@ function apiBrain() {
           const p = JSON.parse(e.payload_json || '{}');
           const q = p.quelle || {};
           const versuche = Array.isArray(q.debugVersuche) ? q.debugVersuche : (q.debug ? [q.debug] : []);
-          return { id: e.id, created_at: e.created_at, fehler: p.fehler || [], versuche };
+          return { id: e.id, created_at: e.created_at, fehler: p.fehler || [], versuche, prompt: p.prompt || null };
         } catch { return null; }
       }).filter(Boolean);
   } catch { llmFehler = []; }
+  // LLM-Input-Log: was die KI bei den letzten Calls als INPUT bekommen hat (voller Prompt)
+  let llmInputs = [];
+  try {
+    llmInputs = db.prepare("SELECT id, payload_json, created_at FROM events WHERE character_id = ? AND type = 'llm_input' ORDER BY id DESC LIMIT 8").all(characterId)
+      .map((e) => {
+        try {
+          const p = JSON.parse(e.payload_json || '{}');
+          return { id: e.id, created_at: e.created_at, role: p.role || 'alltag', poi: p.poi || null,
+            kind: p.kind || null, whitelist: p.whitelist || [], prompt: p.prompt || '' };
+        } catch { return null; }
+      }).filter(Boolean);
+  } catch { llmInputs = []; }
   return {
     sheet, loops, works, fame, summaries: summ,
     memories: {
@@ -161,6 +173,7 @@ function apiBrain() {
     },
     buecher,
     llmFehler,
+    llmInputs,
   };
 }
 
@@ -256,12 +269,11 @@ if (require.main === module) {
   initZustand(cfg.DB.defaultPfad);
   const server = erstelleServer();
   server.listen(PORT, () => {
-    // Fix 1: Routing-Status beim Start loggen – Key geladen? Google vorne?
+    // Fix 1: Routing-Status beim Start loggen – effektive Kette aus model.json.
     try {
-      const aktiv = cfg.googleDirektAktiv();
       const slots = cfg.getRoleSlots('alltag');
       console.log(`[server] http://localhost:${PORT} (db: ${ZUSTAND.dbPfad})`);
-      console.log(`[routing] googleDirektAktiv=${aktiv} primary=${slots.primary.provider}:${slots.primary.model} fallback=${slots.fallback.model}${slots.fallback2 ? ' fallback2=' + slots.fallback2.model : ''}`);
+      console.log(cfg.rollenTabelle());
     } catch {
       console.log(`[server] http://localhost:${PORT} (db: ${ZUSTAND.dbPfad})`);
     }

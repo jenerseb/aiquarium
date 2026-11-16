@@ -415,7 +415,7 @@ async function fuehreSchrittAus(db, deps, characterId, schritt, jetztMs) {
     const ortId = zielId || ch.inside_poi;
     const poi = poiVonId(ortId);
     if (!poi) return { ok: false, grund: 'ort_unbekannt', notizen };
-    const res = await arbiter.resolveIntent(db, brain, poi, action, detail || 'etwas Einfaches');
+    const res = await arbiter.resolveIntent(db, brain, poi, action, detail || 'etwas Einfaches', characterId);
     const angebot = res.angebot;
     if (action === 'consume' && Number(ch.geld) < Number(angebot.price)) {
       return { ok: false, grund: 'geld_reicht_nicht', notizen, angebot };
@@ -653,6 +653,14 @@ async function holeNeuenPlanMitMeta(db, deps, characterId, jetztMs) {
     letztesEreignis: ereignisse.length > 0 ? `${ereignisse[0].type}: ${ereignisse[0].payload_json}` : null,
   };
   const gebaut = promptMod.buildPrompt(db, ch, ctx);
+  // LLM-Input-Log (Debug): was die KI bei diesem Call als INPUT bekommt –
+  // voller Prompt + Whitelist, als Event (in_feed = 0, nur fürs Gehirn-Log).
+  if (devAn) {
+    try {
+      db.prepare("INSERT INTO events (character_id, tick, type, payload_json, in_feed) VALUES (?, 0, 'llm_input', ?, 0)")
+        .run(characterId, JSON.stringify({ role: 'alltag', schema: 'plan', whitelist: gebaut.whitelist, prompt: gebaut.prompt }));
+    } catch { /* Gehirn-Log darf nie crashen */ }
+  }
   // Ohne Brain: deterministischer Notfall-Plan (Engine läuft weiter).
   // Hinweis: ein gemocktes Brain (Tests) darf auch ohne API-Key entscheiden.
   if (!brain || typeof brain.decide !== 'function') {
@@ -735,7 +743,7 @@ async function holeNeuenPlanMitMeta(db, deps, characterId, jetztMs) {
     if (devAn) {
       try {
         db.prepare("INSERT INTO events (character_id, tick, type, payload_json, in_feed) VALUES (?, 0, 'llm_debug', ?, 1)")
-          .run(characterId, JSON.stringify({ quelle: fallbackQuelle, fehler: geprueft.failures }));
+          .run(characterId, JSON.stringify({ quelle: fallbackQuelle, fehler: geprueft.failures, prompt: gebaut.prompt }));
       } catch { /* Gehirn-Log darf nie crashen */ }
     }
     return { thought: geprueft.thought || 'Plan verworfen.', retrospective: geprueft.retrospective || '',
@@ -746,7 +754,7 @@ async function holeNeuenPlanMitMeta(db, deps, characterId, jetztMs) {
     loggeDebug(debugEinzeln);
     try {
       db.prepare("INSERT INTO events (character_id, tick, type, payload_json, in_feed) VALUES (?, 0, 'llm_debug', ?, 1)")
-        .run(characterId, JSON.stringify({ quelle, fehler: [] }));
+        .run(characterId, JSON.stringify({ quelle, fehler: [], prompt: gebaut.prompt }));
     } catch { /* Gehirn-Log darf nie crashen */ }
   }
   return { thought: geprueft.thought, retrospective: geprueft.retrospective, plan: geprueft.plan, fallback: false, roh: antwort, quelle };

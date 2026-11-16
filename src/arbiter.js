@@ -80,7 +80,7 @@ function deterministischesAngebot(poi, kind, wunschText) {
 // Kleiner LLM-Call (arbiter-Rolle): plausibilisiert Preis + Wirkung.
 // Primary → Fallback via getRoleSlots('arbiter') (429/JSON-Fehler → Fallback).
 // Gibt { obj, usedModel, tokens } zurück (für Dev-Feed-Transparenz).
-async function arbiterLLM(brain, poi, kind, wunschText) {
+async function arbiterLLM(brain, poi, kind, wunschText, db, characterId) {
   if (!brain || typeof brain.callModel !== 'function') return null;
   const apiKey = process.env.OPENROUTER_API_KEY;
   if (!apiKey) return null;
@@ -94,6 +94,13 @@ async function arbiterLLM(brain, poi, kind, wunschText) {
     ' "hunger_delta": -50..-5 (nur consume, sonst 0), "erschoepfung_delta": 2..15 bei Aktivitaet,',
     ' "froh_delta": -8..16, "narrative": "ein Satz" }. Unplausibles -> plausibel:false.',
   ].join('\n');
+  // LLM-Input-Log (Debug): was der Arbiter-Call als INPUT bekommt.
+  if (db) {
+    try {
+      db.prepare("INSERT INTO events (character_id, tick, type, payload_json, in_feed) VALUES (?, 0, 'llm_input', ?, 0)")
+        .run(characterId ?? null, JSON.stringify({ role: 'arbiter', poi: poi ? poi.id : null, kind, wunschText, prompt }));
+    } catch { /* Gehirn-Log darf nie crashen */ }
+  }
   const pair = getRoleSlots('arbiter');
   for (const slot of [pair.primary, pair.fallback]) {
     try {
@@ -138,11 +145,11 @@ function klammereAngebot(poi, kind, intentKey, vorschlag) {
   };
 }
 
-async function resolveIntent(db, brain, poi, kind, wunschText) {
+async function resolveIntent(db, brain, poi, kind, wunschText, characterId) {
   const key = normalisiereKey(wunschText);
   const bekannt = findeAngebot(db, poi.id, kind, key);
   if (bekannt) return { angebot: bekannt, neu: false };
-  const llm = await arbiterLLM(brain, poi, kind, wunschText);
+  const llm = await arbiterLLM(brain, poi, kind, wunschText, db, characterId);
   const llmObj = llm && llm.obj ? llm.obj : null;
   let angebot;
   if (!llmObj || llmObj.plausibel === false) {
@@ -357,6 +364,11 @@ async function runNightlyConsolidation(db, brain, characterId, tagesLog, jetztMs
     ' "sheet_confirm_ids": [ids], "promote_memory_ids": [ids], "drop_memory_ids": [ids],',
     ' "open_loops_update": {"close_ids": [ids], "new_loops": [{"kind":"question|want|work","text":"...","urgency":0..1}]} }',
   ].join('\n');
+  // LLM-Input-Log (Debug): was der Nacht-Call als INPUT bekommt.
+  try {
+    db.prepare("INSERT INTO events (character_id, tick, type, payload_json, in_feed) VALUES (?, 0, 'llm_input', ?, 0)")
+      .run(characterId, JSON.stringify({ role: 'nightly', datum, prompt }));
+  } catch { /* Gehirn-Log darf nie crashen */ }
   let out = null;
   const apiKey = process.env.OPENROUTER_API_KEY;
   let nightlyQuelle = { source: 'fallback', model: '', tokens: 0 };

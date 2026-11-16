@@ -94,15 +94,48 @@ Mit Telegram wird es interaktiv:
 Ohne Keys passiert nichts Schlimmes: Nachrichten landen als
 `[telegram:aus]` im Server-Log.
 
+## Welches Modell wird wann gerufen? → `model.json`
+
+Das komplette Modell-Routing steht in **einer Datei: `model.json`** (Projekt-Root, mit
+`_lies_mich`-Erklärung direkt in der Datei). `src/config.js` ist nur der Loader.
+
+| Rolle | Wofür | Kette (Reihenfolge = Fallback) |
+|---|---|---|
+| `alltag` | Tages-Pläne (alle ~20 s, 150–250 Calls/Tag) | google gemma → gemma `:free` → nemotron `:free` |
+| `arbiter` | Welt-Checks („Pommes“: plausibel? Preis?) | google gemma → `glm-5.3-flash` → `mistral-nemo` |
+| `nightly` | Nacht-Call (1×/Tag beim Schlafen) | google gemma → `mimo-v2.6-pro` |
+| `dev` | Experimente (separat vom Alltag) | google gemma → gemma `:free` → nemotron `:free` |
+
+- **Eintrag 1 wird probiert; bei Fehler (429/Timeout/kaputtes JSON) kommt Eintrag 2, dann 3.**
+- `google`-Einträge brauchen `GEMINI_API_KEY` in der `.env` — fehlt der Key, werden sie beim
+  Start übersprungen (mit Log-Zeile) und die Kette startet beim nächsten OpenRouter-Modell.
+- **Modell tauschen:** in `model.json` den Slug ändern / Zeile löschen / Reihenfolge tauschen →
+  `npm start` neu. Beispiel „nachts zwingend mimo“: google-Eintrag in `rollen.nightly` löschen.
+- **Env-Overrides für Modelle gibt es nicht mehr** (`AIQUARIUM_MODEL` & Co. sind entfernt) —
+  eine Quelle, eine Wahrheit. Keys (`GEMINI_API_KEY`, `OPENROUTER_API_KEY`) bleiben in der `.env`.
+- Was wirklich gerufen wurde: Feed-Badges (`[gemma] [free] [148 tok]` / `[fallback]`), der
+  LLM-Input/Debug-Aufklapper im Gehirn → Chronik-Tab, und beim Start druckt der Server die
+  effektive Tabelle (`[model]`/Routing-Zeilen im Terminal).
+
 ## API für Neugierige
 
 | Aufruf | Was kommt zurück |
 |---|---|
 | `GET /api/state` | Werte, Position, Feed, Weltuhr |
-| `GET /api/brain` | „Gehirn": Sheet, Memories, Loops, Fame |
+| `GET /api/brain` | „Gehirn": Sheet, Memories, Loops, Fame, LLM-Input/Fehler-Debug |
 | `GET /api/stream` | Live-Ticks als SSE |
 | `POST /api/dev/tick` | Schritt von Hand (nur localhost) |
 | `POST /api/dev/nightly` | Nacht-Call von Hand (nur localhost) |
+
+## Welt neu starten (Simulation von 0)
+
+```bash
+npm run reset       # Backup der alten Welt + DB löschen
+npm start           # Welt neu anlegen + simulieren
+```
+
+Ohne Backup direkt: `npm run reset:hard`. Anderer Pfad: `node scripts/reset-world.js --pfad=/pfad/zu/world.sqlite`.
+Kopierbarer Einzeiler (ohne npm): `cd aiquarium-app && rm -f ~/.local/share/aiquarium/world.sqlite* && npm start`
 
 ## Projektstruktur
 

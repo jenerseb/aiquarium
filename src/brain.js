@@ -298,19 +298,27 @@ async function versucheSlot({ prompt, apiKey, slot, temperature, label, whitelis
 async function decide(opts) {
   const { prompt, whitelist = [], recentThoughts = [], apiKey, musing = false, orte = [], vorhabenAktiv = false, role = 'alltag', schema = 'decision' } = opts;
   const pair = getRoleSlots(role);
+  if (!pair || !pair.primary) {
+    return { ok: false, action: null, thought: '', musing: null, stale: true, reason: 'kein_modell_konfiguriert', failures: ['kein_modell_konfiguriert'] };
+  }
   const brauchtOpenRouter = [pair.primary, pair.fallback, pair.fallback2].filter(Boolean).some((s) => s.provider !== 'google');
   const hatGoogleKey = Boolean((GEMINI && GEMINI.apiKey) || opts.geminiKey);
   if (!apiKey && (brauchtOpenRouter || !hatGoogleKey)) {
     return { ok: false, action: null, thought: '', musing: null, stale: true, reason: 'no_key', failures: ['no_key'] };
   }
 
-  // Kette: primary (Google-Direct wenn Key) -> fallback-1 -> fallback-2 (OpenRouter).
-  // Labels 'primary' bleiben stabil (Engine/UI/Tests), intern fallback-1/-2.
-  const attempts = [
-    { slot: pair.primary, temperature: opts.temperature ?? MODEL.temperature, label: 'primary' },
-    { slot: pair.fallback, temperature: MODEL.retryTemperature, label: 'fallback' },
-    ...(pair.fallback2 ? [{ slot: pair.fallback2, temperature: MODEL.retryTemperature, label: 'fallback-2' }] : []),
-  ];
+  // Kette: Alle Einträge aus model.json der Reihe nach (primary, fallback, fallback-2…).
+  // Nur vorhandene Einträge werden Versuche — null-Einträge (Key-Filter) entfallen.
+  const attempts = (pair.kette && pair.kette.length > 0 ? pair.kette : [pair.primary, pair.fallback, pair.fallback2])
+    .filter(Boolean)
+    .map((slot, i) => ({
+      slot,
+      temperature: i === 0 ? (opts.temperature ?? MODEL.temperature) : MODEL.retryTemperature,
+      label: i === 0 ? 'primary' : (i === 1 ? 'fallback' : 'fallback-' + i),
+    }));
+  if (attempts.length === 0) {
+    return { ok: false, action: null, thought: '', musing: null, stale: true, reason: 'kein_modell_konfiguriert', failures: ['kein_modell_konfiguriert'] };
+  }
   let last = null;
   const total = { latencyMs: 0, cost: 0, calls: 0 };
   let primaryGrund = ''; // womit primary scheiterte (für [not:x:grund]-Badge bei Fallback-Erfolg)

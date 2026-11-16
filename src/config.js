@@ -113,38 +113,92 @@ const MEMORY = {
   decayLong: 0.03,
 };
 
-// ---- Modell-Routing: primary + fallback-1 + fallback-2 pro Rolle ----
-// Google-Direct (GEMINI_API_KEY): primärer Provider, OpenRouter bleibt Fallback.
-// Dev-Modus (AIQUARIUM_DEV !== '0', Standard): Google-Direct wenn Key gesetzt, sonst :free-Modelle (0,00 €).
-// Live (AIQUARIUM_DEV === '0'): alltag primary free → fallback paid, Rest fix (ohne Key).
+// ---- Modell-Routing: ALLES lebt in model.json (Projekt-Root) ---------------------------
+// Diese Datei ist nur der LOADER: model.json lesen → Key-Filter → Slots bauen.
+// „Welches Modell ruft wann?" steht in model.json (mit _lies_mich-Erklärung).
+// Env-Overrides (AIQUARIUM_MODEL etc.) gibt es bewusst NICHT mehr — eine Quelle, eine Wahrheit.
+const fs = require('node:fs');
 const OPENROUTER_BASE = 'https://openrouter.ai/api/v1/chat/completions';
 
 // ---- Google-Direct (eigener Key, kein OpenRouter-BYOK) ----
 // GEMINI_API_KEY: AQ.* (Express) und AIza* (Studio) laufen beide ueber AI Studio.
 const GEMINI = {
   apiKey: String(process.env.GEMINI_API_KEY || '').trim() || null,
-  modell: String(process.env.GEMINI_MODEL || 'gemma-4-26b-a4b-it').trim() || 'gemma-4-26b-a4b-it',
 };
 
-function googleDirektAktiv() {
+// Google-Einträge brauchen einen Key (und sind in Tests bewusst aus, damit
+// Mock-Tests deterministisch gegen OpenRouter-Mocks laufen).
+function googleEintragAktiv() {
   return Boolean(GEMINI.apiKey) && process.env.NODE_ENV !== 'test';
 }
 
-function googleSlot(maxTokens) {
+function googleSlot(eintrag) {
   const vertex = String(GEMINI.apiKey || '').startsWith('AQ.');
   return {
     provider: 'google',
-    model: GEMINI.modell,
+    model: eintrag.modell,
     providerLabel: vertex ? 'Google Direct (Vertex)' : 'Google Direct (AI Studio)',
     reasoningExclude: false,
-    maxTokens,
+    maxTokens: eintrag.maxTokens || 1200,
   };
 }
 
+function openrouterSlot(eintrag) {
+  return {
+    provider: 'openrouter',
+    model: eintrag.modell,
+    reasoningExclude: Boolean(eintrag.reasoningExclude),
+    maxTokens: eintrag.maxTokens || 1200,
+  };
+}
+
+// model.json laden + in Slot-Form übersetzen. Kaputte Datei → sofort laute
+// Fehlermeldung (nicht stillschweigend ein Default), damit man den Fehler sieht.
+function ladeModellRouten() {
+  const datei = path.join(__dirname, '..', 'model.json');
+  let roh;
+  try {
+    roh = JSON.parse(fs.readFileSync(datei, 'utf8'));
+  } catch (err) {
+    throw new Error(`[model] model.json ist kaputt oder fehlt (${datei}): ${err.message}`);
+  }
+  if (!roh || typeof roh !== 'object' || !roh.rollen || typeof roh.rollen !== 'object') {
+    throw new Error('[model] model.json muss ein Objekt mit "rollen" sein (Erklärung in der Datei).');
+  }
+  const routen = {};
+  for (const [name, def] of Object.entries(roh.rollen)) {
+    if (!def || !Array.isArray(def.kette)) {
+      throw new Error(`[model] model.json: Rolle "${name}" braucht ein "kette"-Array.`);
+    }
+    const kette = [];
+    for (const e of def.kette) {
+      if (!e || (e.provider !== 'google' && e.provider !== 'openrouter') || !e.modell) {
+        throw new Error(`[model] model.json: Rolle "${name}" hat einen kaputten Eintrag (provider 'google'|'openrouter' + modell nötig): ${JSON.stringify(e)}`);
+      }
+      if (e.provider === 'google' && !googleEintragAktiv()) {
+        console.log(`[model] Rolle "${name}": google-Eintrag (${e.modell}) übersprungen — kein GEMINI_API_KEY (bzw. Test-Modus).`);
+        continue;
+      }
+      kette.push(e.provider === 'google' ? googleSlot(e) : openrouterSlot(e));
+    }
+    // Kompatible Form für brain.js/arbiter.js: primary/fallback/fallback2 = kette[0..2].
+    routen[name] = {
+      _wofuer: def._wofuer || '',
+      kette,
+      primary: kette[0] || null,
+      fallback: kette[1] || null,
+      fallback2: kette[2] || null,
+    };
+  }
+  return routen;
+}
+
+const SLOTS = ladeModellRouten();
+
 const MODEL = {
   baseUrl: process.env.AIQUARIUM_BASE_URL || OPENROUTER_BASE,
-  // Default-Modell für Tagesbetrieb (wird von SLOTS.alltag.primary gespiegelt)
-  name: process.env.AIQUARIUM_MODEL || 'google/gemma-4-26b-a4b-it:free',
+  // Default-Modell (nur Notfall-Default für callModel ohne explizites model):
+  name: (SLOTS.alltag && SLOTS.alltag.primary && SLOTS.alltag.primary.model) || 'google/gemma-4-26b-a4b-it:free',
   timeoutMs: 45000,
   temperature: 0.7,
   retryTemperature: 0.3,
@@ -156,52 +210,9 @@ const MODEL = {
   reasoningExclude: false,
 };
 
-const SLOTS = {
-  // Dev (?dev=1): Google-Direct wenn Key gesetzt, sonst :free-Paar (0,00 EUR).
-  // Hinweis: fallback bewusst :free (nicht paid) – Config-Mismatch bereinigt.
-  dev: googleDirektAktiv()
-    ? { primary: googleSlot(1800), fallback: { provider: 'openrouter', model: process.env.AIQUARIUM_DEV_MODEL || 'google/gemma-4-26b-a4b-it:free', reasoningExclude: true, maxTokens: 1800 }, fallback2: { provider: 'openrouter', model: process.env.AIQUARIUM_DEV_FALLBACK2 || 'nvidia/nemotron-3.5-super-vl:free', reasoningExclude: false, maxTokens: 1200 } }
-    : {
-      primary: { provider: 'openrouter', model: process.env.AIQUARIUM_DEV_MODEL || 'google/gemma-4-26b-a4b-it:free', reasoningExclude: true, maxTokens: 1800 },
-      fallback: { provider: 'openrouter', model: 'google/gemma-4-26b-a4b-it:free', reasoningExclude: false, maxTokens: 1800 },
-    },
-  // Alltag: Google-Direct vorne, OpenRouter dahinter (fallback-1 / fallback-2).
-  alltag: googleDirektAktiv()
-    ? { primary: googleSlot(1200), fallback: { provider: 'openrouter', model: process.env.AIQUARIUM_MODEL || 'google/gemma-4-26b-a4b-it:free', reasoningExclude: false, maxTokens: 1200 }, fallback2: { provider: 'openrouter', model: process.env.AIQUARIUM_FALLBACK_MODEL || 'google/gemma-4-26b-it', reasoningExclude: false, maxTokens: 1200 } }
-    : {
-      primary: { provider: 'openrouter', model: process.env.AIQUARIUM_MODEL || 'google/gemma-4-26b-a4b-it:free', reasoningExclude: false, maxTokens: 1200 },
-      fallback: { provider: 'openrouter', model: process.env.AIQUARIUM_FALLBACK_MODEL || 'google/gemma-4-26b-it', reasoningExclude: false, maxTokens: 1200 },
-    },
-  // Welt-Schiedsrichter (Ladenpreise, Job-Zusagen): Google-Direct vorne, OpenRouter dahinter.
-  arbiter: googleDirektAktiv()
-    ? { primary: googleSlot(900), fallback: { provider: 'openrouter', model: process.env.AIQUARIUM_ARBITER_MODEL || 'z-ai/glm-5.3-flash', reasoningExclude: false, maxTokens: 900 }, fallback2: { provider: 'openrouter', model: process.env.AIQUARIUM_ARBITER_FALLBACK || 'z-ai/glm-5.3-flash', reasoningExclude: false, maxTokens: 900 } }
-    : {
-      primary: { provider: 'openrouter', model: process.env.AIQUARIUM_ARBITER_MODEL || 'z-ai/glm-5.3-flash', reasoningExclude: false, maxTokens: 900 },
-      fallback: { provider: 'openrouter', model: process.env.AIQUARIUM_ARBITER_FALLBACK || 'z-ai/glm-5.3-flash', reasoningExclude: false, maxTokens: 900 },
-    },
-  // Naechtliche Schlaf-Konsolidierung (1x pro Tag): Google-Direct vorne, OpenRouter dahinter.
-  nightly: googleDirektAktiv()
-    ? { primary: googleSlot(1400), fallback: { provider: 'openrouter', model: process.env.AIQUARIUM_NIGHTLY_MODEL || 'xiaomi/mimo-v2.6-pro', reasoningExclude: false, maxTokens: 1400 }, fallback2: { provider: 'openrouter', model: process.env.AIQUARIUM_NIGHTLY_FALLBACK || 'xiaomi/mimo-v2.6-pro', reasoningExclude: false, maxTokens: 1400 } }
-    : {
-      primary: { provider: 'openrouter', model: process.env.AIQUARIUM_NIGHTLY_MODEL || 'xiaomi/mimo-v2.6-pro', reasoningExclude: false, maxTokens: 1400 },
-      fallback: { provider: 'openrouter', model: process.env.AIQUARIUM_NIGHTLY_FALLBACK || 'xiaomi/mimo-v2.6-pro', reasoningExclude: false, maxTokens: 1400 },
-    },
-};
-
-// Dev-Prio: AIQUARIUM_DEV !== '0' (Standard an → 0,00 €). Live nur mit explizit '0'.
-function devPrioAn() {
-  return String(process.env.AIQUARIUM_DEV ?? '1') !== '0';
-}
-
-// Zentraler Helper: Rolle → { primary, fallback, fallback2? }.
-// Fix Rollen-Umbau: echte Rolle (dev/alltag/arbiter/nightly) auch im Dev-Modus –
-// kein Zusammenstauchen mehr auf SLOTS.dev. Dev bleibt kostenlos (:free / Google).
+// Zentraler Helper: Rolle → Kette aus model.json (primary/fallback/fallback2).
 function getRoleSlots(role) {
-  if (role === 'arbiter') return SLOTS.arbiter;
-  if (role === 'nightly') return SLOTS.nightly;
-  if (role === 'dev') return SLOTS.dev;
-  if (devPrioAn() && (role === 'alltag' || !role)) return SLOTS.dev;
-  return SLOTS.alltag;
+  return SLOTS[role] || SLOTS.alltag;
 }
 
 // Rückwärtskompatibilität (altes brain.js / Engine): flache Slot-Form { model, reasoningExclude }.
@@ -214,10 +225,20 @@ function fallbackSlot() {
 }
 
 function slotFuer(zweck) {
-  if (zweck === 'nightly') return getRoleSlots('nightly').primary;
-  if (zweck === 'arbiter') return getRoleSlots('arbiter').primary;
-  if (zweck === 'dev') return SLOTS.dev.primary;
-  return getRoleSlots('alltag').primary;
+  return getRoleSlots(zweck === 'nightly' || zweck === 'arbiter' || zweck === 'dev' ? zweck : 'alltag').primary;
+}
+
+// Konsole-Demo: druckt die effektiven Ketten (was WANN wirklich gerufen wird).
+function rollenTabelle() {
+  const zeilen = ['Effektives Modell-Routing (aus model.json, nach Key-Filter):'];
+  for (const [name, r] of Object.entries(SLOTS)) {
+    zeilen.push(`  ${name.padEnd(8)} — ${r._wofuer}`);
+    r.kette.forEach((s, i) => {
+      zeilen.push(`    ${i + 1}. [${s.provider}] ${s.model}${s.providerLabel ? ` (${s.providerLabel})` : ''}`);
+    });
+    if (r.kette.length === 0) zeilen.push('    (leer — kein Modell verfügbar, Calls laufen in den Engine-Fallback)');
+  }
+  return zeilen.join('\n');
 }
 
 const DB = {
@@ -240,11 +261,11 @@ module.exports = {
   SLOTS,
   OPENROUTER_BASE,
   GEMINI,
-  googleDirektAktiv,
+  googleDirektAktiv: googleEintragAktiv,
   aktiverSlot,
   fallbackSlot,
   slotFuer,
-  devPrioAn,
   getRoleSlots,
+  rollenTabelle,
   DB,
 };
