@@ -68,19 +68,37 @@ function apiState() {
   return { charakter: ch, feed, world: ws, pois, plan, route, zeit: { berlin: new Date().toISOString(), nacht: istNacht(Date.now()) } };
 }
 
-// GET /api/map: statische Kiez-Geometrie (buildings, streets, parks, pois + meta).
+// GET /api/map: statische Kiez-Geometrie (buildings/lod2, trees, streets, parks, pois + meta).
+// LoD2 (echte Hamburger 3D-Dreiecke) hat Vorrang, dahinter hamburg_geodata.json
+// (INSPIRE-Footprints), dahinter kiez_map.json. A*-Routing (navGraph) bleibt
+// IMMER kiez_map.json (OSM).
 // Parks: kiez_map.json hat keine parks-Key – wir leiten Grünflächen aus
 // park-POIs + Umkreis ab (MVP), echte OSM-leisure-Polygone wären Phase 2.
+function ladeLoD2() {
+  try {
+    const p = require('node:path').join(__dirname, '..', 'data', 'hamburg_lod2.json');
+    const d = JSON.parse(require('node:fs').readFileSync(p, 'utf8'));
+    if (d && Array.isArray(d.buildings) && d.buildings.length > 50) return d;
+    return null;
+  } catch {
+    return null;
+  }
+}
 function apiMap() {
   const karte = (ZUSTAND && ZUSTAND.karte) || dbMod.ladeKiezKarte() || { buildings: [], streets: [] };
-  const pois = dbMod && ZUSTAND ? ZUSTAND.db.prepare('SELECT id, name, category, pos_x, pos_z, discovered FROM pois ORDER BY id').all() : [];
+  const geo = dbMod.ladeHamburgGeodata() || {};
+  const lod2 = ladeLoD2();
+  const pois = dbMod && ZUSTAND ? ZUSTAND.db.prepare('SELECT id, name, category, pos_x, pos_z, discovered, world_meta_json FROM pois ORDER BY id').all() : [];
   const parks = (karte.parks && Array.isArray(karte.parks)) ? karte.parks : pois
     .filter((p) => p.category === 'park')
     .map((p) => ({ id: 'park_' + p.id, name: p.name, kreis: { x: Number(p.pos_x), z: Number(p.pos_z), r: 18 } }));
   return {
-    meta: karte.meta || null,
-    buildings: karte.buildings || [],
+    meta: Object.assign({}, karte.meta || null, geo.meta ? { hamburgGeodata: geo.meta } : null, lod2 && lod2.meta ? { hamburgLoD2: lod2.meta } : null),
+    buildings: (lod2 && lod2.buildings) || (geo.buildings && geo.buildings.length ? geo.buildings : karte.buildings) || [],
+    lod2: (lod2 && lod2.buildings) || null,
+    trees: geo.trees || [],
     streets: karte.streets || [],
+    navGraph: karte.navGraph || null,
     parks,
     pois,
   };

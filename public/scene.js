@@ -363,6 +363,13 @@ function fassadenTextur(breiteM, hoeheM, grundFarbe, faktor) {
 }
 
 function baueGebaeude(buildings) {
+  // LoD2-Pfad: echte 3D-Dreiecke (Wände + Dächer) aus hamburg_lod2.json —
+  // 2 Draw Calls statt ~2000 (alle Wände gemergt, alle Dächer gemergt).
+  const lod = (buildings || []).filter((b) => Array.isArray(b.wallTriangles) || Array.isArray(b.roofTriangles));
+  if (lod.length > 50) {
+    baueLoD2(lod);
+    return;
+  }
   // Alte Meshes raus (bei Reload)
   for (const [, m] of Z.gebaeude) { scene.remove(m); }
   Z.gebaeude.clear();
@@ -385,10 +392,18 @@ function baueGebaeude(buildings) {
       const form = new THREE.Shape();
       form.moveTo(fp[0][0], -fp[0][1]);
       for (let i = 1; i < fp.length; i += 1) form.lineTo(fp[i][0], -fp[i][1]);
+      // ALKIS-Innenhöfe: Holes (Ringe aus hamburg_geodata.json) als Löcher.
+      for (const loch of b.holes || []) {
+        if (!Array.isArray(loch) || loch.length < 3) continue;
+        const pfad = new THREE.Path();
+        pfad.moveTo(loch[0][0], -loch[0][1]);
+        for (let i = 1; i < loch.length; i += 1) pfad.lineTo(loch[i][0], -loch[i][1]);
+        form.holes.push(pfad);
+      }
       // DIORAMA_V1: weicher Modellbau-Bevel (Miniatur-Look statt scharfer Kloetze)
       let geo = null;
       try {
-        geo = new THREE.ExtrudeGeometry(form, { depth: Math.max(0.1, h - 0.35), bevelEnabled: true, bevelThickness: 0.35, bevelSize: 0.28, bevelSegments: 2 });
+        geo = new THREE.ExtrudeGeometry(form, { depth: Math.max(0.1, h - 0.35), bevelEnabled: true, bevelThickness: 0.3, bevelSize: 0.25, bevelSegments: 2 });
         geo.rotateX(-Math.PI / 2);
         geo.computeBoundingBox();
         geo.translate(0, -geo.boundingBox.min.y, 0);
@@ -427,16 +442,117 @@ function baueGebaeude(buildings) {
   console.log(`[gebaeude] ${gebaut}/${liste.length} gebaut, ${uebersprungen} uebersprungen (Bevel-Fallback/Guard)`);
 }
 
-// Indoor-Transparenz: genau ein Gebäude halbtransparent + warmer Glow,
-// damit man die Figur drinnen sieht (Betritt oder Klick).
+// --- LoD2: echte Hamburger 3D-Geometrie (Wände + echte Dachflächen) ---
+// 2 gemergte Meshes (Wände mit warmen Vertex-Colors, Dächer farbcodiert),
+// y-Skalierung einheitlich 0.75 (Diorama), jedes Gebäude sitzt auf y = 0.
+let lodHighlight = null;
+const LOD_SKALA = 0.75;
+const LOD_DACHFARBEN = {
+  flachdach: 0x4a4f57, satteldach: 0x9c4a3b, walmdach: 0xa85638,
+  pultdach: 0x343942, mansarddach: 0x8f4f43, zeltdach: 0x4e786c,
+};
+function lodDachfarbe(b) {
+  void b;
+  return 0x9c4a3b; // Terrakotta (Dachform steht im Batch, nicht in lod2.json)
+}
+function lodWandfarbe(id) {
+  // Warme Backstein-/Putz-Töne, deterministisch je Gebäude.
+  const palette = [0xb3563f, 0xc97e5a, 0xe3c893, 0xd9b98a, 0x9aa0a8, 0x8f4f43, 0xc4a484];
+  let h = 0;
+  const s = String(id);
+  for (let i = 0; i < s.length; i += 1) h = (h * 31 + s.charCodeAt(i)) >>> 0;
+  return palette[h % palette.length];
+}
+function baueLoD2(lod) {
+  for (const [, m] of Z.gebaeude) { scene.remove(m); }
+  Z.gebaeude.clear();
+  if (lodHighlight) { scene.remove(lodHighlight); lodHighlight = null; }
+  const wandPos = [];
+  const wandCol = [];
+  const dachPos = [];
+  const dachCol = [];
+  const tmpFarbe = new THREE.Color();
+  // Pro Gebäude: Dreiecke einsammeln (y bereits ab 0, Skala 0.75 anwenden).
+  for (const b of lod) {
+    tmpFarbe.setHex(lodWandfarbe(b.id));
+    const wr = 0.92 + ((String(b.id).length * 7) % 12) / 100;
+    for (const tri of b.wallTriangles || []) {
+      for (const p of tri) {
+        wandPos.push(p[0], p[1] * LOD_SKALA, p[2]);
+        wandCol.push(tmpFarbe.r * wr, tmpFarbe.g * wr, tmpFarbe.b * wr);
+      }
+    }
+    tmpFarbe.setHex(LOD_DACHFARBEN.flachdach).lerp(new THREE.Color(lodDachfarbe(b)), 0.85);
+    for (const tri of b.roofTriangles || []) {
+      for (const p of tri) {
+        dachPos.push(p[0], p[1] * LOD_SKALA, p[2]);
+        dachCol.push(tmpFarbe.r, tmpFarbe.g, tmpFarbe.b);
+      }
+    }
+  }
+  function meshAus(posArr, colArr, rau) {
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.Float32BufferAttribute(posArr, 3));
+    geo.setAttribute('color', new THREE.Float32BufferAttribute(colArr, 3));
+    geo.computeVertexNormals();
+    const mat = new THREE.MeshLambertMaterial({ vertexColors: true });
+    void rau;
+    const mesh = new THREE.Mesh(geo, mat);
+    mesh.position.set(0, 0, 0);
+    return mesh;
+  }
+  const waende = meshAus(wandPos, wandCol);
+  const daecher = meshAus(dachPos, dachCol);
+  const gruppe = new THREE.Group();
+  gruppe.add(waende, daecher);
+  gruppe.userData.lod2 = true;
+  scene.add(gruppe);
+  Z.gebaeude.set('__lod2_walls', gruppe);
+  console.log(`[lod2] ${lod.length} gebäude gemergt: ${Math.round(wandPos.length / 9)} wand- + ${Math.round(dachPos.length / 9)} dach-dreiecke, 2 draw calls`);
+}
+
+// LoD2-Highlight: separates Overlay-Mesh NUR für das betretene POI-Haus
+// (wallTriangles + roofTriangles, opacity 0.28 + warmer Glow).
+function setzeLoD2Highlight(gebId) {
+  if (lodHighlight) { scene.remove(lodHighlight); lodHighlight = null; }
+  if (glowLicht) { scene.remove(glowLicht); glowLicht = null; }
+  if (!gebId) return;
+  const lod = (Z.karte && Z.karte.lod2) || [];
+  const b = lod.find((g) => g.id === gebId);
+  if (!b) return;
+  const posArr = [];
+  for (const tri of (b.wallTriangles || []).concat(b.roofTriangles || [])) {
+    for (const p of tri) posArr.push(p[0], p[1] * LOD_SKALA, p[2]);
+  }
+  if (!posArr.length) return;
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.Float32BufferAttribute(posArr, 3));
+  geo.computeVertexNormals();
+  const mat = new THREE.MeshLambertMaterial({ color: 0xffc98a, transparent: true, opacity: 0.28, depthWrite: false });
+  lodHighlight = new THREE.Mesh(geo, mat);
+  lodHighlight.position.set(0, 0, 0);
+  scene.add(lodHighlight);
+  const mitte = new THREE.Vector3(b.centroid[0], (b.maxY || 10) * LOD_SKALA / 2, b.centroid[1]);
+  glowLicht = new THREE.PointLight(0xffc98a, 60, 30);
+  glowLicht.position.set(mitte.x, 4, mitte.z);
+  scene.add(glowLicht);
+}
+
+// Indoor-Transparenz (Extrusions-Modus): genau EIN Einzelhaus halbtransparent.
 let glowLicht = null;
 function setzeIndoorTransparenz(gebaeudeId) {
+  // LoD2-Modus: gemergtes Mesh bleibt, Overlay highlightet das eine Haus.
+  if (Z.gebaeude.has('__lod2_walls')) {
+    if (!gebaeudeId) setzeLoD2Highlight(null);
+    else setzeLoD2Highlight(gebaeudeId);
+    return;
+  }
   for (const [id, gruppe] of Z.gebaeude) {
     const aktiv = id === gebaeudeId;
     for (const kind of gruppe.children) {
       if (!kind.material) continue;
       kind.material.transparent = aktiv;
-      kind.material.opacity = aktiv ? 0.25 : 1.0;
+      kind.material.opacity = aktiv ? 0.28 : 1.0;
       kind.material.needsUpdate = false;
     }
   }
@@ -609,13 +725,32 @@ function textSprite(text, gross) {
 
 // --- Figur (Kiezling) -------------------------------------------------------------------------
 // Vorderseite = +Z (Blickrichtung bei rotation.y = atan2(dx, dz)). Augen auf +Z.
-// --- DIORAMA_V1: Grasbueschel, Blumen & Baeume (je 1 InstancedMesh-Draw-Call) ---
+// --- DIORAMA_V1: Grasbueschel, Blumen & ECHTE Kiez-Bäume (je 1 InstancedMesh-Draw-Call) ---
+// Bäume stammen aus data/hamburg_geodata.json (Straßenbaumkataster):
+// Stamm + niedliche, leicht unregelmäßige Low-Poly-Krone, skaliert nach
+// echtem kronendurchmesser + baumhoehe (je ~75 % Diorama-Maßstab).
 let grasMesh = null;
 let blumenMesh = null;
 let baeumeStamm = null;
 let baeumeKrone = null;
 let grasBasis = null;
-function baueDioramaGruen(parks) {
+// Warme Grüntöne je Gattung (Linde, Ahorn, Platane, Eiche, ...).
+const BAUM_FARBEN = {
+  linde: 0x6fa055, ahorn: 0x5d8a4a, platane: 0x7fa35a, eiche: 0x4f7a3e,
+  esche: 0x668f4e, hainbuche: 0x5a8a52, pappel: 0x74985c, birke: 0x86a860,
+  ulme: 0x577f45, kastanie: 0x639151,
+};
+function baumFarbeFuer(gattung) {
+  const g = String(gattung || '').toLowerCase();
+  for (const [k, v] of Object.entries(BAUM_FARBEN)) {
+    if (g.includes(k)) return v;
+  }
+  let h = 0;
+  for (let i = 0; i < g.length; i += 1) h = (h * 31 + g.charCodeAt(i)) >>> 0;
+  const palette = Object.values(BAUM_FARBEN);
+  return palette[h % palette.length];
+}
+function baueDioramaGruen(parks, trees) {
   const flaechen = [];
   for (const q of parks || []) {
     if (q.kreis) flaechen.push({ x: q.kreis.x, z: q.kreis.z, r: q.kreis.r });
@@ -626,10 +761,11 @@ function baueDioramaGruen(parks) {
     }
   }
   if (!flaechen.length) flaechen.push({ x: 0, z: 0, r: 30 }, { x: 235, z: 105, r: 40 });
+  // Ca. 600 kleine stilisierte Grasbüschel auf Park- und Grünflächen.
   const grasGeo = new THREE.ConeGeometry(0.28, 1.1, 5);
   grasGeo.translate(0, 0.55, 0);
   const grasMat = new THREE.MeshLambertMaterial({ color: 0x7fa35a });
-  const N_GRAS = 800;
+  const N_GRAS = 600;
   grasMesh = new THREE.InstancedMesh(grasGeo, grasMat, N_GRAS);
   grasBasis = new Float32Array(N_GRAS * 3);
   const dummy = new THREE.Object3D();
@@ -665,29 +801,46 @@ function baueDioramaGruen(parks) {
   }
   if (blumenMesh.instanceColor) blumenMesh.instanceColor.needsUpdate = true;
   scene.add(blumenMesh);
-  const N_BAEUME = 90;
+  // ECHTE Kiez-Bäume: zwei InstancedMesh (Stämme + Low-Poly-Kronen),
+  // jeweils skaliert nach echtem kronendurchmesser / baumhoehe (~75 %).
+  const echte = (trees || []).filter((t) => Number.isFinite(Number(t.x)) && Number.isFinite(Number(t.z)));
+  const N_BAEUME = Math.max(1, Math.min(1500, echte.length || 90));
   const stGeo = new THREE.CylinderGeometry(0.35, 0.5, 2.6, 6);
   stGeo.translate(0, 1.3, 0);
   const stMat = new THREE.MeshLambertMaterial({ color: 0x6b4a3a });
   baeumeStamm = new THREE.InstancedMesh(stGeo, stMat, N_BAEUME);
-  const krGeo = new THREE.SphereGeometry(2.0, 8, 6);
-  krGeo.scale(1, 0.82, 1);
-  const krMat = new THREE.MeshLambertMaterial({ color: 0x5d8a4a });
+  // Niedliche, leicht unregelmäßige Krone: Low-Poly-Kugel, oben abgeflacht.
+  const krGeo = new THREE.SphereGeometry(2.0, 7, 5);
+  krGeo.scale(1, 0.78, 1);
+  const posA = krGeo.attributes.position;
+  for (let i = 0; i < posA.count; i += 1) {
+    const wackel = ((i * 37) % 11 - 5) / 100; // +/-5 %, deterministisch
+    posA.setXYZ(i, posA.getX(i) * (1 + wackel), posA.getY(i), posA.getZ(i) * (1 - wackel));
+  }
+  krGeo.computeVertexNormals();
+  const krMat = new THREE.MeshLambertMaterial({ color: 0xffffff });
   baeumeKrone = new THREE.InstancedMesh(krGeo, krMat, N_BAEUME);
+  const baumFarbe = new THREE.Color();
   for (let i = 0; i < N_BAEUME; i += 1) {
-    const f = flaechen[i % flaechen.length];
-    const a = ((i * 57.3) % 360) * Math.PI / 180;
-    const rr = f.r * (0.55 + ((i * 263) % 45) / 100);
-    const s = 0.8 + ((i * 17) % 50) / 100;
-    dummy.position.set(f.x + Math.cos(a) * rr, 0, f.z + Math.sin(a) * rr);
-    dummy.scale.set(s, s, s);
+    const t = echte.length ? echte[i % echte.length] : null;
+    const kroneM = t ? Math.max(2, Math.min(25, Number(t.kronendurchmesser) || 5)) : 6;
+    const hochM = t ? Math.max(4, Math.min(22, Number(t.baumhoehe) || 8)) : 8;
+    const sKrone = (kroneM / 2 / 2.0) * 0.75; // Kugel-Radius 2 m -> echte Halbk Krone, 75 %
+    const sHoch = Math.max(0.5, (hochM * 0.75) / (2.6 + 3.1));
+    const bx = t ? Number(t.x) : flaechen[i % flaechen.length].x;
+    const bz = t ? Number(t.z) : flaechen[i % flaechen.length].z;
+    dummy.position.set(bx, 0, bz);
+    dummy.scale.set(sHoch, sHoch, sHoch);
     dummy.rotation.y = (i * 1.7) % 6.28;
     dummy.updateMatrix();
     baeumeStamm.setMatrixAt(i, dummy.matrix);
-    dummy.position.set(dummy.position.x, 2.6 * s + 1.2, dummy.position.z);
+    dummy.position.set(bx, (2.6 * sHoch) + 3.1 * sKrone * 0.75, bz);
+    dummy.scale.set(Math.max(0.3, sKrone), Math.max(0.3, sKrone), Math.max(0.3, sKrone));
     dummy.updateMatrix();
     baeumeKrone.setMatrixAt(i, dummy.matrix);
+    baeumeKrone.setColorAt(i, baumFarbe.setHex(baumFarbeFuer(t && t.gattung_deutsch)));
   }
+  if (baeumeKrone.instanceColor) baeumeKrone.instanceColor.needsUpdate = true;
   baeumeStamm.instanceMatrix.needsUpdate = true;
   baeumeKrone.instanceMatrix.needsUpdate = true;
   scene.add(baeumeStamm);
@@ -1145,17 +1298,43 @@ function staatAnwenden(s) {
   figurZielSetzen(ch.pos_x, ch.pos_z, ch.heading_rad);
   figurRouteSetzen(s.route || null); // Waypoints für weiche Interpolation (Punkt 1)
   if (ch.inside_poi) {
-    // Indoor: passendes Gebäude transparent (entdeckt + räumlich nah)
+    // Indoor: EXAKT das eine ALKIS-Einzelhaus transparent (world_meta_json.alkis_id).
+    // Fallback: räumlich nächstes Gebäude (30 m), falls keine ID gesetzt.
+    // LoD2-Modus: IDs sind DEHHALKA* (ohne Building_-Prefix) — Prefix tolerant matchen,
+    // sonst nächstes LoD2-Haus per Centroid.
     const poi = (s.pois || []).find((p) => p.id === ch.inside_poi);
     if (poi) {
       let bestId = null;
-      let bestD = 30;
-      for (const [id] of Z.gebaeude) {
-        const box = new THREE.Box3().setFromObject(Z.gebaeude.get(id));
-        const mitte = new THREE.Vector3();
-        box.getCenter(mitte);
-        const d = Math.hypot(mitte.x - Number(poi.pos_x), mitte.z - Number(poi.pos_z));
-        if (d < bestD) { bestD = d; bestId = id; }
+      try {
+        const meta = poi.world_meta_json ? JSON.parse(poi.world_meta_json) : null;
+        if (meta && meta.alkis_id) {
+          if (Z.gebaeude.has(meta.alkis_id)) bestId = meta.alkis_id;
+          else if (Z.gebaeude.has('__lod2_walls')) {
+            const lod = Z.karte.lod2 || [];
+            const kurz = String(meta.alkis_id).replace(/^Building_/, '');
+            const direkt = lod.find((g) => g.id === meta.alkis_id || g.id === kurz || ('Building_' + g.id) === meta.alkis_id);
+            if (direkt) bestId = direkt.id;
+          }
+        }
+      } catch { /* fallback unten */ }
+      if (!bestId) {
+        if (Z.gebaeude.has('__lod2_walls')) {
+          // LoD2-Fallback: nächstes Haus per Centroid (30 m).
+          let bd = 30;
+          for (const g of Z.karte.lod2 || []) {
+            const d = Math.hypot(g.centroid[0] - Number(poi.pos_x), g.centroid[1] - Number(poi.pos_z));
+            if (d < bd) { bd = d; bestId = g.id; }
+          }
+        } else {
+          let bestD = 30;
+          for (const [id] of Z.gebaeude) {
+            const box = new THREE.Box3().setFromObject(Z.gebaeude.get(id));
+            const mitte = new THREE.Vector3();
+            box.getCenter(mitte);
+            const d = Math.hypot(mitte.x - Number(poi.pos_x), mitte.z - Number(poi.pos_z));
+            if (d < bestD) { bestD = d; bestId = id; }
+          }
+        }
       }
       setzeIndoorTransparenz(bestId);
     }
@@ -1321,7 +1500,7 @@ async function ladeKarte() {
     Z.karte = karte;
     try { baueStrassen(karte.streets); } catch (err) { console.warn('[karte] strassen:', err.message); }
     try { baueParks(karte.parks); } catch (err) { console.warn('[karte] parks:', err.message); }
-    try { baueDioramaGruen(karte.parks); } catch (err) { console.warn("[karte] gruen:", err.message); } // DIORAMA_V1
+    try { baueDioramaGruen(karte.parks, karte.trees); } catch (err) { console.warn("[karte] gruen:", err.message); } // DIORAMA_V1
     try { baueGebaeude(karte.buildings); } catch (err) { console.warn('[karte] gebaeude:', err.message); }
     try { bauePoiSchilder(karte.pois); } catch (err) { console.warn('[karte] poi-marker:', err.message); }
     try { baueStrassennamen(karte.streets); } catch (err) { console.warn('[karte] schilder:', err.message); }

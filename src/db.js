@@ -311,6 +311,35 @@ function zaehle(db, tabelle) {
 }
 
 // Seed: POI-Footprints aus echten OSM-Gebaeuden nahe der Seed-Koordinaten.
+// Hamburg-Geodaten (data/hamburg_geodata.json): echte Einzelhäuser + Bäume.
+// Fällt sauber auf data/kiez_map.json zurück (Routing bleibt immer OSM).
+function ladeHamburgGeodata(pfad) {
+  const p = pfad || path.join(__dirname, '..', 'data', 'hamburg_geodata.json');
+  try {
+    const d = JSON.parse(fs.readFileSync(p, 'utf8'));
+    if (d && Array.isArray(d.buildings)) return d;
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+// Nächstes Einzelhaus zu (x, z) + exakte Gebäude-ID (für POI-Highlighting).
+function naechstesGebaeude(geodata, x, z, maxD) {
+  const liste = (geodata && geodata.buildings) || [];
+  let best = null;
+  let bestD = maxD == null ? 60 : maxD;
+  for (const b of liste) {
+    if (!Array.isArray(b.footprint) || b.footprint.length < 3) continue;
+    let sx = 0;
+    let sz = 0;
+    for (const q of b.footprint) { sx += q[0]; sz += q[1]; }
+    const d = Math.hypot(sx / b.footprint.length - x, sz / b.footprint.length - z);
+    if (d < bestD) { bestD = d; best = b; }
+  }
+  return best ? { gebaeude: best, distanz: bestD } : null;
+}
+
 function footprintAusKarte(kiezMap, x, z) {
   if (!kiezMap || !Array.isArray(kiezMap.buildings)) return null;
   let best = null;
@@ -351,13 +380,15 @@ function poiPositionAusKarte(kiezMap, seed) {
 }
 function seed(db, kiezMap) {
   migrate(db);
+  const geodata = ladeHamburgGeodata();
   if (zaehle(db, 'pois') === 0) {
     const ins = db.prepare('INSERT INTO pois (id, name, category, pos_x, pos_z, footprint_json, public_desc, world_meta_json, discovered) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)');
     for (const p of SEED_POIS) {
       const [mx, mz] = poiPositionAusKarte(kiezMap, p);
       const fp = footprintAusKarte(kiezMap, mx, mz);
+      const zu = poiGebaeudeZuordnung(geodata || kiezMap, p, mx, mz);
       ins.run(p.id, p.name, p.category, mx, mz,
-        fp ? JSON.stringify(fp) : null, p.public_desc, null, p.discovered);
+        fp ? JSON.stringify(fp) : null, p.public_desc, zu ? JSON.stringify(zu) : null, p.discovered);
     }
   }
   let charId;
@@ -398,6 +429,16 @@ function ladeKiezKarte(kartenPfad) {
   }
 }
 
+// POI -> exakt passendes Einzelhaus (ALKIS/OSM-Fallback): gibt die
+// Gebäude-ID + Distanz zurück, speichert sie in world_meta_json
+// ({alkis_id}), damit die Szene NUR dieses eine Haus highlightet.
+function poiGebaeudeZuordnung(geodata, seed, mx, mz) {
+  if (!geodata || !Array.isArray(geodata.buildings)) return null;
+  const treffer = naechstesGebaeude(geodata, mx, mz, 60);
+  if (!treffer) return null;
+  return { alkis_id: treffer.gebaeude.id, distanz_m: Math.round(treffer.distanz * 10) / 10 };
+}
+
 function init(pfad, kiezMap) {
   const cfg = require('./config');
   const dbPfad = pfad || cfg.DB.defaultPfad;
@@ -409,6 +450,7 @@ function init(pfad, kiezMap) {
 
 module.exports = {
   SCHEMA, SEED_POIS, SEED_SHEET, SEED_BOOKS, poiPositionAusKarte,
-  openDb, migrate, seed, init, ladeKiezKarte, zaehle,
+  openDb, migrate, seed, init, ladeKiezKarte, ladeHamburgGeodata,
+  naechstesGebaeude, poiGebaeudeZuordnung, zaehle,
 };
 

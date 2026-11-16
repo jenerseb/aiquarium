@@ -129,13 +129,13 @@ const MODEL = {
 const SLOTS = {
   // Aktiv solange AIQUARIUM_DEV !== '0' (garantiert 0,00 € beim Testen)
   dev: {
-    primary: { model: process.env.AIQUARIUM_DEV_MODEL || 'nvidia/nemotron-3-nano-30b-a3b:free', reasoningExclude: true, maxTokens: 1800 },
-    fallback: { model: 'google/gemma-4-26b-a4b-it:free', reasoningExclude: false, maxTokens: 1200 },
+    primary: { model: process.env.AIQUARIUM_DEV_MODEL || 'nvidia/google/gemma-4-26b-a4b-it:free', reasoningExclude: true, maxTokens: 1800 },
+    fallback: { model: 'google/gemma-4-26b-a4b-it', reasoningExclude: false, maxTokens: 1200 },
   },
   // Live-Alltag (AIQUARIUM_DEV=0): erst kostenlose Gemma-Variante testen, bei Rate-Limit/Fehler auf Paid-Gemma ausweichen
   alltag: {
     primary: { model: process.env.AIQUARIUM_MODEL || 'google/gemma-4-26b-a4b-it:free', reasoningExclude: false, maxTokens: 1200 },
-    fallback: { model: process.env.AIQUARIUM_FALLBACK_MODEL || 'google/gemma-4-26b', reasoningExclude: false, maxTokens: 1200 },
+    fallback: { model: process.env.AIQUARIUM_FALLBACK_MODEL || 'google/gemma-4-26b-it', reasoningExclude: false, maxTokens: 1200 },
   },
   // Welt-Schiedsrichter (Ladenpreise, Job-Zusagen): einheitliches primary/fallback-Paar zum schnellen Tauschen
   arbiter: {

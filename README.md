@@ -37,6 +37,25 @@ Standardpfad: `~/.local/share/aiquarium/world.sqlite` – absichtlich
 außerhalb des syncenden Ordners. Per `AIQUARIUM_DB=/pfad/zu/world.sqlite`
 in der `.env` änderbar.
 
+## Geodaten-Quellen
+
+- **Gebäude:** Echte ALKIS-Einzelhäuser vom Hamburger INSPIRE-WFS
+  (`HH_WFS_INSPIRE_Gebaeude_2D_ALKIS`, `bu-core2d:Building`: Footprint,
+  Innenhöfe als `holes`, Höhe aus Geschosszahl `× 3,2 m`), frisch per
+  `node scripts/fetch-hamburg-geodata.js` nach `data/hamburg_geodata.json`
+  (862 Häuser in unserer Box, 6 mit Innenhof), Lizenz **Datenlizenz
+  Deutschland – Namensnennung – 2.0** (Quelle: Freie und Hansestadt
+  Hamburg, LGV). Fallback bei WFS-Ausfall: OSM-Blöcke aus `kiez_map.json`.
+- **Bäume:** Hamburger Straßenbaumkataster (`HH_WFS_Strassenbaumkataster`,
+  `de.hh.up:strassenbaumkataster`), frisch per
+  `node scripts/fetch-hamburg-geodata.js` nach `data/hamburg_geodata.json`
+  (1126 Bäume in unserer Box), Lizenz **Datenlizenz Deutschland –
+  Namensnennung – 2.0** (Quelle: Freie und Hansestadt Hamburg, BUKA).
+- Routing (`navGraph`) bleibt immer OSM aus `data/kiez_map.json`.
+- **LoD2-3D:** Echte Wand- + Dach-Dreiecke aus dem 3D-Stadtmodell LoD2-DE
+  (3D-Tiles/b3dm, `data/hamburg_lod2.json`, 1288 Häuser, ~61k Dreiecke),
+  gemergt in 2 Draw Calls, Lizenz **dl-de/by-2.0** (FHH, LGV).
+
 ## Was kann er gerade? (Stand: Meilenstein 2)
 
 - **Loslaufen & entdecken:** Er läuft auf echten Bürgersteigen (A*-Wegfindung

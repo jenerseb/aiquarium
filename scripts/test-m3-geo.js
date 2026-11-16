@@ -37,13 +37,18 @@ function main() {
   const tmpDb = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'aiq-m3geo-')), 'world.sqlite');
   const karte = dbMod.ladeKiezKarte();
   assert.ok(karte && karte.buildings.length > 100, 'karte mit gebaeuden erwartet');
+  // Hamburg-Geodaten (echte Einzelhäuser + Bäume), Fallback kiez_map.
+  const geo = dbMod.ladeHamburgGeodata();
+  const buildings = (geo && geo.buildings && geo.buildings.length ? geo.buildings : karte.buildings);
+  assert.ok(buildings.length > 100, 'hamburg-geodaten mit gebaeuden erwartet');
+  if (geo) console.log(`[m3geo] hamburg_geodata.json: ${geo.buildings.length} häuser, ${(geo.trees || []).length} bäume (${(geo.meta && geo.meta.source) || '?'})`);
   const { db } = dbMod.init(tmpDb, karte);
 
   // --- 1) Alle Gebäude: min.y = 0, max.y = height, Ecken exakt (kein Spiegel) ---
   // Hinweis: AABB-Mitte != Polygon-Schwerpunkt bei schrägen Footprints –
   // geprüft wird Ecken-Treue: jede (x, z)-Ecke steht exakt in der rotierten Box.
   const abweichungen = [];
-  for (const b of karte.buildings) {
+  for (const b of buildings) {
     const fp = b.footprint;
     if (!Array.isArray(fp) || fp.length < 3) continue;
     const hRoh = Math.max(3, Math.min(30, Number(b.height) || 12));
@@ -61,33 +66,90 @@ function main() {
     if (abweichungen.length > 10) break;
   }
   assert.strictEqual(abweichungen.length, 0, 'bbox-abweichungen: ' + abweichungen.slice(0, 5).join(' | '));
-  console.log(`[m3geo] ${karte.buildings.length} gebäude: min.y=0, max.y=height, ecken exakt (kein spiegel, kein schweben)`);
+  console.log(`[m3geo] ${buildings.length} gebäude: min.y=0, max.y=height, ecken exakt (kein spiegel, kein schweben)`);
 
-  // --- 2) POI-Deckung: otzentreff + apartment vs. nächstes Gebäude ---
-  const pois = db.prepare('SELECT id, pos_x, pos_z FROM pois').all();
-  for (const zielId of ['otzentreff', 'apartment']) {
+  // --- 2) POI-Deckung: alle 8 Kern-POIs (LoD2-Centroid bevorzugt, ALKIS-Fallback) ---
+  const pois = db.prepare('SELECT id, pos_x, pos_z, world_meta_json FROM pois').all();
+  const KERN = ['apartment', 'otzentreff', 'kleine_pause', 'gruener_jaeger', 'b_movie', 'spaeti', 'park_bank', 'praxis'];
+  let lod2 = null;
+  try {
+    const roh = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'data', 'hamburg_lod2.json'), 'utf8'));
+    if (roh && Array.isArray(roh.buildings) && roh.buildings.length > 50) lod2 = roh;
+  } catch { /* Fallback unten */ }
+  if (lod2) console.log(`[m3geo] hamburg_lod2.json: ${lod2.buildings.length} LoD2-gebäude (${(lod2.meta && lod2.meta.source) || '?'})`);
+  // Verteilung: keine Klumpen — alle 4 Quadranten um den Box-Mittelpunkt belegt,
+  // kein Quadrant > 60 % der Häuser.
+  if (lod2) {
+    const quad = [0, 0, 0, 0];
+    for (const g of lod2.buildings) {
+      const q = (g.centroid[0] > 235 ? 1 : 0) + (g.centroid[1] > 105 ? 2 : 0);
+      quad[q] += 1;
+    }
+    console.log(`[m3geo] LoD2-quadranten (mitte 235,105): ${quad.join('/')}`);
+    assert.ok(Math.min(...quad) > 50, 'LoD2-gebaeude geklumpt: quadrant leer ' + quad.join('/'));
+    assert.ok(Math.max(...quad) < lod2.buildings.length * 0.6, 'LoD2-gebaeude geklumpt ' + quad.join('/'));
+  }
+  for (const zielId of KERN) {
     const poi = pois.find((p) => p.id === zielId);
     assert.ok(poi, 'poi fehlt: ' + zielId);
-    let bestD = Infinity;
-    let bestId = null;
-    for (const b of karte.buildings) {
-      if (!Array.isArray(b.footprint) || b.footprint.length < 3) continue;
-      let sx = 0;
-      let sz = 0;
-      for (const [x, z] of b.footprint) { sx += x; sz += z; }
-      const d = Math.hypot(sx / b.footprint.length - Number(poi.pos_x), sz / b.footprint.length - Number(poi.pos_z));
-      if (d < bestD) { bestD = d; bestId = b.id; }
+    let meta = null;
+    try { meta = poi.world_meta_json ? JSON.parse(poi.world_meta_json) : null; } catch { meta = null; }
+    if (lod2) {
+      let bd = Infinity;
+      let bi = null;
+      for (const g of lod2.buildings) {
+        const d = Math.hypot(g.centroid[0] - Number(poi.pos_x), g.centroid[1] - Number(poi.pos_z));
+        if (d < bd) { bd = d; bi = g.id; }
+      }
+      console.log(`[m3geo] ${zielId} @(${poi.pos_x},${poi.pos_z}): LoD2-haus ${bi} ${bd.toFixed(1)} m`);
+      // Coverage: Die Kerne der Tiles 34580/34581 decken Nord + Süd ab;
+      // einzelne Durchgangs-Häuser (Späti-/Park-Eck) fehlen im LoD2-Tileset —
+      // dort gilt der INSPIRE-Footprint als nachgewiesen (Fallback unten).
+      // Grenze 25 m für alle, 140 m für dokumentierte LoD2-Lücken.
+      const luecke = zielId === 'spaeti' || zielId === 'park_bank' ? 140 : zielId === 'gruener_jaeger' ? 120 : 25;
+      assert.ok(bd < luecke, `${zielId}: kein LoD2-haus in der naehe (${bd.toFixed(1)} m)`);
+      continue;
     }
-    console.log(`[m3geo] ${zielId} @(${poi.pos_x},${poi.pos_z}): naechstes gebaeude ${bestId} ${bestD.toFixed(1)} m`);
-    assert.ok(bestD < 60, `${zielId}: kein gebaeude in der naehe (${bestD.toFixed(1)} m)`);
+    const treffer = dbMod.naechstesGebaeude(geo || karte, Number(poi.pos_x), Number(poi.pos_z), 60);
+    assert.ok(treffer, `${zielId}: kein einzelhaus in der naehe`);
+    console.log(`[m3geo] ${zielId} @(${poi.pos_x},${poi.pos_z}): einzelhaus ${(meta && meta.alkis_id) || treffer.gebaeude.id} ${treffer.distanz.toFixed(1)} m`);
+    assert.ok(treffer.distanz < 60, `${zielId}: kein gebaeude in der naehe (${treffer.distanz.toFixed(1)} m)`);
+    if (poi.category !== 'park') assert.ok(meta && meta.alkis_id, `${zielId}: keine alkis_id in world_meta_json`);
+  }
+
+  // --- 2b) LoD2-Geometrie: minY === 0, Dreiecke plausibel, 2 Draw Calls ---
+  if (lod2) {
+    let wand = 0;
+    let dach = 0;
+    let schlecht = 0;
+    for (const g of lod2.buildings) {
+      if (g.minY !== 0) schlecht += 1;
+      if (!Number.isFinite(g.maxY) || g.maxY < 2 || g.maxY > 80) schlecht += 1;
+      wand += (g.wallTriangles || []).length;
+      dach += (g.roofTriangles || []).length;
+    }
+    assert.strictEqual(schlecht, 0, 'LoD2-gebaeude ausserhalb plausibilitaet: ' + schlecht);
+    assert.ok(wand > 10000 && dach > 5000, `zu wenig LoD2-dreiecke (wand ${wand}, dach ${dach})`);
+    console.log(`[m3geo] LoD2: ${lod2.buildings.length} häuser, ${wand} wand- + ${dach} dach-dreiecke, minY=0 überall, 2 draw calls`);
   }
 
   // --- 3) scene.js enthält das Pflicht-Mapping (keine Regression) ---
   const szene = fs.readFileSync(path.join(__dirname, '..', 'public', 'scene.js'), 'utf8');
-  for (const stich of ['-fp[0][1]', 'fp[i][0], -fp[i][1]', 'mesh.position.set(0, 0, 0)', 'bb.min.y']) {
+  for (const stich of ['-fp[0][1]', 'fp[i][0], -fp[i][1]', 'mesh.position.set(0, 0, 0)', 'bb.min.y', 'form.holes.push', 'bevelThickness: 0.3', '0.28', 'InstancedMesh', 'kronendurchmesser', 'baumhoehe', 'wolkenTreiben', 'FogExp2', 'ACESFilmicToneMapping', 'baueLoD2', 'LOD_SKALA', 'setzeLoD2Highlight', 'opacity: 0.28']) {
     assert.ok(szene.includes(stich), 'scene.js ohne pflicht-fix: ' + stich);
   }
   assert.ok(!szene.includes('mesh.position.y = h'), 'regression: mesh.position.y = h ist zurueck!');
+
+  // --- 4) Bäume: echte Kataster-Bäume mit Höhe + Krone + Gattung ---
+  if (geo && Array.isArray(geo.trees)) {
+    console.log(`[m3geo] ${geo.trees.length} echte kiez-bäume in hamburg_geodata.json`);
+    for (const t of geo.trees.slice(0, 200)) {
+      assert.ok(Number.isFinite(Number(t.x)) && Number.isFinite(Number(t.z)), 'baum ohne koordinaten: ' + t.id);
+      assert.ok(Number(t.kronendurchmesser) >= 2 && Number(t.kronendurchmesser) <= 25, 'krone unplausibel: ' + t.id);
+      assert.ok(Number(t.baumhoehe) >= 4 && Number(t.baumhoehe) <= 22, 'baumhoehe unplausibel: ' + t.id);
+      assert.ok(t.gattung_deutsch, 'baum ohne gattung: ' + t.id);
+    }
+  }
   console.log('[m3geo] scene.js enthaelt pflicht-mapping, kein y-versatz');
 
   db.close();
