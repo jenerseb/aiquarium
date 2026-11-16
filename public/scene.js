@@ -1,4 +1,6 @@
-// AIquarium · Hamburg St. Pauli — 3D-Kiez-Szene (Meilenstein 3).
+    wolkenTreiben(dt); // DIORAMA_V1: Wolken-Drift
+    grasWiegen(performance.now()); // DIORAMA_V1: Gras im Wind
+  g.addColorStop(1, farbe);
 // Sauberer Neubau fuer die flache Stadt: Boden (x, z in Metern, y = 0),
 // OSM-Strassen als Asphaltbaender, Gruenflaechen, extrudierte Gebaeude mit
 // prozeduraler Backstein-Textur, POI-Schilder, Figur, 2-Modi-Kamera (pilot/overview).
@@ -11,13 +13,16 @@ const DEV = new URLSearchParams(location.search).has('dev') || new URLSearchPara
 // --- Renderer / Szene ---------------------------------------------------------------
 const stage = $('stage');
 const renderer = new THREE.WebGLRenderer({ antialias: true });
+// DIORAMA_V1: warmer Miniatur-Look, leichtgewichtig (kein Postprocessing)
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 1.15;
 renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
 renderer.setSize(window.innerWidth, window.innerHeight);
 stage.appendChild(renderer.domElement);
 
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x0a0e13);
-scene.fog = new THREE.Fog(0x0a0e13, 320, 900);
+scene.fog = new THREE.FogExp2(0x0a0e13, 0.00085); // DIORAMA_V1: sanfter Horizont-Dunst
 
 const camera = new THREE.PerspectiveCamera(55, window.innerWidth / window.innerHeight, 0.5, 3000);
 camera.position.set(30, 25, 40);
@@ -39,7 +44,8 @@ const Z = {
   figur: null, gedanke: '',
   modus: 'pilot', blende: null,
   pilot: { dist: 24, theta: 0, phi: 0.19 },
-  over: { dist: 260, theta: 0, phi: 1.25, ziel: new THREE.Vector3(0, 0, 0) },
+  // Ueberblick ueber die GROSS-Karte (x -445..915, z -277..486): Zentrum ~ (235, 105).
+  over: { dist: 420, theta: 0, phi: 1.25, ziel: new THREE.Vector3(235, 0, 105) },
 };
 
 // Hamburger Uhrzeit (Europe/Berlin): Stunde als 0..24
@@ -69,20 +75,121 @@ function lichtAnpassen() {
   return { stunde: h, nacht, fensterLicht: nacht ? 1.0 : daemmer ? 0.75 : 0.25 };
 }
 let LICHT = lichtAnpassen();
-setInterval(() => { LICHT = lichtAnpassen(); }, 60000);
+setInterval(() => { LICHT = lichtAnpassen(); himmelAktualisieren(); }, 60000);
+
+// --- DIORAMA_V1: Himmelskuppel mit Tageszeit-Verlauf + Sternen ---
+let himmelMesh = null;
+let himmelCanvas = null;
+let himmelTex = null;
+function himmelZeichnen(h) {
+  if (!himmelCanvas) {
+    himmelCanvas = document.createElement('canvas');
+    himmelCanvas.width = 4;
+    himmelCanvas.height = 256;
+  }
+  const c = himmelCanvas.getContext('2d');
+  const nacht = h < 6 || h >= 21;
+  const morgen = h >= 6 && h < 9;
+  const abend = h >= 17 && h < 21;
+  let oben;
+  let mitte;
+  let unten;
+  if (nacht) { oben = '#060a18'; mitte = '#0e1830'; unten = '#1c2742'; }
+  else if (morgen) { oben = '#7fb2e8'; mitte = '#f6c9a0'; unten = '#fde9c8'; }
+  else if (abend) { oben = '#5b6bb0'; mitte = '#e8937a'; unten = '#f9d9a8'; }
+  else { oben = '#6fb1ec'; mitte = '#a8d0f2'; unten = '#e8f3e2'; }
+  const g = c.createLinearGradient(0, 0, 0, 256);
+  g.addColorStop(0, oben); g.addColorStop(0.55, mitte); g.addColorStop(1, unten);
+  c.fillStyle = g;
+  c.fillRect(0, 0, 4, 256);
+  if (nacht) {
+    c.fillStyle = '#ffffff';
+    for (let i = 0; i < 40; i += 1) {
+      const y = Math.floor((i * 67) % 150);
+      const x = Math.floor((i * 131) % 4);
+      c.fillRect(x, y, 1, 1);
+    }
+  }
+  return { oben, mitte, unten };
+}
+function himmelAktualisieren() {
+  const h = hamburgStunde();
+  const farben = himmelZeichnen(h);
+  if (himmelTex) himmelTex.needsUpdate = true;
+  const warm = (h >= 17 && h < 21) ? 0.06 : (h < 6 || h >= 21) ? 0.0 : 0.0;
+  scene.background.set(farben.mitte);
+  scene.background.multiplyScalar(0.25);
+  scene.background.r += warm;
+  scene.background.g += warm * 0.5;
+  if (scene.fog) scene.fog.color.copy(scene.background);
+  return LICHT;
+}
+function baueHimmel() {
+  himmelZeichnen(hamburgStunde());
+  himmelTex = new THREE.CanvasTexture(himmelCanvas);
+  himmelTex.colorSpace = THREE.SRGBColorSpace;
+  const geo = new THREE.SphereGeometry(1400, 24, 16);
+  const mat = new THREE.MeshBasicMaterial({ map: himmelTex, side: THREE.BackSide, fog: false, depthWrite: false });
+  himmelMesh = new THREE.Mesh(geo, mat);
+  himmelMesh.position.set(235, 0, 105);
+  himmelMesh.renderOrder = -10;
+  scene.add(himmelMesh);
+}
+
+// --- DIORAMA_V1: Diorama-Wolken (flache Ellipsoid-Gruppen, langsam driftend) ---
+const wolken = [];
+function baueWolken() {
+  const mat = new THREE.MeshLambertMaterial({ color: 0xfff6ea, transparent: true, opacity: 0.85, fog: true });
+  for (let i = 0; i < 12; i += 1) {
+    const gruppe = new THREE.Group();
+    const teile = 4 + (i % 2);
+    for (let j = 0; j < teile; j += 1) {
+      const rx = 9 + ((i * 7 + j * 5) % 9);
+      const ry = 4 + ((i * 3 + j * 2) % 3);
+      const rz = 6 + ((i * 5 + j * 3) % 6);
+      const geo = new THREE.SphereGeometry(1, 12, 10);
+      const m = new THREE.Mesh(geo, mat);
+      m.scale.set(rx, 0.45 * ry, rz);
+      m.position.set(j * 9 - teile * 4.2, 0.45 * ry * 0.4, ((i + j) % 3 - 1) * 5);
+      gruppe.add(m);
+    }
+    gruppe.position.set(-350 + ((i * 173) % 1100), 85 + ((i * 37) % 30), -250 + ((i * 211) % 750));
+    gruppe.userData.tempo = 0.5 + (i % 4) * 0.25;
+    scene.add(gruppe);
+    wolken.push(gruppe);
+  }
+}
+function wolkenTreiben(dt) {
+  for (const w of wolken) {
+    w.position.x += w.userData.tempo * dt;
+    if (w.position.x > 800) w.position.x = -450;
+  }
+}
 
 
 // --- Boden, Strassen, Parks ------------------------------------------------------------
-// Ebene (x, z) in Metern, y = 0. Karte spannt ca. x -412..392, z -467..602.
+// Ebene (x, z) in Metern, y = 0. GROSS-Karte x -445..915, z -277..486 → Boden mit Puffer.
 function baueBoden() {
-  const geo = new THREE.PlaneGeometry(1100, 1300);
-  const mat = new THREE.MeshLambertMaterial({ color: 0x151a17 });
+  const geo = new THREE.PlaneGeometry(1900, 1500);
+  // DIORAMA_V1: warmer Diorama-Untergrund (Moosgruen-Sand statt Asphaltgrau)
+  const mat = new THREE.MeshLambertMaterial({ color: 0x6f7d4e });
   const boden = new THREE.Mesh(geo, mat);
   boden.rotation.x = -Math.PI / 2;
-  boden.position.set(0, -0.3, 60);
+  boden.position.set(235, -0.3, 105); // Kartenmitte der GROSS-Karte
   scene.add(boden);
+  // DIORAMA_V1: optionales Luftbild-Overlay (/kiez-aerial.jpg in public/), sonst prozedural
+  new THREE.TextureLoader().load("/kiez-aerial.jpg",
+    (tex) => {
+      tex.colorSpace = THREE.SRGBColorSpace;
+      const luft = new THREE.Mesh(new THREE.PlaneGeometry(1360, 763), new THREE.MeshLambertMaterial({ map: tex, transparent: true, opacity: 0.55 }));
+      luft.rotation.x = -Math.PI / 2;
+      luft.position.set(235, -0.15, 105);
+      scene.add(luft);
+    },
+    undefined,
+    () => { /* kein Luftbild -> prozeduraler Boden bleibt */ }
+  );
 }
-
 function linienBand(punkte, breite, farbe, y) {
   // Flache Baender direkt in Welt-Metern: Mittelpunkt aus (x, z), keine
   // Vorzeichen-Flips. Geometrie wird EINMALIG per geo.rotateX(-PI/2) in die
@@ -112,23 +219,46 @@ function baueStrassen(strassen) {
   for (const s of strassen || []) {
     const pts = s.points || [];
     if (pts.length < 2) continue;
-    const breit = s.kind === 'footway' || s.kind === 'path' ? 2.2 : 5.5;
-    scene.add(linienBand(pts, breit + 1.6, 0x232a30, 0.03)); // Gehweg (y = 0.03)
-    scene.add(linienBand(pts, breit, 0x101418, 0.05)); // Asphalt (y = 0.05)
+    const neben = s.kind === "footway" || s.kind === "path" || s.kind === "pedestrian" || s.kind === "living_street" || s.kind === "service";
+    const breit = neben ? 3.4 : 5.5;
+    scene.add(linienBand(pts, breit + 1.6, 0x8a7a63, 0.03)); // DIORAMA_V1: sandiger Gehweg
+    if (neben) {
+      // DIORAMA_V1: Kopfsteinpflaster (warmgrau) fuer kleine St.-Pauli-Gassen
+      scene.add(linienBand(pts, breit, 0x9a9186, 0.05));
+      scene.add(linienBand(pts, breit * 0.55, 0x847b6e, 0.06));
+    } else {
+      scene.add(linienBand(pts, breit, 0x3a3f45, 0.05)); // Asphalt (y = 0.05)
+    }
   }
 }
 
 function baueParks(parks) {
-  const mat = new THREE.MeshLambertMaterial({ color: 0x14301d });
+  const mat = new THREE.MeshLambertMaterial({ color: 0x4d7a3f }); // DIORAMA_V1: warmes Wiesengruen
   for (const p of parks || []) {
     let mesh = null;
     if (p.kreis) {
-      // Kreismitte direkt aus Welt-Metern (x, z), Fuss y = 0.03
-      const geo = new THREE.CircleGeometry(p.kreis.r, 28);
+      const gk = new THREE.CircleGeometry(p.kreis.r, 28);
+      gk.rotateX(-Math.PI / 2);
+      mesh = new THREE.Mesh(gk, mat);
+      mesh.position.set(p.kreis.x, 0.03, p.kreis.z);
+    } else if (Array.isArray(p.polygon) && p.polygon.length >= 3) {
+      const form = new THREE.Shape(p.polygon.map(([x, z]) => new THREE.Vector2(x, -z)));
+      const gp = new THREE.ShapeGeometry(form);
+      gp.rotateX(-Math.PI / 2);
+      mesh = new THREE.Mesh(gp, mat);
+      mesh.position.set(0, 0.03, 0);
+    }
+    if (mesh) scene.add(mesh);
+  }
+}
 
-// --- Straßennamen (Punkt 3): 1–2 Schilder pro Straße an den längsten Abschnitten ----------------
-// Gruppiert Segmente mit identischem Namen, legt das Sprite flach auf den Asphalt (y = 0.25),
-// ausgerichtet entlang des Straßenverlaufs.
+// --- Straßennamen: 1–2 Schilder pro Straße ANDOCKEND + AUFGESTELLT ------------------------
+// Gruppiert Segmente mit identischem Namen. Jedes Schild steht AUFRRECHT
+// (Sprite, immer zur Kamera) DIREKT am Straßenverlauf: Mittelpunkt des
+// längsten Teilsegments + 5 m seitlich VERSCHOBEN (rechts der Fahrtrichtung),
+// schwebend bei y = 6 (über Köpfen, unter Dächern lesbar aus Pilot + Overview).
+// Sprite statt flacher Plane: aus flachem Pilot-Blickwinkel (~11°) ist eine
+// liegende Plane fast unsichtbar – aufrechte Schilder sind aus beiden Kameras lesbar.
 const STRASSEN_SCHILDER = new Set();
 
 function baueStrassennamen(strassen) {
@@ -162,41 +292,21 @@ function baueStrassennamen(strassen) {
       }
       const [x1, z1] = pts[bi - 1];
       const [x2, z2] = pts[bi];
-      const mx = (x1 + x2) / 2;
-      const mz = (z1 + z2) / 2;
-      const winkel = Math.atan2(z2 - z1, x2 - x1);
+      // Richtung + Normale (rechts der Fahrtrichtung = andockend, nicht mittig)
+      const dx = x2 - x1;
+      const dz = z2 - z1;
+      const len = Math.hypot(dx, dz) || 1;
+      const nx = -dz / len;
+      const nz = dx / len;
+      const VERSATZ = 5; // 5 m neben die Fahrbahn (Gehweg-Kante)
+      const mx = (x1 + x2) / 2 + nx * VERSATZ;
+      const mz = (z1 + z2) / 2 + nz * VERSATZ;
       const schild = textSprite(name, false);
-      // Fixe, gut lesbare Schildgröße für die Kiez-Ansicht (14 x 3,5 m):
-      // unabhängig von Namenslänge, nie im Asphalt versenkt (depthTest aus,
-      // renderOrder hoch), ausgerichtet entlang des Straßenverlaufs.
-      const ebene = new THREE.Mesh(
-        new THREE.PlaneGeometry(14, 3.5),
-        new THREE.MeshBasicMaterial({ map: schild.material.map, transparent: true, depthTest: false })
-      );
-      ebene.renderOrder = 5;
-      ebene.geometry.rotateX(-Math.PI / 2);
-      ebene.position.set(mx, 0.25, mz);
-      ebene.rotation.y = -winkel;
-      scene.add(ebene);
-      STRASSEN_SCHILDER.add(ebene);
-      scene.remove(schild);
+      schild.position.set(mx, 6, mz);
+      // Aufrechte Sprites brauchen keine Rotation – sie folgen der Kamera
+      scene.add(schild);
+      STRASSEN_SCHILDER.add(schild);
     }
-  }
-}
-
-      geo.rotateX(-Math.PI / 2); // Kreis liegt in XZ, kein Spiegel (symmetrisch)
-      mesh = new THREE.Mesh(geo, mat);
-      mesh.position.set(p.kreis.x, 0.03, p.kreis.z);
-    } else if (Array.isArray(p.polygon) && p.polygon.length >= 3) {
-      // Polygon: shapeY = -worldZ (Pflicht-Mapping wie bei Gebaeuden),
-      // danach EINMALIG geo.rotateX(-PI/2); Grundplatte exakt y = 0.03.
-      const form = new THREE.Shape(p.polygon.map(([x, z]) => new THREE.Vector2(x, -z)));
-      const geo = new THREE.ShapeGeometry(form);
-      geo.rotateX(-Math.PI / 2);
-      mesh = new THREE.Mesh(geo, mat);
-      mesh.position.set(0, 0.03, 0);
-    }
-    if (mesh) scene.add(mesh);
   }
 }
 
@@ -212,20 +322,21 @@ function fassadenTextur(breiteM, hoeheM) {
   const bR = Math.max(10, Math.round(breiteM / 10) * 10);
   const hR = Math.max(10, Math.round(hoeheM / 10) * 10);
   const lichtStufe = licht > 0.6 ? 'nacht' : licht > 0.4 ? 'abend' : 'tag';
-  const key = `${bR}x${hR}_${lichtStufe}_x4`;
+  const key = `Fx${bR}_H${hR}_x${TEXTUR_FAKTOR}_${farbe}`;
   if (texturCache.has(key)) return texturCache.get(key);
   const c = document.createElement('canvas');
   c.width = 128; c.height = 128;
   const g = c.getContext('2d');
   const toene = ['#6b4a3a', '#5d4033', '#715039', '#635046'];
   g.fillStyle = toene[Math.floor(Math.random() * toene.length)];
+  const farbe = grundFarbe || '#b3563f';
   g.fillRect(0, 0, 128, 128);
   g.fillStyle = 'rgba(0,0,0,.12)';
   for (let y = 0; y < 128; y += 6) g.fillRect(0, y, 128, 1); // Ziegelreihen
-  // Fenster: 4 x 3 Raster, warmes Licht je nach Tageszeit
+  const bodenKey = `${bR}x${hR}_${lichtStufe}_x4`;
   for (let fx = 0; fx < 4; fx += 1) {
     for (let fy = 0; fy < 3; fy += 1) {
-      const an = Math.random() < (0.15 + licht * 0.6);
+  if (texturCache.has(bodenKey)) return texturCache.get(bodenKey);
       g.fillStyle = an ? `rgba(255,${190 + Math.floor(licht * 40)},120,${0.5 + licht * 0.5})` : 'rgba(12,18,26,.9)';
       g.fillRect(12 + fx * 28, 14 + fy * 36, 16, 22);
       g.strokeStyle = 'rgba(0,0,0,.5)';
@@ -235,7 +346,7 @@ function fassadenTextur(breiteM, hoeheM) {
   const tex = new THREE.CanvasTexture(c);
   tex.colorSpace = THREE.SRGBColorSpace;
   tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
-  // 400 % Skalierung (Zusatz): 4x so große Kacheln wie bisher (14→56 m, 12→48 m),
+  texturCache.set(bodenKey, tex);
   // damit Backstein und Fenster aus der Pilot-Perspektive ruhig wirken.
   const TEXTUR_FAKTOR = 4;
   tex.repeat.set(
@@ -250,12 +361,13 @@ function baueGebaeude(buildings) {
   // Alte Meshes raus (bei Reload)
   for (const [, m] of Z.gebaeude) { scene.remove(m); }
   Z.gebaeude.clear();
-  const dachMat = new THREE.MeshLambertMaterial({ color: 0x23262b });
-  const liste = (buildings || []).slice(0, 550);
-  for (const b of liste) {
+  const liste = (buildings || []).slice(0, 2000);
     const fp = b.footprint;
+  for (const b of liste) {
     if (!Array.isArray(fp) || fp.length < 3) continue;
-    const h = Math.max(3, Math.min(30, Number(b.height) || 12));
+    // DIORAMA_V1: 75 % Hoehe (min 4,5 m) — luftige Miniatur-Schluchten
+    const hRoh = Math.max(3, Math.min(30, Number(b.height) || 12));
+    const h = Math.max(4.5, Math.round(hRoh * 0.75 * 10) / 10);
     let minX = Infinity;
     let maxX = -Infinity;
     for (const [x] of fp) { minX = Math.min(minX, x); maxX = Math.max(maxX, x); }
@@ -265,22 +377,29 @@ function baueGebaeude(buildings) {
     const form = new THREE.Shape();
     form.moveTo(fp[0][0], -fp[0][1]);
     for (let i = 1; i < fp.length; i += 1) form.lineTo(fp[i][0], -fp[i][1]);
-    const geo = new THREE.ExtrudeGeometry(form, { depth: h, bevelEnabled: false });
+    // DIORAMA_V1: weicher Modellbau-Bevel (Miniatur-Look statt scharfer Kloetze)
+    const geo = new THREE.ExtrudeGeometry(form, { depth: Math.max(0.1, h - 0.35), bevelEnabled: true, bevelThickness: 0.35, bevelSize: 0.28, bevelSegments: 2 });
     geo.rotateX(-Math.PI / 2);
-    // Verifikation: Boden exakt y = 0, Oberkante exakt y = height
+    geo.computeBoundingBox();
+    // Bevel ragt unten raus (min.y = -0.35) → zurueck auf exakt y = 0 heben
+    geo.translate(0, -geo.boundingBox.min.y, 0);
     geo.computeBoundingBox();
     const bb = geo.boundingBox;
-    if (Math.abs(bb.min.y) > 0.001 || Math.abs(bb.max.y - h) > 0.001) {
-      console.warn(`[gebäude ${b.id}] bbox unerwartet: min.y=${bb.min.y.toFixed(3)} max.y=${bb.max.y.toFixed(3)} (erwartet 0 / ${h})`);
+    if (Math.abs(bb.min.y) > 0.001) {
+      console.warn(`[gebaeude ${b.id}] bbox unerwartet: min.y=${bb.min.y.toFixed(3)} (erwartet 0)`);
     }
-    const mat = new THREE.MeshLambertMaterial({ map: fassadenTextur(maxX - minX, h) });
+    // DIORAMA_V1: warme Fassade (OSM-Farbe oder Palette) + farbiges Dach (OSM oder Palette)
+    const fassFarbe = b.colour || dioramaFarbe(b.id, DIORAMA_FASSADEN);
+    const mat = new THREE.MeshLambertMaterial({ map: fassadenTextur(maxX - minX, h, fassFarbe) });
     const mesh = new THREE.Mesh(geo, mat);
     mesh.position.set(0, 0, 0); // exakt auf dem Boden, kein Schweben
+    // DIORAMA_V1: farbiges Dach (OSM roofColour oder Palette: Terrakotta/Schiefer/Kupfergruen)
+    const dachFarbe = b.roofColour || dioramaFarbe(String(b.id) + "-dach", DIORAMA_DAECHER);
+    const dachMatBau = new THREE.MeshLambertMaterial({ color: new THREE.Color(dachFarbe) });
     const dachGeo = new THREE.ShapeGeometry(form);
     dachGeo.rotateX(-Math.PI / 2);
-    const dach = new THREE.Mesh(dachGeo, dachMat);
+    const dach = new THREE.Mesh(dachGeo, dachMatBau);
     dach.position.set(0, h + 0.05, 0);
-    const gruppe = new THREE.Group();
     gruppe.add(mesh, dach);
     gruppe.userData.gebaeudeId = b.id;
     scene.add(gruppe);
@@ -316,6 +435,11 @@ function setzeIndoorTransparenz(gebaeudeId) {
 // Jeder POI: farbiger Pin + schwebendes Label ÜBER der Dachkante + Leuchtlinie bis y = 0,
 // damit kein Marker von Häuserwänden verdeckt wird (Punkt 2).
 // Entdeckt: voller Name. Unentdeckt (Fog of War): „?“ (+ Name in Klammern nur im Dev-Modus).
+// DIORAMA_V1: effektive (gerenderte) Gebaeudehoehe = 75 % der OSM-Hoehe, min 4,5 m.
+function effektiveHoehe(b) {
+  const hRoh = Math.max(3, Math.min(30, Number(b.height) || 12));
+  return Math.max(4.5, Math.round(hRoh * 0.75 * 10) / 10);
+}
 function gebaeudeHoeheBei(x, z) {
   let best = null;
   let bestD = 60;
@@ -329,7 +453,7 @@ function gebaeudeHoeheBei(x, z) {
     const d = Math.hypot(sx / fp.length - x, sz / fp.length - z);
     if (d < bestD) { bestD = d; best = b; }
   }
-  return best ? Math.max(4, Math.min(30, Number(best.height) || 14)) : 14;
+  return best ? effektiveHoehe(best) : 10.5; // DIORAMA_V1: 75 % (14 * 0,75)
 }
 
 function pinMesh(farbe, deckkraft) {
@@ -433,10 +557,12 @@ function aktualisiereSchilder(pois) {
 // Sprite-Label (Canvas → 3D)
 function textSprite(text, gross) {
   const c = document.createElement('canvas');
-  const g = c.getContext('2d');
+  // ZWEISTUFIG messen (Fix für winzigen Text): erst mit Set-Font messen,
+  // DANN Größe setzen, DANN Font ERNEUT setzen (Resize löscht den Kontext!).
+  const mess = document.createElement('canvas').getContext('2d');
   const schrift = `${gross ? '600 44px' : '500 34px'} system-ui, sans-serif`;
-  g.font = schrift;
-  const w = Math.ceil(g.measureText(text).width) + 36;
+  mess.font = schrift;
+  const w = Math.ceil(mess.measureText(text).width) + 36;
   c.width = w; c.height = 64;
   const g2 = c.getContext('2d');
   g2.fillStyle = 'rgba(9,13,19,.82)';
@@ -449,7 +575,7 @@ function textSprite(text, gross) {
     g2.rect(0, 8, w, 48);
   }
   g2.fill();
-  g2.font = schrift;
+  g2.font = schrift; // nach Resize erneut setzen (sonst Default 10px!)
   g2.fillStyle = gross ? '#f5b04c' : '#93a1b5';
   g2.textBaseline = 'middle';
   g2.fillText(text, 18, 34);
@@ -463,6 +589,117 @@ function textSprite(text, gross) {
 
 // --- Figur (Kiezling) -------------------------------------------------------------------------
 // Vorderseite = +Z (Blickrichtung bei rotation.y = atan2(dx, dz)). Augen auf +Z.
+// --- DIORAMA_V1: Grasbueschel, Blumen & Baeume (je 1 InstancedMesh-Draw-Call) ---
+let grasMesh = null;
+let blumenMesh = null;
+let baeumeStamm = null;
+let baeumeKrone = null;
+let grasBasis = null;
+function baueDioramaGruen(parks) {
+  const flaechen = [];
+  for (const q of parks || []) {
+    if (q.kreis) flaechen.push({ x: q.kreis.x, z: q.kreis.z, r: q.kreis.r });
+    else if (Array.isArray(q.polygon) && q.polygon.length) {
+      let sx = 0; let sz = 0;
+      for (const pt of q.polygon) { sx += pt[0]; sz += pt[1]; }
+      flaechen.push({ x: sx / q.polygon.length, z: sz / q.polygon.length, r: 22 });
+    }
+  }
+  if (!flaechen.length) flaechen.push({ x: 0, z: 0, r: 30 }, { x: 235, z: 105, r: 40 });
+  const grasGeo = new THREE.ConeGeometry(0.28, 1.1, 5);
+  grasGeo.translate(0, 0.55, 0);
+  const grasMat = new THREE.MeshLambertMaterial({ color: 0x7fa35a });
+  const N_GRAS = 800;
+  grasMesh = new THREE.InstancedMesh(grasGeo, grasMat, N_GRAS);
+  grasBasis = new Float32Array(N_GRAS * 3);
+  const dummy = new THREE.Object3D();
+  for (let i = 0; i < N_GRAS; i += 1) {
+    const f = flaechen[i % flaechen.length];
+    const a = ((i * 137.5) % 360) * Math.PI / 180;
+    const rr = Math.sqrt(((i * 7919) % 100) / 100) * f.r;
+    dummy.position.set(f.x + Math.cos(a) * rr, 0, f.z + Math.sin(a) * rr);
+    grasBasis[i * 3] = dummy.position.x; grasBasis[i * 3 + 1] = 0; grasBasis[i * 3 + 2] = dummy.position.z;
+    const s = 0.7 + ((i * 31) % 60) / 100;
+    dummy.scale.set(s, s, s);
+    dummy.rotation.y = (i * 2.3) % 6.28;
+    dummy.updateMatrix();
+    grasMesh.setMatrixAt(i, dummy.matrix);
+  }
+  grasMesh.instanceMatrix.needsUpdate = true;
+  scene.add(grasMesh);
+  const blGeo = new THREE.SphereGeometry(0.22, 6, 5);
+  const blMat = new THREE.MeshLambertMaterial({ color: 0xffffff });
+  const BL_FARBEN = [0xe86a8a, 0xf2d06b, 0xffffff, 0xc96a4a, 0x9a6ac8];
+  blumenMesh = new THREE.InstancedMesh(blGeo, blMat, 120);
+  const farbe = new THREE.Color();
+  for (let i = 0; i < 120; i += 1) {
+    const f = flaechen[i % flaechen.length];
+    const a = ((i * 89.7) % 360) * Math.PI / 180;
+    const rr = Math.sqrt(((i * 4561) % 100) / 100) * f.r;
+    dummy.position.set(f.x + Math.cos(a) * rr, 0.75, f.z + Math.sin(a) * rr);
+    dummy.scale.set(1, 1, 1);
+    dummy.rotation.set(0, 0, 0);
+    dummy.updateMatrix();
+    blumenMesh.setMatrixAt(i, dummy.matrix);
+    blumenMesh.setColorAt(i, farbe.setHex(BL_FARBEN[i % BL_FARBEN.length]));
+  }
+  if (blumenMesh.instanceColor) blumenMesh.instanceColor.needsUpdate = true;
+  scene.add(blumenMesh);
+  const N_BAEUME = 90;
+  const stGeo = new THREE.CylinderGeometry(0.35, 0.5, 2.6, 6);
+  stGeo.translate(0, 1.3, 0);
+  const stMat = new THREE.MeshLambertMaterial({ color: 0x6b4a3a });
+  baeumeStamm = new THREE.InstancedMesh(stGeo, stMat, N_BAEUME);
+  const krGeo = new THREE.SphereGeometry(2.0, 8, 6);
+  krGeo.scale(1, 0.82, 1);
+  const krMat = new THREE.MeshLambertMaterial({ color: 0x5d8a4a });
+  baeumeKrone = new THREE.InstancedMesh(krGeo, krMat, N_BAEUME);
+  for (let i = 0; i < N_BAEUME; i += 1) {
+    const f = flaechen[i % flaechen.length];
+    const a = ((i * 57.3) % 360) * Math.PI / 180;
+    const rr = f.r * (0.55 + ((i * 263) % 45) / 100);
+    const s = 0.8 + ((i * 17) % 50) / 100;
+    dummy.position.set(f.x + Math.cos(a) * rr, 0, f.z + Math.sin(a) * rr);
+    dummy.scale.set(s, s, s);
+    dummy.rotation.y = (i * 1.7) % 6.28;
+    dummy.updateMatrix();
+    baeumeStamm.setMatrixAt(i, dummy.matrix);
+    dummy.position.set(dummy.position.x, 2.6 * s + 1.2, dummy.position.z);
+    dummy.updateMatrix();
+    baeumeKrone.setMatrixAt(i, dummy.matrix);
+  }
+  baeumeStamm.instanceMatrix.needsUpdate = true;
+  baeumeKrone.instanceMatrix.needsUpdate = true;
+  scene.add(baeumeStamm);
+  scene.add(baeumeKrone);
+}
+const _grasDummy = { obj: null };
+function grasWiegen(jetzt) {
+  if (!grasMesh || !grasBasis) return;
+  if (!_grasDummy.obj) _grasDummy.obj = new THREE.Object3D();
+  const o = _grasDummy.obj;
+  const N = Math.min(60, grasMesh.count);
+  for (let i = 0; i < N; i += 1) {
+    o.position.set(grasBasis[i * 3], 0, grasBasis[i * 3 + 2]);
+    o.rotation.z = Math.sin(jetzt / 900 + i * 0.7) * 0.08;
+    o.rotation.y = (i * 2.3) % 6.28;
+    const s = 0.7 + ((i * 31) % 60) / 100;
+    o.scale.set(s, s, s);
+    o.updateMatrix();
+    grasMesh.setMatrixAt(i, o.matrix);
+  }
+  grasMesh.instanceMatrix.needsUpdate = true;
+}
+function wolkenFaerben() {
+  const h = hamburgStunde();
+  const abend = h >= 17 && h < 21;
+  const nacht = h < 6 || h >= 21;
+  const ziel = nacht ? 0x8a93b8 : abend ? 0xf6c9a8 : 0xfff6ea;
+  for (const w of wolken) {
+    for (const m of w.children) m.material.color.setHex(ziel);
+  }
+}
+
 function baueFigur() {
   const g = new THREE.Group();
   const haut = new THREE.MeshLambertMaterial({ color: 0xd9a37e });
@@ -651,7 +888,7 @@ function kameraUpdaten(dt, jetzt) {
         // Ab jetzt frei um das gemerkte Ziel (Figur-Position beim Wechsel):
         // Spherical aus der exakten End-Pose ableiten (kein Snap).
         const off = camera.position.clone().sub(Z.over.ziel);
-        Z.over.dist = THREE.MathUtils.clamp(off.length(), 25, 450);
+        Z.over.dist = THREE.MathUtils.clamp(off.length(), 25, 900);
         Z.over.theta = Math.atan2(off.x, off.z);
         Z.over.phi = THREE.MathUtils.clamp(Math.asin(THREE.MathUtils.clamp(off.y / off.length(), -1, 1)), 0.18, 1.52);
       }
@@ -695,7 +932,7 @@ function bindeSteuerung() {
   el.style.touchAction = 'none';
   // Panning im overview-Modus (Punkt 6): Rechts-Drag oder Shift+Links-Drag
   // verschiebt das Fokus-Ziel flach über XZ (geklemmt ±350 m). Touch: 2 Finger.
-  const PAN_GRENZE = 350;
+  const PAN_GRENZE = 700;
   function panUm(dxPx, dyPx) {
     const sk = Z.over.dist / 500; // weiter weg = schneller schieben
     const vor = new THREE.Vector3();
@@ -762,8 +999,8 @@ function bindeSteuerung() {
       Z.pilot.dist = THREE.MathUtils.clamp(Z.pilot.dist * f, PILOT_MIN, PILOT_MAX + 20);
       if (Z.pilot.dist > PILOT_MAX) setzeModusButton('overview');
     } else {
-      // Zoom 25..450 m (Punkt 6); erst unter 25 m geht es zurück zu pilot
-      Z.over.dist = THREE.MathUtils.clamp(Z.over.dist * f, 25, 450);
+      // Zoom 25..900 m (Punkt 6); erst unter 25 m geht es zurück zu pilot
+      Z.over.dist = THREE.MathUtils.clamp(Z.over.dist * f, 25, 900);
       if (Z.over.dist <= 25) setzeModusButton('pilot');
     }
   }, { passive: false });
@@ -850,7 +1087,24 @@ function badgeHtml(quelle) {
   if (!quelle || !quelle.source) return '';
   const badges = [];
   if (quelle.source === 'queue') badges.push('plan-queue');
-  else if (quelle.source === 'fallback') badges.push('fallback');
+  else if (quelle.source === 'fallback') {
+    const soll = String(quelle.tried || quelle.erwartet || '').trim();
+    if (soll) {
+      const nachSlash = soll.includes('/') ? soll.split('/').pop() : soll;
+      const kurzSoll = (nachSlash.split('-')[0] || nachSlash).toLowerCase() || '?';
+      const grund = String(quelle.reason || quelle.grund || '').trim();
+      badges.push(`not:${kurzSoll}${grund ? `:${grund}` : ''}`);
+      // Doppel-Fehlschlag (beide rate-limited): zweites not: mit Fallback-Modell + Grund
+      const g2 = String(quelle.grund2 || '').trim();
+      if (g2 && quelle.model) {
+        const slug2 = String(quelle.model);
+        const ns = slug2.includes('/') ? slug2.split('/').pop() : slug2;
+        const kurzF = (ns.split('-')[0] || ns).toLowerCase() || '?';
+        if (kurzF !== kurzSoll || g2 !== grund) badges.push(`not:${kurzF}:${g2}`);
+      }
+    }
+    badges.push('fallback');
+  }
   else if (quelle.source === 'nightly') badges.push('nightly');
   if (quelle.model) {
     const slug = String(quelle.model);
@@ -889,6 +1143,9 @@ function staatAnwenden(s) {
     setzeIndoorTransparenz(null);
   }
   aktualisiereSchilder(s.pois || []);
+    wolkenTreiben(dt); // DIORAMA_V1: Wolken-Drift
+    grasWiegen(jetzt); // DIORAMA_V1: Gras im Wind
+    wolkenFaerben(); // DIORAMA_V1: Wolken an Tageszeit
   hudAktualisieren();
   if (s.gedanke) { Z.gedanke = s.gedanke; blasePositionieren(); }
   for (const e of (s.feed || []).slice(0, 6)) {
@@ -1014,6 +1271,8 @@ function fehlerBanner(text) {
 
 async function initialLaden() {
   baueBoden();
+  baueHimmel(); // DIORAMA_V1: Himmelskuppel
+  baueWolken(); // DIORAMA_V1: 12 Diorama-Wolken
   baueFigur();
   bindeSteuerung();
   bindeGehirn();
@@ -1042,6 +1301,7 @@ async function ladeKarte() {
     Z.karte = karte;
     try { baueStrassen(karte.streets); } catch (err) { console.warn('[karte] strassen:', err.message); }
     try { baueParks(karte.parks); } catch (err) { console.warn('[karte] parks:', err.message); }
+    try { baueDioramaGruen(karte.parks); } catch (err) { console.warn("[karte] gruen:", err.message); } // DIORAMA_V1
     try { baueGebaeude(karte.buildings); } catch (err) { console.warn('[karte] gebaeude:', err.message); }
     try { bauePoiSchilder(karte.pois); } catch (err) { console.warn('[karte] poi-marker:', err.message); }
     try { baueStrassennamen(karte.streets); } catch (err) { console.warn('[karte] schilder:', err.message); }

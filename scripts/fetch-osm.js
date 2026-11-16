@@ -1,7 +1,3 @@
-#!/usr/bin/env node
-'use strict';
-/**
- * Einmal-Skript zum Abrufen der echten OpenStreetMap-Gebäude, Straßen und
  * Fußweg-Knoten für das St.-Pauli-Dreieck (Lerchenstraße / Otzenstraße /
  * Beim Grünen Jäger / Stresemannstraße / Brigittenstraße).
  *
@@ -16,16 +12,20 @@ const path = require('node:path');
 const ORIGIN = { lat: 53.5588, lon: 9.9612 };
 
 // Bounding Box rund um den markierten St.-Pauli-Kiez
+// (GROSS 2026-11-16: Sued bis B-Movie, Ost bis Neuer Kamp 30;
+//  NORD+OST 2026-11-16: Flora/Haus73/Bunker drin)
 const BBOX = {
-  south: 53.5562,
+  south: 53.5525,
   west: 9.9578,
-  north: 53.5622,
-  east: 9.9650,
+  north: 53.5637,
+  east: 9.9725,
 };
 
 const OUT_FILE = path.join(__dirname, '..', 'data', 'kiez_map.json');
 
-// GPS (lat, lon) -> lokale Meter (x = Ost, z = Süd, -z = Nord)
+// GPS (lat, lon) -> lokale Meter (x = Ost, z = Süd, -z = Nord).
+// BEWUSST alte Projektion (Stand Bild 2, Referenz): z OHNE cos-Skalierung.
+// Der cos-Fix (beide Achsen) hat Nord-Süd auf 0,594 gestaucht → revertiert 2026-11-16.
 function toLocalMeters(lat, lon) {
   const cosLat = Math.cos((ORIGIN.lat * Math.PI) / 180);
   const x = (lon - ORIGIN.lon) * 111320 * cosLat;
@@ -38,6 +38,10 @@ const OVERPASS_QUERY = `
 (
   way["building"](${BBOX.south},${BBOX.west},${BBOX.north},${BBOX.east});
   way["highway"~"^(primary|secondary|tertiary|residential|living_street|pedestrian|footway|path|service)$"](${BBOX.south},${BBOX.west},${BBOX.north},${BBOX.east});
+  node["amenity"~"^(bar|pub|restaurant|fast_food|cafe|cinema|nightclub|arts_centre|community_centre|theatre)$"](${BBOX.south},${BBOX.west},${BBOX.north},${BBOX.east});
+  way["amenity"~"^(bar|pub|restaurant|fast_food|cafe|cinema|nightclub|arts_centre|community_centre|theatre)$"](${BBOX.south},${BBOX.west},${BBOX.north},${BBOX.east});
+  node["historic"~"^(bunker|memorial|monument)$"](${BBOX.south},${BBOX.west},${BBOX.north},${BBOX.east});
+  way["historic"~"^(bunker|memorial|monument)$"](${BBOX.south},${BBOX.west},${BBOX.north},${BBOX.east});
 );
 out body;
 >;
@@ -62,15 +66,30 @@ async function fetchOverpass() {
 
 function buildMapFromOsm(osm) {
   const nodesById = new Map();
+  const nodesTags = new Map();
   for (const el of osm.elements || []) {
     if (el.type === 'node') {
       const [x, z] = toLocalMeters(el.lat, el.lon);
-      nodesById.set(el.id, { id: el.id, x, z });
+      nodesById.set(el.id, { id: el.id, x, z }); // Key = NODE-ID (nicht Way-ID)
+      if (el.tags && (el.tags.amenity || el.tags.historic)) nodesTags.set(el.id, el.tags);
     }
   }
 
   const buildings = [];
   const streets = [];
+  const osmPois = []; // ALLE Amenity/Historic-Nodes+Ways (Test: ungefiltert importieren)
+  for (const [nid, tags] of nodesTags) {
+    const p = nodesById.get(nid);
+    if (!p) continue;
+    osmPois.push({
+      osm: `n_${nid}`,
+      name: tags.name || null,
+      amenity: tags.amenity || null,
+      historic: tags.historic || null,
+      category: null, // Mapping in db.js
+      pos: [p.x, p.z],
+    });
+  }
   const navNodesMap = new Map();
   const navEdges = [];
 
@@ -90,12 +109,37 @@ function buildMapFromOsm(osm) {
         levels: Math.max(1, Math.min(8, levels)),
         height: Math.round(levels * 3.5 * 10) / 10,
         footprint: pts.map((p) => [p.x, p.z]),
+        colour: tags['building:colour'] || tags['building:color'] || null,
+        roofColour: tags['roof:colour'] || tags['roof:color'] || null,
+        roofShape: tags['roof:shape'] || null,
+        surface: tags['building:surface'] || tags.surface || null,
       });
       continue;
     }
-
     // 2. Straßen & Gehwege für Rendering + Pathfinding-Graph
     if (tags.highway) {
+      streets.push({
+        id: `w_${el.id}`,
+        name: tags.name || null,
+        kind: tags.highway,
+        points: pts.map((p) => [p.x, p.z]),
+      });
+
+      // 2a. POI-Layer: Amenity/Historic am Way (Name+Kategorie+Schwerpunkt)
+      if ((tags.amenity || tags.historic) && pts.length) {
+        let sx = 0;
+        let sz = 0;
+        for (const p of pts) { sx += p.x; sz += p.z; }
+        osmPois.push({
+          osm: `w_${el.id}`,
+          name: tags.name || null,
+          amenity: tags.amenity || null,
+          historic: tags.historic || null,
+          category: null, // Mapping in db.js
+          pos: [Math.round((sx / pts.length) * 10) / 10, Math.round((sz / pts.length) * 10) / 10],
+        });
+      }
+
       streets.push({
         id: `w_${el.id}`,
         name: tags.name || null,
@@ -116,6 +160,87 @@ function buildMapFromOsm(osm) {
     }
   }
 
+  // 2b. Zusammenhang naehen: gleiche Koordinate (10-cm-Raster) = ein Knoten.
+  // Overpass liefert Ways unverbunden; ohne Naht zerfaellt der Graph.
+  const raster = new Map();
+  const alias = new Map();
+  for (const n of navNodesMap.values()) {
+    const key = `${Math.round(n.x * 10)},${Math.round(n.z * 10)}`;
+    if (raster.has(key)) alias.set(String(n.id), raster.get(key));
+    else raster.set(key, String(n.id));
+  }
+  const kanon = (id) => alias.get(String(id)) || String(id);
+  const genaeht = navEdges.map(([a, b]) => [kanon(a), kanon(b)]).filter(([a, b]) => a !== b);
+  navEdges.length = 0;
+  const gesehen = new Set();
+  for (const [a, b] of genaeht) {
+    const key = a < b ? a + '|' + b : b + '|' + a;
+    if (gesehen.has(key)) continue;
+    gesehen.add(key);
+    navEdges.push([a, b]);
+  }
+  // Knotenliste auf kanonische IDs schrumpfen (Aliase raus, sonst Geisterknoten)
+  for (const altId of alias.keys()) navNodesMap.delete(altId);
+
+  // OST-BRUECKE (2026-11-16): Hauptgraph (Comp mit Apartment) mit Bunker-Insel
+  // (Comp mit Feldstrassenbunker) verbinden – 3 kuerzeste Buergersteig-Paare.
+  const ADJ = new Map();
+  for (const n of navNodesMap.values()) ADJ.set(String(n.id), []);
+  for (const [a, b] of navEdges) {
+    const A = String(a);
+    const B = String(b);
+    if (ADJ.has(A) && ADJ.has(B)) { ADJ.get(A).push(B); ADJ.get(B).push(A); }
+  }
+  const COMP = new Map();
+  let CID = 0;
+  for (const n of navNodesMap.values()) {
+    const id = String(n.id);
+    if (COMP.has(id)) continue;
+    CID++;
+    const QQ = [id];
+    COMP.set(id, CID);
+    while (QQ.length) {
+      const c = QQ.pop();
+      for (const m of (ADJ.get(c) || [])) {
+        if (COMP.has(m)) continue;
+        COMP.set(m, CID);
+        QQ.push(m);
+      }
+    }
+  }
+  const bunkerRef = { x: 585.7, z: 263.8 }; // Flakbunker (alte Projektion, Bild 2)
+  const aptRef = { x: -3, z: -114 };
+  const compVon = (rx, rz) => {
+    let bd = 1e18;
+    let bn = null;
+    for (const n of navNodesMap.values()) {
+      const d = (n.x - rx) * (n.x - rx) + (n.z - rz) * (n.z - rz);
+      if (d < bd) { bd = d; bn = n; }
+    }
+    return bn ? COMP.get(String(bn.id)) : null;
+  };
+  const cApt = compVon(aptRef.x, aptRef.z);
+  const cBun = compVon(bunkerRef.x, bunkerRef.z);
+  if (cApt && cBun && cApt !== cBun) {
+    const paare = [];
+    for (const a of navNodesMap.values()) {
+      if (COMP.get(String(a.id)) !== cApt) continue;
+      for (const b of navNodesMap.values()) {
+        if (COMP.get(String(b.id)) !== cBun) continue;
+        const dx = a.x - b.x;
+        const dz = a.z - b.z;
+        paare.push({ d2: dx * dx + dz * dz, a: String(a.id), b: String(b.id) });
+      }
+    }
+    paare.sort((p, q) => p.d2 - q.d2);
+    let added = 0;
+    for (const p of paare.slice(0, 3)) {
+      navEdges.push([p.a, p.b]);
+      added++;
+      console.log(`[osm] ost-bruecke ${added}: ${p.a} <-> ${p.b} (${Math.sqrt(p.d2).toFixed(1)} m)`);
+    }
+  }
+
   return {
     meta: {
       origin: ORIGIN,
@@ -125,6 +250,7 @@ function buildMapFromOsm(osm) {
     },
     buildings,
     streets,
+    osmPois, // Test: ALLE Amenities/Historics der Box (Namen teils null)
     navGraph: {
       nodes: [...navNodesMap.values()],
       edges: navEdges,
@@ -181,13 +307,18 @@ async function main() {
     console.log('[osm] Lade St.-Pauli-Ausschnitt von Overpass API ...');
     const raw = await fetchOverpass();
     const map = buildMapFromOsm(raw);
+    if (!map.buildings.length || !map.navGraph.nodes.length) {
+      throw new Error(`Overpass lieferte leere Karte (${map.buildings.length} Gebaeude) – behalte alte Datei`);
+    }
     fs.writeFileSync(OUT_FILE, JSON.stringify(map, null, 2), 'utf8');
     console.log(`[osm] Gespeichert in ${OUT_FILE}: ${map.buildings.length} Gebäude, ${map.navGraph.nodes.length} Wegknoten.`);
   } catch (err) {
+    if (fs.existsSync(OUT_FILE)) {
+      console.warn(`[osm] Overpass nicht erreichbar (${err.message}) — BEHALTE bestehende Karte.`);
+      return;
+    }
     console.warn(`[osm] Overpass nicht erreichbar (${err.message}) — schreibe Fallback-Karte.`);
     const map = buildFallbackMap();
     fs.writeFileSync(OUT_FILE, JSON.stringify(map, null, 2), 'utf8');
   }
 }
-
-main();

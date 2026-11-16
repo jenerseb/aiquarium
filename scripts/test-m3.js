@@ -57,7 +57,7 @@ async function main() {
       if (!(k in karte)) throw new Error('/api/map ohne ' + k);
     }
     if (karte.buildings.length < 100) throw new Error('zu wenige gebaeude: ' + karte.buildings.length);
-    if (karte.pois.length !== 8) throw new Error('pois != 8: ' + karte.pois.length);
+    if (karte.pois.length !== 13) throw new Error('pois != 13: ' + karte.pois.length);
     console.log('[m3] /api/map ok (' + karte.buildings.length + ' gebaeude, ' + karte.streets.length + ' strassen, ' + karte.pois.length + ' pois)');
 
     const staat = await hole('/api/state');

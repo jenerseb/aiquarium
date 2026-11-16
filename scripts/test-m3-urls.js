@@ -64,7 +64,7 @@ async function main() {
     if (!ok) { fehler.push(`${u}: ${r.status} statt ${erwartet}`); continue; }
     if (u === '/api/map') {
       const j = JSON.parse(r.text);
-      assert.ok(j.buildings.length > 100 && j.pois.length === 8, '/api/map unvollständig');
+      assert.ok(j.buildings.length > 100 && j.pois.length === 13, '/api/map unvollständig');
     }
     if (u === '/api/state') {
       const j = JSON.parse(r.text);

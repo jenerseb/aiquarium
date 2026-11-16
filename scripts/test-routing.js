@@ -101,6 +101,26 @@ async function main() {
   for (const m of aufrufe) assert.ok(m.includes(':free'), 'dev-call free, war: ' + m);
   console.log('[routing] dev-calls: ' + [...new Set(aufrufe)].join(', ') + ' (alle :free)');
 
+  // --- 6) Fallback-Badge-Felder: tried + grund bei 429 ---
+  ({ config, brain } = ladeConfigFrisch('0'));
+  setzeFetch([{ httpFehler: 429 }, { content: GUELTIG, tokens: 33 }]);
+  const d3 = await brain.decide({ prompt: 't', whitelist: ['rest'], apiKey: 'k', role: 'arbiter' });
+  assert.ok(d3.ok && d3.versuch === 'fallback', 'arbiter-fallback ok');
+  assert.ok(d3.tried && d3.tried.includes('glm'), 'tried = arbiter-primary, war: ' + d3.tried);
+  assert.strictEqual(d3.grund, '429', 'grund=429, war: ' + d3.grund);
+  assert.ok(d3.usedModel.includes('glm'), 'usedModel fallback: ' + d3.usedModel);
+  console.log(`[routing] badge-felder ok: tried=${d3.tried} grund=${d3.grund} used=${d3.usedModel} → [not:glm:429] [fallback] [glm]`);
+
+  // --- 7) Doppel-429 (beide free down): grund + grund2, kein Modell ---
+  ({ config, brain } = ladeConfigFrisch('1')); // dev: nemotron → gemma-free
+  setzeFetch([{ httpFehler: 429 }, { httpFehler: 429 }]);
+  const d4 = await brain.decide({ prompt: 't', whitelist: ['rest'], apiKey: 'k', role: 'alltag' });
+  assert.ok(!d4.ok && d4.stale && d4.versuch === 'fallback', 'doppel-429 stale, war: ' + JSON.stringify({ ok: d4.ok, versuch: d4.versuch }));
+  assert.ok(d4.tried && d4.tried.includes('nemotron'), 'tried = primary, war: ' + d4.tried);
+  assert.strictEqual(d4.grund, '429', 'grund=429');
+  assert.strictEqual(d4.grund2, '429', 'grund2=429 (fallback auch down), war: ' + d4.grund2);
+  console.log(`[routing] doppel-429 ok: tried=${d4.tried} grund=${d4.grund} grund2=${d4.grund2} → [not:nemotron:429] [not:gemma:429] [fallback]`);
+
   console.log('[routing] ALLES OK');
 }
 

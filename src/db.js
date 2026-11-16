@@ -218,30 +218,47 @@ CREATE TABLE IF NOT EXISTS hall_of_fame (
 
 // Start-POIs aus dem Plan (§5.2). Nur apartment ist entdeckt.
 // Koordinaten: flache Meter relativ zu (0,0) Lerchenstr./Otzenstr.
+// Alle Anker auf echte OSM-Strassenpunkte gesnappt (Dez 2026, verifiziert):
+// max. 7,3 m zum naechsten Strassenpunkt – kein Marker schwebt mehr im Nichts.
 const SEED_POIS = [
-  { id: 'apartment', name: 'Kleine Einzimmerwohnung (Lerchenstraße)', category: 'home',
-    pos_x: -3, pos_z: -68, discovered: 1,
+  { id: 'apartment', name: 'Kleine Einzimmerwohnung (Lerchenstrasse)', category: 'home',
+    match: null, pos_x: -3, pos_z: -114, discovered: 1,
     public_desc: 'Deine kleine Einzimmerwohnung. Ein schmales Bett, ein Schreibtisch fuer Projekte, und ein Buecherregal mit deinem Notizbuch und alten Hamburg-Buechern.' },
-  { id: 'otzentreff', name: 'Otzentreff (Otzenstraße)', category: 'kneipe',
-    pos_x: 40, pos_z: 14, discovered: 0,
+  { id: 'otzentreff', name: 'Otzentreff (Otzenstrasse)', category: 'kneipe',
+    match: { osm: 'n_2070259277' }, pos_x: 46, pos_z: 399.7, discovered: 0,
     public_desc: 'Eine urige Eckkneipe mit warmem Licht hinter den Scheiben. Am Tresen stehen Glaeser, abends wird gelacht und geredet.' },
-  { id: 'kleine_pause', name: 'Kleine Pause', category: 'imbiss',
-    pos_x: 29, pos_z: -42, discovered: 0,
+  { id: 'kleine_pause', name: 'Kleine Pause (Wohlwillstrasse)', category: 'imbiss',
+    match: { osm: 'n_394086462' }, pos_x: 76.2, pos_z: 443.8, discovered: 0,
     public_desc: 'Ein heller Kiez-Imbiss. Es riecht nach frischen Pommes, Burgern und heissem Fett.' },
-  { id: 'gruener_jaeger', name: 'Beim Grünen Jäger', category: 'club',
-    pos_x: 110, pos_z: -22, discovered: 0,
+  { id: 'gruener_jaeger', name: 'Gruener Jaeger', category: 'club',
+    match: { building: 'b_23320572' }, pos_x: 163, pos_z: 232, discovered: 0,
     public_desc: 'Ein Kulturhaus und Musikclub an der Ecke. Draussen haengen Konzertplakate, drinnen stehen Kisten und eine Bar.' },
-  { id: 'b_movie', name: 'B-Movie (Brigittenstraße)', category: 'kino',
-    pos_x: 26, pos_z: 107, discovered: 0,
-    public_desc: 'Ein kleines, unabhaengiges Programmkino im Erdgeschoss. Ein Schaukasten zeigt seltene Filme.' },
-  { id: 'spaeti', name: 'Eck-Kiosk / Späti', category: 'spaeti',
-    pos_x: 12, pos_z: 38, discovered: 0,
+  { id: 'b_movie', name: 'B-Movie (Brigittenstrasse)', category: 'kino',
+    match: { osm: 'n_1356135344' }, pos_x: 4, pos_z: 492.1, discovered: 0,
+    public_desc: 'Ein kleines, unabhaengiges Programmkino. Ein Schaukasten zeigt seltene Filme – direkt an der Brigittenstrasse.' },
+  { id: 'feldstrassenbunker', name: 'Feldstrassenbunker', category: 'denkmal',
+    match: { building: 'b_264581795' }, pos_x: 581.5, pos_z: 263, discovered: 0,
+    public_desc: 'Ein gewaltiger gruen bewachsener Flakbunker aus dem Krieg. Heute Kultur, Clubs und ein Dachgarten obendrauf.' },
+  { id: 'rote_flora', name: 'Rote Flora', category: 'club',
+    match: { building: 'b_10413828' }, pos_x: 22.1, pos_z: -360.6, discovered: 0,
+    public_desc: 'Ein besetztes Kulturzentrum mit roter Fassade. Plakate, Konzerte, politischer Kiez-Treff seit Jahrzehnten.' },
+  { id: 'haus73', name: 'Haus 73 (Schanze)', category: 'kneipe',
+    match: { osm: 'n_278943489' }, pos_x: 1.3, pos_z: -400.5, discovered: 0,
+    public_desc: 'Eine Kellerkneipe in der Schanze.' },
+  { id: 'knust', name: 'Knust (Neuer Kamp)', category: 'club',
+    match: { osm: 'n_1525291987' }, pos_x: 445.2, pos_z: 73.6, discovered: 0,
+    public_desc: 'Ein legendaerer Musikclub am Neuen Kamp. Eng, laut, direkt.' },
+  { id: 'rindermarkthalle', name: 'Rindermarkthalle St. Pauli', category: 'markt',
+    match: { building: 'b_142954635' }, pos_x: 325.2, pos_z: 262.5, discovered: 0,
+    public_desc: 'Eine alte Markthalle voller Essensstaende aus aller Welt.' },
+  { id: 'spaeti', name: 'Eck-Kiosk / Spaeti', category: 'spaeti',
+    match: null, pos_x: 14.2, pos_z: 60.9, discovered: 0,
     public_desc: 'Ein kleiner Kiosk mit Getraenkekisten, Kaffee, Snacks und einem Schild: Pfandannahme & Gebraucht-Elektronik.' },
-  { id: 'park_bank', name: 'Grünfläche & Bank am Durchgang', category: 'park',
-    pos_x: -25, pos_z: -25, discovered: 0,
+  { id: 'park_bank', name: 'Gruenflaeche & Bank am Durchgang', category: 'park',
+    match: null, pos_x: -9.7, pos_z: -58.7, discovered: 0,
     public_desc: 'Ein paar Baeume und eine Holzbank abseits der grossen Strasse. Manchmal liegen hier leere Flaschen im Gras.' },
-  { id: 'praxis', name: 'Kiez-Arztpraxis / Apotheke (Stresemannstraße)', category: 'arzt',
-    pos_x: 18, pos_z: -140, discovered: 0,
+  { id: 'praxis', name: 'Kiez-Arztpraxis (Lippmannstrasse)', category: 'arzt',
+    match: null, pos_x: 18.2, pos_z: -172, discovered: 0,
     public_desc: 'Eine kleine Hausarztpraxis mit gruenem Apotheken-Kreuz nebenan.' },
 ];
 
@@ -285,9 +302,6 @@ function openDb(pfad) {
 
 function migrate(db) {
   db.exec(SCHEMA);
-  // Plural-VIEWs fuer Masterplan-Kompatibilitaet (db.js nutzt Singular)
-  db.exec('CREATE VIEW IF NOT EXISTS characters AS SELECT * FROM character;');
-  db.exec('CREATE VIEW IF NOT EXISTS workpieces AS SELECT * FROM work_pieces;');
   db.prepare("INSERT OR IGNORE INTO world_state (id, tick, stats_24h_json) VALUES (1, 0, '{}')").run();
 }
 
@@ -315,13 +329,34 @@ function footprintAusKarte(kiezMap, x, z) {
   return null;
 }
 
+
+// OSM-POI-Matching: Seed.match (osm-ID / building-ID) -> Position aus dem
+// Karten-Layer (osmPois / buildings). Fallback: Hand-Koordinaten aus dem Seed.
+function poiPositionAusKarte(kiezMap, seed) {
+  if (!kiezMap || !seed.match) return [seed.pos_x, seed.pos_z];
+  if (seed.match.osm && Array.isArray(kiezMap.osmPois)) {
+    const o = kiezMap.osmPois.find((q) => q.osm === seed.match.osm);
+    if (o && Array.isArray(o.pos)) return o.pos;
+  }
+  if (seed.match.building && Array.isArray(kiezMap.buildings)) {
+    const b = kiezMap.buildings.find((q) => q.id === seed.match.building);
+    if (b && Array.isArray(b.footprint) && b.footprint.length) {
+      let sx = 0;
+      let sz = 0;
+      for (const q of b.footprint) { sx += q[0]; sz += q[1]; }
+      return [Math.round((sx / b.footprint.length) * 10) / 10, Math.round((sz / b.footprint.length) * 10) / 10];
+    }
+  }
+  return [seed.pos_x, seed.pos_z];
+}
 function seed(db, kiezMap) {
   migrate(db);
   if (zaehle(db, 'pois') === 0) {
     const ins = db.prepare('INSERT INTO pois (id, name, category, pos_x, pos_z, footprint_json, public_desc, world_meta_json, discovered) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)');
     for (const p of SEED_POIS) {
-      const fp = footprintAusKarte(kiezMap, p.pos_x, p.pos_z);
-      ins.run(p.id, p.name, p.category, p.pos_x, p.pos_z,
+      const [mx, mz] = poiPositionAusKarte(kiezMap, p);
+      const fp = footprintAusKarte(kiezMap, mx, mz);
+      ins.run(p.id, p.name, p.category, mx, mz,
         fp ? JSON.stringify(fp) : null, p.public_desc, null, p.discovered);
     }
   }
@@ -373,7 +408,7 @@ function init(pfad, kiezMap) {
 }
 
 module.exports = {
-  SCHEMA, SEED_POIS, SEED_SHEET, SEED_BOOKS,
+  SCHEMA, SEED_POIS, SEED_SHEET, SEED_BOOKS, poiPositionAusKarte,
   openDb, migrate, seed, init, ladeKiezKarte, zaehle,
 };
 

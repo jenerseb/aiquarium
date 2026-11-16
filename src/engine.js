@@ -589,12 +589,17 @@ async function holeNeuenPlanMitMeta(db, deps, characterId, jetztMs) {
     prompt: gebaut.prompt, whitelist: [], apiKey: process.env.OPENROUTER_API_KEY || 'mock',
     slot: undefined, musing: false, orte: orte.map((o) => o.name), role: 'alltag',
   });
-  // KI-Quelle für den Dev-Feed (Punkt 7): usedModel + Tokens aus decide-Antwort
+  // KI-Quelle für den Dev-Feed: usedModel + Tokens + Soll-Modell aus decide-Antwort.
+  // Bei Fallback: [not:soll:grund] [fallback] [modell] – sonst [modell] [free] [tok].
   const usage = (antwort && (antwort.usage || antwort.tokens)) || {};
   const quelle = {
     source: antwort && antwort.stale ? 'fallback' : 'llm',
     model: String((antwort && (antwort.usedModel || antwort.modell || antwort.model)) || ''),
     tokens: Number(antwort.tokens || usage.completion_tokens || usage.total_tokens || 0) || 0,
+    tried: String((antwort && (antwort.tried || '')) || ''),
+    grund: String((antwort && (antwort.grund || '')) || ''),
+    grund2: String((antwort && (antwort.grund2 || '')) || ''),
+    reason: String((antwort && (antwort.versuch === 'fallback' ? antwort.reason || '' : '')) || ''),
   };
   let obj = null;
   try { obj = JSON.parse(antwort.raw || '{}'); } catch { obj = null; }

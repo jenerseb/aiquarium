@@ -77,6 +77,8 @@ async function decide(opts) {
   ];
   let last = null;
   const total = { latencyMs: 0, cost: 0, calls: 0 };
+  let primaryGrund = ''; // womit primary scheiterte (für [not:x:grund]-Badge bei Fallback-Erfolg)
+  let primaryTried = ''; // Soll-Modell (primary-Slug, für Doppel-429-Badge)
 
   for (const a of attempts) {
     let ergebnis;
@@ -86,19 +88,37 @@ async function decide(opts) {
         whitelist, recentThoughts, musing, orte, vorhabenAktiv,
       });
     } catch (err) {
-      // HTTP-Fehler (429 etc.): nahtlos zum Fallback
-      last = { ok: false, stale: true, reason: `request: ${err.message}`, failures: ['request'], modell: a.slot.model, usedModel: a.slot.model, versuch: a.label };
+      // HTTP-Fehler (429 etc.): nahtlos zum Fallback.
+      // tried = Soll-Modell (primary), reason = Kurzgrund (z. B. 429) für [not:x:y]-Badge.
+      const m429 = String(err.message || '').match(/HTTP\s+(\d{3})/);
+      primaryGrund = m429 ? m429[1] : 'http';
+      primaryTried = pair.primary.model;
+      last = { ok: false, stale: true, reason: `request: ${err.message}`, failures: ['request'], modell: a.slot.model, usedModel: a.slot.model, versuch: a.label, tried: pair.primary.model, grund: primaryGrund };
       continue;
     }
     total.latencyMs += ergebnis.latencyMs;
     total.cost += ergebnis.cost;
     total.calls += 1;
     const { v, raw, info } = ergebnis;
-    if (v.ok) return { ...v, stale: false, raw, ...total, ...info };
-    // Leere Antwort eigens benennen: „Modell schweigt" ist etwas anderes als Kauderwelsch
+    // Erfolg via Fallback-Slot: tried = Soll-Modell (primary) für [not:x:y]-Badge mitschleppen
+    const infoMitSoll = a.label === 'fallback' && !info.tried
+      ? { ...info, tried: pair.primary.model, grund: primaryGrund || 'fallback' }
+      : info;
+    if (v.ok) return { ...v, stale: false, raw, ...total, ...infoMitSoll };
+    // Leere Antwort eigens benennen: „Modell schweigt" ist etwas anderes als Kauderwelsch.
+    // tried/gründe für [not:x:y]-Badge mitschleppen (primary war Soll, Validierung schlug fehl).
     const leer = !raw || !raw.trim();
-    last = { ...v, stale: true, reason: `checks: ${leer ? 'json_leer' : v.failures.join(',')}`, raw, ...info };
-    // Bei ungültigem JSON ebenfalls Fallback versuchen (nächste Iteration)
+    primaryGrund = leer ? 'leer' : 'json';
+    primaryTried = pair.primary.model;
+    last = { ...v, stale: true, reason: `checks: ${leer ? 'json_leer' : v.failures.join(',')}`, raw, ...info, tried: pair.primary.model, grund: primaryGrund };
+  }
+  // BEIDE Slots gescheitert (z. B. beide 429 bei free):
+  // tried = primary-Soll, grund = primary-Grund, grund2 = Fallback-Grund.
+  if (last && last.versuch === 'fallback') {
+    last.tried = pair.primary.model;
+    last.grund = primaryGrund || last.grund || 'down';
+    const mFb = String(last.reason || '').match(/HTTP\s+(\d{3})/);
+    last.grund2 = (mFb && mFb[1]) || last.grund;
   }
   return { ...(last || { ok: false, stale: true, failures: ['unknown'] }), ...total };
 }

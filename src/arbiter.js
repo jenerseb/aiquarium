@@ -334,7 +334,7 @@ function schonKonsolidiert(db, datumStr) {
 }
 
 function markiereKonsolidiert(db, datumStr) {
-  db.prepare('UPDATE world_state SET last_nightly_date = ? WHERE id = 1').run(datumStr);
+  db.prepare('INSERT INTO world_state (id, last_nightly_date) VALUES (1, ?) ON CONFLICT(id) DO UPDATE SET last_nightly_date = excluded.last_nightly_date').run(datumStr);
 }
 
 

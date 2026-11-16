@@ -10,7 +10,7 @@ const path = require('node:path');
 // +x = Ost, -z = Nord (passend zu Three.js), Einheit = Meter.
 const KOORD = {
   origin: { lat: 53.5588, lon: 9.9612 },
-  bbox: { south: 53.5562, west: 9.9578, north: 53.5622, east: 9.9650 },
+  bbox: { south: 53.5525, west: 9.9578, north: 53.5637, east: 9.9725 },
   einheit: 'meter',
   xOsten: '+x = Ost',
   zNorden: '-z = Nord',
@@ -19,7 +19,7 @@ const KOORD = {
 function toLocalMeters(lat, lon) {
   const cosLat = Math.cos((KOORD.origin.lat * Math.PI) / 180);
   const x = (lon - KOORD.origin.lon) * 111320 * cosLat;
-  const z = -(lat - KOORD.origin.lat) * 111320;
+  const z = -(lat - KOORD.origin.lat) * 111320; // BEWUSST alte Projektion (Bild 2 = Referenz), cos-Revert 2026-11-16
   return [Math.round(x * 10) / 10, Math.round(z * 10) / 10];
 }
 

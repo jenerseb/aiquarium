@@ -8,7 +8,7 @@
   },
   "scripts": {
     "start": "node src/server.js",
-    "test": "node scripts/test-m1.js && node scripts/test-m2.js && node scripts/test-m3.js && node scripts/test-m3-geo.js && node scripts/test-m3-7.js && node scripts/test-routing.js",
+    "test": "node scripts/test-m1.js && node scripts/test-m2.js && node scripts/test-m3.js && node scripts/test-m3-geo.js && node scripts/test-m3-7.js && node scripts/test-routing.js && node scripts/test-poi-snap.js",
     "test:m1": "node scripts/test-m1.js",
     "test:m2": "node scripts/test-m2.js",
     "test:m3": "node scripts/test-m3.js",
@@ -16,7 +16,8 @@
     "test:m3-7": "node scripts/test-m3-7.js",
     "test:m3-urls": "node scripts/test-m3-urls.js",
     "test:routing": "node scripts/test-routing.js",
-    "check": "node --check src/config.js && node --check src/db.js && node --check src/pathfinding.js && node --check src/brain.js && node --check src/checks.js && node --check src/env.js && node --check src/memory.js && node --check src/prompt.js && node --check src/arbiter.js && node --check src/engine.js && node --check src/telegram.js && node --check src/server.js && node --check scripts/test-m1.js && node --check scripts/test-m2.js && node --check scripts/test-m3.js && node --check scripts/test-m3-geo.js && node --check scripts/test-m3-7.js && node --check scripts/test-routing.js && node --check scripts/test-m3-urls.js && node --input-type=module --check < public/scene.js && echo OK"
+    "test:snap": "node scripts/test-poi-snap.js",
+    "check": "node --check src/config.js && node --check src/db.js && node --check src/pathfinding.js && node --check src/brain.js && node --check src/checks.js && node --check src/env.js && node --check src/memory.js && node --check src/prompt.js && node --check src/arbiter.js && node --check src/engine.js && node --check src/telegram.js && node --check src/server.js && node --check scripts/test-m1.js && node --check scripts/test-m2.js && node --check scripts/test-m3.js && node --check scripts/test-m3-geo.js && node --check scripts/test-m3-7.js && node --check scripts/test-routing.js && node --check scripts/test-poi-snap.js && node --check scripts/test-m3-urls.js && node --input-type=module --check < public/scene.js && echo OK"
   },
   "dependencies": {}
 }

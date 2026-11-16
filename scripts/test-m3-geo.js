@@ -46,10 +46,11 @@ function main() {
   for (const b of karte.buildings) {
     const fp = b.footprint;
     if (!Array.isArray(fp) || fp.length < 3) continue;
-    const h = Math.max(3, Math.min(30, Number(b.height) || 12));
+    const hRoh = Math.max(3, Math.min(30, Number(b.height) || 12));
+    const h = Math.max(4.5, Math.round(hRoh * 0.75 * 10) / 10); // DIORAMA_V1: 75 %
     const bb = bbox(extrudeRotiert(fp, h));
     if (Math.abs(bb.min.y) > 0.0001) abweichungen.push(`${b.id}: min.y=${bb.min.y}`);
-    if (Math.abs(bb.max.y - h) > 0.0001) abweichungen.push(`${b.id}: max.y=${bb.max.y} vs h=${h}`);
+    if (Math.abs(bb.max.y - h) > 0.6) abweichungen.push(`${b.id}: max.y=${bb.max.y} vs diorama-h=${h} (Bevel-Toleranz)`); // DIORAMA_V1: Bevel rundet oben
     // Ecken: min/max in x und z müssen exakt den Footprint-Extremen entsprechen
     const fxs = fp.map(([x]) => x);
     const fzs = fp.map(([, z]) => z);
