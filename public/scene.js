@@ -1308,9 +1308,12 @@ function badgeHtml(quelle) {
     const slug = String(quelle.model);
     const nachSlash = slug.includes('/') ? slug.split('/').pop() : slug;
     const kurz = (nachSlash.split('-')[0] || nachSlash).toLowerCase() || '?';
-    badges.push(kurz);
+    // Fix 1: Google-Direct sichtbar machen – Provider-Tag statt (oder vor) Modell-Slug.
+    if (String(quelle.provider || '').startsWith('google')) badges.push('google');
+    else badges.push(kurz);
     if (slug.includes(':free')) badges.push('free');
   }
+  if (quelle.providerLabel) badges.push(String(quelle.providerLabel).includes('Vertex') ? 'vertex' : 'direct');
   if (quelle.tokens) badges.push(`${quelle.tokens} tok`);
   if (badges.length === 0) return '';
   return badges.map((b) => `[${esc(b)}]`).join(' ');
@@ -1520,8 +1523,25 @@ async function initialLaden() {
     box.className = 'devBox an';
     box.innerHTML = `<button id="devTick">dev: 1 Tick</button><button id="devNight">dev: Nightly</button>`;
     document.querySelector('.werte').appendChild(box);
-    box.querySelector('#devTick').addEventListener('click', () => fetch('/api/dev/tick', { method: 'POST' }).catch(() => {}));
-    box.querySelector('#devNight').addEventListener('click', () => fetch('/api/dev/nightly', { method: 'POST' }).catch(() => {}));
+    // UI-Zusatz: echte klickbare Buttons mit Ladezustand + Feed/State-Refresh
+    const klickbar = (id, pfad) => {
+      const btn = box.querySelector(id);
+      const label = btn.textContent;
+      btn.addEventListener('click', async () => {
+        if (btn.disabled) return;
+        btn.disabled = true;
+        btn.textContent = 'läuft…';
+        try {
+          await fetch(pfad, { method: 'POST' });
+          await ladeState();
+          if (typeof gehirnLaden === 'function' && !$('gehirn').hidden) await gehirnLaden();
+        } catch { /* Fehlerbanner übernimmt */ }
+        btn.textContent = label;
+        btn.disabled = false;
+      });
+    };
+    klickbar('#devTick', '/api/dev/tick');
+    klickbar('#devNight', '/api/dev/nightly');
   }
   // Block 1: Karte (eigener try/catch) – ein Kartenfehler blockiert NIEMALS State/Feed.
   await ladeKarte();

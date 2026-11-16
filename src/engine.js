@@ -673,6 +673,8 @@ async function holeNeuenPlanMitMeta(db, deps, characterId, jetztMs) {
   const quelle = {
     source: antwort && antwort.stale ? 'fallback' : 'llm',
     model: String((antwort && (antwort.usedModel || antwort.modell || antwort.model)) || ''),
+    provider: String((antwort && (antwort.provider || '')) || ''),
+    providerLabel: String((antwort && (antwort.providerLabel || '')) || ''),
     tokens: Number(antwort.tokens || usage.completion_tokens || usage.total_tokens || 0) || 0,
     tried: String((antwort && (antwort.tried || '')) || ''),
     grund: String((antwort && (antwort.grund || '')) || ''),
@@ -684,19 +686,51 @@ async function holeNeuenPlanMitMeta(db, deps, characterId, jetztMs) {
   const loggeDebug = (dbg) => {
     if (!dbg || !devAn) return;
     try {
-      console.log(`[not:${dbg.code || '?'}] model=${dbg.model || '?'} tier=${dbg.tier || '?'} – ${dbg.reason || ''}`);
+      const tag = String(dbg.providerLabel || '') || (String(dbg.provider || '').startsWith('google') ? 'Google Direct' : '');
+      console.log(`[${dbg.versuch === 'primary' ? 'primary' : `not:${dbg.code || '?'}`}]\u2009${dbg.model || '?'}${tag ? ` (${tag})` : ''} tier=${dbg.tier || '?'} – ${dbg.reason || ''}`);
       console.log(`[rawResponse:${dbg.model || '?'}]\n${String(dbg.rawResponse ?? '')}\n[/rawResponse]`);
     } catch { /* Logging darf nie crashen */ }
   };
-  let obj = null;
-  try { obj = JSON.parse(antwort.raw || '{}'); } catch { obj = null; }
-  // validatePlan mit raw: liefert fehlerDetails { code, reason, rawResponse, feld, wert, erlaubt }
-  // orte (bekannte IDs) nur als Kontext fürs Debug mitgegeben – walk_to zu unentdeckten POIs
-  // ist Discovery-Kernmechanik und bleibt valide (Fehler erst auf Ausführungsebene: ort_unbekannt).
-  const geprueft = checks.validatePlan(obj, { intents: gebaut.whitelist, raw: String(antwort.raw || ''), orte: orte.map((o) => o.id) });
+  // Fix Doppelvalidierung: Brain hat bereits mit validatePlan geprüft (inkl. fehlerDetails
+  // + versuchDebug-Kette). Engine parst NICHT neu, sondern übernimmt das Brain-Ergebnis –
+  // keine doppelten thought_leer/plan_fehlend-Paare mehr, keine verworfenen Google-Debugs.
+  // Nur wenn Brain KEIN Plan-Ergebnis lieferte (altes Mock/Arbiter-Format), einmalig nachprüfen.
+  let geprueft = antwort && antwort.plan && Array.isArray(antwort.plan)
+    ? { ok: !antwort.stale, failures: antwort.failures || [], fehlerDetails: [], thought: antwort.thought || '', retrospective: antwort.retrospective || '', plan: antwort.plan }
+    : null;
+  if (!geprueft) {
+    let obj = null;
+    try { obj = JSON.parse(antwort.raw || '{}'); } catch { obj = null; }
+    // validatePlan mit raw: liefert fehlerDetails { code, reason, rawResponse, feld, wert, erlaubt }
+    // orte (bekannte IDs) nur als Kontext fürs Debug mitgegeben – walk_to zu unentdeckten POIs
+    // ist Discovery-Kernmechanik und bleibt valide (Fehler erst auf Ausführungsebene: ort_unbekannt).
+    geprueft = checks.validatePlan(obj, { intents: gebaut.whitelist, raw: String(antwort.raw || ''), orte: orte.map((o) => o.id) });
+  }
   if (!geprueft.ok) {
-    const fehlerDebug = Array.isArray(geprueft.fehlerDetails) && geprueft.fehlerDetails.length > 0 ? geprueft.fehlerDetails : [];
-    const fallbackQuelle = { ...quelle, source: 'fallback', debug: fehlerDebug[0] || debugEinzeln || null, debugVersuche: fehlerDebug.length > 0 ? fehlerDebug : (debugListe.length > 0 ? debugListe : undefined), fehlerDetails: fehlerDebug };
+    let fehlerDebug = Array.isArray(geprueft.fehlerDetails) && geprueft.fehlerDetails.length > 0 ? geprueft.fehlerDetails : [];
+    // Fix Tier-Anreicherung: checks-Details haben kein tier/provider – aus Brain-Debugs uebernehmen,
+    // damit im UI nie mehr (?) ohne Roh-Antwort steht. Antwort-raw (inkl. leerGrund) ebenfalls.
+    const stammDebug = debugEinzeln || (debugListe.length > 0 ? debugListe[0] : null);
+    if (stammDebug) {
+      fehlerDebug = fehlerDebug.map((d) => {
+        const basis = (d && typeof d === 'object') ? d : {};
+        return {
+          ...basis,
+          tier: basis.tier || stammDebug.tier || 'primary',
+          versuch: basis.versuch || stammDebug.tier || stammDebug.versuch || 'primary',
+          provider: basis.provider || stammDebug.provider || 'openrouter',
+          providerLabel: basis.providerLabel || stammDebug.providerLabel,
+          model: basis.model || stammDebug.model,
+          rawResponse: basis.rawResponse || stammDebug.rawResponse || '',
+        };
+      });
+    }
+    // Fix Debug-Anhang: Engine-Checks an Brain-Kette ANHÄNGEN (primary/fallback-1 bleiben sichtbar),
+    // statt sie zu überschreiben. Reihenfolge chronologisch, Duplikate raus.
+    const _gesehen = new Set((debugListe || []).map((d) => `${d.model}|${d.code}|${d.reason}`));
+    const _neu = (fehlerDebug || []).filter((d) => { const k = `${d.model}|${d.code}|${d.reason}`; if (_gesehen.has(k)) return false; _gesehen.add(k); return true; });
+    const _kette = [...(debugListe || []), ..._neu];
+    const fallbackQuelle = { ...quelle, source: 'fallback', debug: fehlerDebug[0] || debugEinzeln || null, debugVersuche: _kette.length > 0 ? _kette : undefined, fehlerDetails: fehlerDebug };
     for (const dbg of (fallbackQuelle.debugVersuche || [])) loggeDebug(dbg);
     if (devAn) {
       try {

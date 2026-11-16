@@ -56,33 +56,42 @@ async function main() {
   let { config, brain } = ladeConfigFrisch('1', { gemini: null, nodeEnv: 'test', modell: null });
   assert.ok(config.devPrioAn(), 'dev prio an');
   assert.ok(!config.googleDirektAktiv(), 'google aus ohne key/test');
-  for (const rolle of ['dev', 'alltag', 'arbiter', 'nightly']) {
-    const pair = config.getRoleSlots(rolle);
-    assert.ok(String(pair.primary.model).includes(':free'), `${rolle}.primary free, war: ${pair.primary.model}`);
-    assert.ok(String(pair.fallback.model).includes(':free'), `${rolle}.fallback free, war: ${pair.fallback.model}`);
-    assert.ok(!pair.fallback2, `${rolle} ohne fallback2 ohne key`);
-  }
-  console.log('[routing] key-los: alle rollen = :free-paare, google aus');
+  // Fix Rollen-Umbau: echte Rollen auch im Dev-Modus (alltag != dev-Slot).
+  const devPair = config.getRoleSlots('dev');
+  const alltagPair = config.getRoleSlots('alltag');
+  assert.ok(String(devPair.primary.model).includes(':free'), 'dev primary free');
+  assert.ok(String(alltagPair.primary.model).includes(':free'), 'alltag primary free');
+  assert.ok(!alltagPair.fallback2, 'alltag ohne fallback2 ohne key');
+  // key-los: gar kein Google; dev/alltag :free, arbiter=glm, nightly=mimo (Spezialrollen)
+  assert.ok(String(config.getRoleSlots('arbiter').primary.model).includes('glm'), 'arbiter glm ohne key');
+  assert.ok(String(config.getRoleSlots('nightly').primary.model).includes('mimo'), 'nightly mimo ohne key');
+  console.log('[routing] key-los: rollen respektiert, google aus');
 
   // --- 1) Google-Direct aktiv (AQ-Key, kein Test): primary = google, OpenRouter dahinter ---
+  // Fix Rollen-Umbau: getRoleSlots() liefert echte Rollen (kein dev-Stau mehr).
   ({ config, brain } = ladeConfigFrisch('1', { gemini: 'AQ.test-key', nodeEnv: 'dev', modell: 'gemma-4-26b-a4b-it' }));
   assert.ok(config.googleDirektAktiv(), 'google an mit key');
   assert.strictEqual(config.getRoleSlots('dev').primary.provider, 'google', 'dev primary google');
   assert.strictEqual(config.getRoleSlots('dev').primary.model, 'gemma-4-26b-a4b-it', 'dev modell gesaeubert');
   assert.ok(config.getRoleSlots('dev').fallback2, 'dev fallback-2 vorhanden');
-  assert.strictEqual(config.getRoleSlots('alltag').primary.provider, 'google', 'alltag primary google');
-  assert.strictEqual(config.getRoleSlots('arbiter').primary.provider, 'google', 'arbiter primary google');
-  assert.strictEqual(config.getRoleSlots('nightly').primary.provider, 'google', 'nightly primary google');
-  assert.strictEqual(config.getRoleSlots('nightly').fallback.model, 'xiaomi/mimo-v2.6-pro', 'nightly fallback-1 mimo');
-  // Endpoint-Wahl + Modell-Saeuberung (kein Netz, reine Funktionen)
+  assert.ok(config.getRoleSlots('dev').fallback2.model.includes('llama'), 'dev fallback-2 diversifiziert (llama statt gemma-doppelt), war: ' + config.getRoleSlots('dev').fallback2.model);
+  assert.strictEqual(config.SLOTS.alltag.primary.provider, 'google', 'alltag primary google');
+  assert.strictEqual(config.SLOTS.arbiter.primary.provider, 'google', 'arbiter primary google');
+  assert.strictEqual(config.SLOTS.nightly.primary.provider, 'google', 'nightly primary google');
+  assert.strictEqual(config.SLOTS.nightly.fallback.model, 'xiaomi/mimo-v2.6-pro', 'nightly fallback-1 mimo');
+  // Endpoint-Wahl + Modell-Saeuberung + Thinking (kein Netz, reine Funktionen)
   const epV = brain.googleEndpoint('google/gemma-4-26b-a4b-it:free', 'AQ.test-key');
-  assert.ok(epV.url.includes('aiplatform.googleapis.com'), 'vertex-url fuer AQ, war: ' + epV.url);
+  assert.ok(epV.url.includes('generativelanguage.googleapis.com'), 'ai-studio-url fuer AQ, war: ' + epV.url);
   assert.strictEqual(epV.modell, 'gemma-4-26b-a4b-it', 'modell gesaeubert: ' + epV.modell);
   const epS = brain.googleEndpoint('gemini-2.5-flash', 'AIza-test');
   assert.ok(epS.url.includes('generativelanguage.googleapis.com'), 'ai-studio-url fuer AIza');
-  console.log('[routing] google-direct: primary ueberall google, endpoint + modell-id ok');
+  assert.deepStrictEqual(brain.googleThinkingFuer('gemma-4-26b-a4b-it'), { thinkingLevel: 'minimal' }, 'gemma-4 minimal');
+  assert.deepStrictEqual(brain.googleThinkingFuer('gemini-3-flash'), { thinkingLevel: 'minimal' }, 'gemini-3 minimal');
+  assert.deepStrictEqual(brain.googleThinkingFuer('gemini-2.5-flash'), { thinkingBudget: 0 }, 'gemini-2.5 budget 0');
+  console.log('[routing] google-direct: primary ueberall google, endpoint + modell-id + thinking ok');
 
   // --- 2) Live-Modus (AIQUARIUM_DEV=0): Google vorne (Key aus .env), OpenRouter dahinter ---
+  // Hinweis: im Live-Modus greifen die echten Rollen-Slots.
   ({ config, brain } = ladeConfigFrisch('0', { gemini: 'AQ.test-key', nodeEnv: 'live', modell: 'gemma-4-26b-a4b-it' }));
   assert.ok(config.googleDirektAktiv(), 'google an im live-modus mit key');
   assert.strictEqual(config.getRoleSlots('alltag').primary.provider, 'google', 'alltag primary google');
@@ -94,19 +103,24 @@ async function main() {
   assert.ok(!config.devPrioAn(), 'dev prio aus');
  console.log('[routing] live: google vorne, openrouter dahinter'); 
 
-  v
-
-  // --- 3) Primary → Fallback: 429 auf primary, fallback antwortet gültig ---
-  ({ config, brain } = ladeConfigFrisch('0', { gemini: None, 'nodeEnv': 'test' }));
+  // --- 3) Primary → Fallback: 429 auf primary, fallback antwortet gültig (ohne Key) ---
+  ({ config, brain } = ladeConfigFrisch('0', { gemini: null, nodeEnv: 'test-bc' }));
   setzeFetch([{ httpFehler: 429 }, { content: GUELTIG, tokens: 77 }]);
   const d = await brain.decide({
     prompt: 'test', whitelist: ['rest'], apiKey: 'mock-key', role: 'alltag',
   });
   assert.ok(d.ok, 'decide ok via fallback: ' + (d.reason || ''));
-  assert.strictEqual(d.usedModel, 'google/gemma-4-26b', 'fallback-modell genutzt, war: ' + d.usedModel);
+  assert.strictEqual(d.usedModel, 'google/gemma-4-26b-it', 'fallback-modell genutzt, war: ' + d.usedModel);
   assert.strictEqual(d.versuch, 'fallback', 'versuch=fallback');
   assert.strictEqual(d.tokens, 77, 'tokens vom fallback: ' + d.tokens);
   console.log('[routing] fallback-kette ok: 429 → gemma-paid, usedModel + tokens korrekt');
+
+  // --- 4a) 429 als content-String (HTTP 200 + {error}-Body) → als http gewertet ---
+  setzeFetch([{ content: JSON.stringify({ error: { code: 429, message: 'rate limited upstream' } }), tokens: 0 }, { content: GUELTIG, tokens: 66 }]);
+  const d429c = await brain.decide({ prompt: 'test', whitelist: ['rest'], apiKey: 'mock-key', role: 'alltag' });
+  assert.ok(d429c.ok && d429c.versuch === 'fallback', 'content-429 → fallback, war: ' + JSON.stringify({ ok: d429c.ok, versuch: d429c.versuch }));
+  assert.strictEqual(d429c.tokens, 66, 'tokens vom fallback nach content-429');
+  console.log('[routing] content-429 ok: {error}-String → http, kette läuft weiter');
 
   // --- 4) Kaputtes JSON auf primary → fallback ---
   setzeFetch([{ content: 'kein json {{{', tokens: 10 }, { content: GUELTIG, tokens: 88 }]);
@@ -114,11 +128,11 @@ async function main() {
     prompt: 'test', whitelist: ['rest'], apiKey: 'mock-key', role: 'alltag',
   });
   assert.ok(d2.ok, 'decide ok via fallback nach kaputtem json');
-  assert.strictEqual(d2.usedModel, 'google/gemma-4-26b', 'fallback nach json-fehler');
+  assert.strictEqual(d2.usedModel, 'google/gemma-4-26b-it', 'fallback nach json-fehler');
   console.log('[routing] json-fallback ok: kaputt → fallback mit 88 tokens');
 
-  // --- 5) Dev-Modus ohne Key nutzt NUR :free (niemals paid) ---
-  ({ config, brain } = ladeConfigFrisch('1', { gemini: None, 'nodeEnv': 'test' }));
+  // --- 5) Rollen respektiert: alltag=:free, arbiter=glm, nightly=mimo (kein dev-Stau) ---
+  ({ config, brain } = ladeConfigFrisch('1', { gemini: null, nodeEnv: 'test' }));
   const aufrufe = [];
   global.fetch = async (url, opts) => {
     const body = JSON.parse(opts.body);
@@ -135,11 +149,13 @@ async function main() {
   await brain.decide({ prompt: 't', whitelist: ['rest'], apiKey: 'k', role: 'arbiter' });
   await brain.decide({ prompt: 't', whitelist: ['rest'], apiKey: 'k', role: 'nightly' });
   assert.ok(aufrufe.length >= 3, '3 rollen-decides');
-  for (const m of aufrufe) assert.ok(m.includes(':free'), 'dev-call free, war: ' + m);
-  console.log('[routing] dev-calls: ' + [...new Set(aufrufe)].join(', ') + ' (alle :free)');
+  assert.ok(aufrufe[0].includes(':free'), 'alltag free, war: ' + aufrufe[0]);
+  assert.ok(aufrufe[1].includes('glm'), 'arbiter glm, war: ' + aufrufe[1]);
+  assert.ok(aufrufe[2].includes('mimo'), 'nightly mimo, war: ' + aufrufe[2]);
+  console.log('[routing] rollen-calls: ' + [...new Set(aufrufe)].join(', ') + ' (alltag/arbiter/nightly getrennt)');
 
   // --- 6) Fallback-Badge-Felder: tried + grund bei 429 ---
-  ({ config, brain } = ladeConfigFrisch('0', { gemini: None, 'nodeEnv': 'test' }));
+  ({ config, brain } = ladeConfigFrisch('0', { gemini: null, nodeEnv: 'test' }));
   setzeFetch([{ httpFehler: 429 }, { content: GUELTIG, tokens: 33 }]);
   const d3 = await brain.decide({ prompt: 't', whitelist: ['rest'], apiKey: 'k', role: 'arbiter' });
   assert.ok(d3.ok && d3.versuch === 'fallback', 'arbiter-fallback ok');
@@ -149,7 +165,7 @@ async function main() {
   console.log(`[routing] badge-felder ok: tried=${d3.tried} grund=${d3.grund} used=${d3.usedModel} → [not:glm:429] [fallback] [glm]`);
 
   // --- 7) Doppel-429 (beide free down): grund + grund2, kein Modell ---
-  ({ config, brain } = ladeConfigFrisch('1', { gemini: None, 'nodeEnv': 'test' })); // dev: :free → :free
+  ({ config, brain } = ladeConfigFrisch('1', { gemini: null, nodeEnv: 'test' })); // dev: :free → :free
   setzeFetch([{ httpFehler: 429 }, { httpFehler: 429 }]);
   const d4 = await brain.decide({ prompt: 't', whitelist: ['rest'], apiKey: 'k', role: 'alltag' });
   assert.ok(!d4.ok && d4.stale && d4.versuch === 'fallback', 'doppel-429 stale, war: ' + JSON.stringify({ ok: d4.ok, versuch: d4.versuch }));
@@ -161,14 +177,16 @@ async function main() {
   // --- 8) Google-primary Erfolg (Mock, kein Netz): provider + tokens ---
   ({ config, brain } = ladeConfigFrisch('1', { gemini: 'AQ.test-key', nodeEnv: 'dev', modell: 'gemma-4-26b-a4b-it' }));
   global.fetch = async (url, opts) => {
-    assert.ok(String(url).includes('aiplatform.googleapis.com'), 'vertex-url, war: ' + url);
+    assert.ok(String(url).includes('generativelanguage.googleapis.com'), 'ai-studio-url, war: ' + url);
+    assert.strictEqual(opts.headers['x-goog-api-key'], 'AQ.test-key', 'api-key per header');
     const body = JSON.parse(opts.body);
     assert.ok(Array.isArray(body.contents), 'google-contents');
     assert.strictEqual(body.generationConfig.responseMimeType, 'application/json', 'json-mode');
+    assert.deepStrictEqual(body.generationConfig.thinkingConfig, { thinkingLevel: 'minimal' }, 'gemma-4 thinking minimal');
     return {
       ok: true,
       json: async () => ({
-        candidates: [{ content: { parts: [{ text: GUELTIG }] }, finishReason: 'STOP' }],
+        candidates: [{ content: { parts: [{ thought: true, text: 'hmm...' }, { text: GUELTIG }] }, finishReason: 'STOP' }],
         usageMetadata: { promptTokenCount: 11, candidatesTokenCount: 22, totalTokenCount: 33 },
       }),
     };

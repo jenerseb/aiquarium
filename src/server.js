@@ -255,7 +255,17 @@ if (require.main === module) {
   const cfg = require('./config');
   initZustand(cfg.DB.defaultPfad);
   const server = erstelleServer();
-  server.listen(PORT, () => console.log(`[server] http://localhost:${PORT} (db: ${ZUSTAND.dbPfad})`));
+  server.listen(PORT, () => {
+    // Fix 1: Routing-Status beim Start loggen – Key geladen? Google vorne?
+    try {
+      const aktiv = cfg.googleDirektAktiv();
+      const slots = cfg.getRoleSlots('alltag');
+      console.log(`[server] http://localhost:${PORT} (db: ${ZUSTAND.dbPfad})`);
+      console.log(`[routing] googleDirektAktiv=${aktiv} primary=${slots.primary.provider}:${slots.primary.model} fallback=${slots.fallback.model}${slots.fallback2 ? ' fallback2=' + slots.fallback2.model : ''}`);
+    } catch {
+      console.log(`[server] http://localhost:${PORT} (db: ${ZUSTAND.dbPfad})`);
+    }
+  });
   setInterval(loopTick, 20000);
 }
 

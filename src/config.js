@@ -120,10 +120,10 @@ const MEMORY = {
 const OPENROUTER_BASE = 'https://openrouter.ai/api/v1/chat/completions';
 
 // ---- Google-Direct (eigener Key, kein OpenRouter-BYOK) ----
-// GEMINI_API_KEY: 'AQ....' = Vertex AI Express, 'AIza...' = AI Studio.
+// GEMINI_API_KEY: AQ.* (Express) und AIza* (Studio) laufen beide ueber AI Studio.
 const GEMINI = {
   apiKey: String(process.env.GEMINI_API_KEY || '').trim() || null,
-  modell: String(process.env.GEMINI_MODEL || 'gemini-2.5-flash').trim() || 'gemini-2.5-flash',
+  modell: String(process.env.GEMINI_MODEL || 'gemma-4-26b-a4b-it').trim() || 'gemma-4-26b-a4b-it',
 };
 
 function googleDirektAktiv() {
@@ -160,7 +160,7 @@ const SLOTS = {
   // Dev (?dev=1): Google-Direct wenn Key gesetzt, sonst :free-Paar (0,00 EUR).
   // Hinweis: fallback bewusst :free (nicht paid) – Config-Mismatch bereinigt.
   dev: googleDirektAktiv()
-    ? { primary: googleSlot(1800), fallback: { provider: 'openrouter', model: process.env.AIQUARIUM_DEV_MODEL || 'google/gemma-4-26b-a4b-it:free', reasoningExclude: true, maxTokens: 1800 }, fallback2: { provider: 'openrouter', model: 'google/gemma-4-26b-a4b-it:free', reasoningExclude: false, maxTokens: 1200 } }
+    ? { primary: googleSlot(1800), fallback: { provider: 'openrouter', model: process.env.AIQUARIUM_DEV_MODEL || 'google/gemma-4-26b-a4b-it:free', reasoningExclude: true, maxTokens: 1800 }, fallback2: { provider: 'openrouter', model: process.env.AIQUARIUM_DEV_FALLBACK2 || 'nvidia/nemotron-3.5-super-vl:free', reasoningExclude: false, maxTokens: 1200 } }
     : {
       primary: { provider: 'openrouter', model: process.env.AIQUARIUM_DEV_MODEL || 'google/gemma-4-26b-a4b-it:free', reasoningExclude: true, maxTokens: 1800 },
       fallback: { provider: 'openrouter', model: 'google/gemma-4-26b-a4b-it:free', reasoningExclude: false, maxTokens: 1800 },
@@ -194,12 +194,13 @@ function devPrioAn() {
 }
 
 // Zentraler Helper: Rolle → { primary, fallback, fallback2? }.
-// Dev-Modus: Google-Direct wenn Key gesetzt, sonst kostenloses dev-Paar (nie paid).
-// Live: das jeweilige Rollen-Paar (+ Google vorne, wenn Key gesetzt).
+// Fix Rollen-Umbau: echte Rolle (dev/alltag/arbiter/nightly) auch im Dev-Modus –
+// kein Zusammenstauchen mehr auf SLOTS.dev. Dev bleibt kostenlos (:free / Google).
 function getRoleSlots(role) {
-  if (devPrioAn()) return SLOTS.dev;
   if (role === 'arbiter') return SLOTS.arbiter;
   if (role === 'nightly') return SLOTS.nightly;
+  if (role === 'dev') return SLOTS.dev;
+  if (devPrioAn() && (role === 'alltag' || !role)) return SLOTS.dev;
   return SLOTS.alltag;
 }
 
