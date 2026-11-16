@@ -1,6 +1,3 @@
-    wolkenTreiben(dt); // DIORAMA_V1: Wolken-Drift
-    grasWiegen(performance.now()); // DIORAMA_V1: Gras im Wind
-  g.addColorStop(1, farbe);
 // Sauberer Neubau fuer die flache Stadt: Boden (x, z in Metern, y = 0),
 // OSM-Strassen als Asphaltbaender, Gruenflaechen, extrudierte Gebaeude mit
 // prozeduraler Backstein-Textur, POI-Schilder, Figur, 2-Modi-Kamera (pilot/overview).
@@ -1143,7 +1140,7 @@ function staatAnwenden(s) {
     setzeIndoorTransparenz(null);
   }
   aktualisiereSchilder(s.pois || []);
-    wolkenTreiben(dt); // DIORAMA_V1: Wolken-Drift
+    wolkenTreiben(Math.min(0.1, (jetzt - letzteZeit) / 1000 || 0.016)); // DIORAMA_V1: dt aus Loop-Zeit (Fix)
     grasWiegen(jetzt); // DIORAMA_V1: Gras im Wind
     wolkenFaerben(); // DIORAMA_V1: Wolken an Tageszeit
   hudAktualisieren();
