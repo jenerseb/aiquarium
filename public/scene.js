@@ -405,11 +405,11 @@ function baueGebaeude(buildings) {
         uebersprungen++;
       }
       // DIORAMA_V1: warme Fassade (OSM-Farbe oder Palette) + farbiges Dach (OSM oder Palette)
-      const fassFarbe = b.colour || dioramaFarbe(b.id, DIORAMA_FASSADEN);
+      const fassFarbe = b.colour || "#b3563f"; // DIORAMA_V1-Fix: direkt, ohne Hash-Funktion (TDZ-sicher)
       const mat = new THREE.MeshLambertMaterial({ map: fassadenTextur(maxX - minX, h, fassFarbe) });
       const mesh = new THREE.Mesh(geo, mat);
       mesh.position.set(0, 0, 0); // exakt auf dem Boden, kein Schweben
-      const dachFarbe = b.roofColour || dioramaFarbe(String(b.id) + "-dach", DIORAMA_DAECHER);
+      const dachFarbe = b.roofColour || "#343942"; // DIORAMA_V1-Fix: direkt Schiefer, ohne Hash-Funktion
       const dachMatBau = new THREE.MeshLambertMaterial({ color: new THREE.Color(dachFarbe) });
       const dachGeo = new THREE.ShapeGeometry(form);
       dachGeo.rotateX(-Math.PI / 2);
