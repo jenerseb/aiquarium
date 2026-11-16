@@ -359,49 +359,64 @@ function baueGebaeude(buildings) {
   for (const [, m] of Z.gebaeude) { scene.remove(m); }
   Z.gebaeude.clear();
   const liste = (buildings || []).slice(0, 2000);
-    const fp = b.footprint;
+  let gebaut = 0;
+  let uebersprungen = 0;
   for (const b of liste) {
-    if (!Array.isArray(fp) || fp.length < 3) continue;
-    // DIORAMA_V1: 75 % Hoehe (min 4,5 m) — luftige Miniatur-Schluchten
-    const hRoh = Math.max(3, Math.min(30, Number(b.height) || 12));
-    const h = Math.max(4.5, Math.round(hRoh * 0.75 * 10) / 10);
-    let minX = Infinity;
-    let maxX = -Infinity;
-    for (const [x] of fp) { minX = Math.min(minX, x); maxX = Math.max(maxX, x); }
-    // PFLICHT-MAPPING: shapeX = worldX, shapeY = -worldZ.
-    // Nach rotateX(-PI/2) gilt shapeY -> -worldZ, extrudeDepth 0..h -> +worldY 0..h.
-    // Die Unterkante liegt damit exakt auf y = 0 -> KEIN mesh.position.y-Versatz!
-    const form = new THREE.Shape();
-    form.moveTo(fp[0][0], -fp[0][1]);
-    for (let i = 1; i < fp.length; i += 1) form.lineTo(fp[i][0], -fp[i][1]);
-    // DIORAMA_V1: weicher Modellbau-Bevel (Miniatur-Look statt scharfer Kloetze)
-    const geo = new THREE.ExtrudeGeometry(form, { depth: Math.max(0.1, h - 0.35), bevelEnabled: true, bevelThickness: 0.35, bevelSize: 0.28, bevelSegments: 2 });
-    geo.rotateX(-Math.PI / 2);
-    geo.computeBoundingBox();
-    // Bevel ragt unten raus (min.y = -0.35) → zurueck auf exakt y = 0 heben
-    geo.translate(0, -geo.boundingBox.min.y, 0);
-    geo.computeBoundingBox();
-    const bb = geo.boundingBox;
-    if (Math.abs(bb.min.y) > 0.001) {
-      console.warn(`[gebaeude ${b.id}] bbox unerwartet: min.y=${bb.min.y.toFixed(3)} (erwartet 0)`);
+    try {
+      const fp = b.footprint;
+      if (!Array.isArray(fp) || fp.length < 3) { uebersprungen++; continue; }
+      // DIORAMA_V1: 75 % Hoehe (min 4,5 m) — luftige Miniatur-Schluchten
+      const hRoh = Math.max(3, Math.min(30, Number(b.height) || 12));
+      const h = Math.max(4.5, Math.round(hRoh * 0.75 * 10) / 10);
+      let minX = Infinity;
+      let maxX = -Infinity;
+      for (const [x] of fp) { minX = Math.min(minX, x); maxX = Math.max(maxX, x); }
+      // PFLICHT-MAPPING: shapeX = worldX, shapeY = -worldZ.
+      // Nach rotateX(-PI/2) gilt shapeY -> -worldZ, extrudeDepth 0..h -> +worldY 0..h.
+      // Die Unterkante liegt damit exakt auf y = 0 -> KEIN mesh.position.y-Versatz!
+      const form = new THREE.Shape();
+      form.moveTo(fp[0][0], -fp[0][1]);
+      for (let i = 1; i < fp.length; i += 1) form.lineTo(fp[i][0], -fp[i][1]);
+      // DIORAMA_V1: weicher Modellbau-Bevel (Miniatur-Look statt scharfer Kloetze)
+      let geo = null;
+      try {
+        geo = new THREE.ExtrudeGeometry(form, { depth: Math.max(0.1, h - 0.35), bevelEnabled: true, bevelThickness: 0.35, bevelSize: 0.28, bevelSegments: 2 });
+        geo.rotateX(-Math.PI / 2);
+        geo.computeBoundingBox();
+        geo.translate(0, -geo.boundingBox.min.y, 0);
+        geo.computeBoundingBox();
+        const bb = geo.boundingBox;
+        const kaputt = !Number.isFinite(bb.min.y) || !Number.isFinite(bb.max.y) || Math.abs(bb.min.y) > 0.001;
+        if (kaputt) throw new Error("bevel-bbox ungueltig");
+      } catch (err) {
+        // DIORAMA_V1-Fallback: scharf aber sichtbar (statt unsichtbar)
+        geo = new THREE.ExtrudeGeometry(form, { depth: h, bevelEnabled: false });
+        geo.rotateX(-Math.PI / 2);
+        uebersprungen++;
+      }
+      // DIORAMA_V1: warme Fassade (OSM-Farbe oder Palette) + farbiges Dach (OSM oder Palette)
+      const fassFarbe = b.colour || dioramaFarbe(b.id, DIORAMA_FASSADEN);
+      const mat = new THREE.MeshLambertMaterial({ map: fassadenTextur(maxX - minX, h, fassFarbe) });
+      const mesh = new THREE.Mesh(geo, mat);
+      mesh.position.set(0, 0, 0); // exakt auf dem Boden, kein Schweben
+      const dachFarbe = b.roofColour || dioramaFarbe(String(b.id) + "-dach", DIORAMA_DAECHER);
+      const dachMatBau = new THREE.MeshLambertMaterial({ color: new THREE.Color(dachFarbe) });
+      const dachGeo = new THREE.ShapeGeometry(form);
+      dachGeo.rotateX(-Math.PI / 2);
+      const dach = new THREE.Mesh(dachGeo, dachMatBau);
+      dach.position.set(0, h + 0.05, 0);
+      const gruppe = new THREE.Group();
+      gruppe.add(mesh, dach);
+      gruppe.userData.gebaeudeId = b.id;
+      scene.add(gruppe);
+      Z.gebaeude.set(b.id, gruppe);
+      gebaut++;
+    } catch (err) {
+      uebersprungen++;
+      console.warn(`[gebaeude ${b && b.id}] uebersprungen: ${err.message}`);
     }
-    // DIORAMA_V1: warme Fassade (OSM-Farbe oder Palette) + farbiges Dach (OSM oder Palette)
-    const fassFarbe = b.colour || dioramaFarbe(b.id, DIORAMA_FASSADEN);
-    const mat = new THREE.MeshLambertMaterial({ map: fassadenTextur(maxX - minX, h, fassFarbe) });
-    const mesh = new THREE.Mesh(geo, mat);
-    mesh.position.set(0, 0, 0); // exakt auf dem Boden, kein Schweben
-    // DIORAMA_V1: farbiges Dach (OSM roofColour oder Palette: Terrakotta/Schiefer/Kupfergruen)
-    const dachFarbe = b.roofColour || dioramaFarbe(String(b.id) + "-dach", DIORAMA_DAECHER);
-    const dachMatBau = new THREE.MeshLambertMaterial({ color: new THREE.Color(dachFarbe) });
-    const dachGeo = new THREE.ShapeGeometry(form);
-    dachGeo.rotateX(-Math.PI / 2);
-    const dach = new THREE.Mesh(dachGeo, dachMatBau);
-    dach.position.set(0, h + 0.05, 0);
-    gruppe.add(mesh, dach);
-    gruppe.userData.gebaeudeId = b.id;
-    scene.add(gruppe);
-    Z.gebaeude.set(b.id, gruppe);
   }
+  console.log(`[gebaeude] ${gebaut}/${liste.length} gebaut, ${uebersprungen} uebersprungen (Bevel-Fallback/Guard)`);
 }
 
 // Indoor-Transparenz: genau ein Gebäude halbtransparent + warmer Glow,
