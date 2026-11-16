@@ -303,6 +303,8 @@ function dioramaFarbe(id, palette) {
   for (let i = 0; i < s.length; i += 1) h = (h * 31 + s.charCodeAt(i)) >>> 0;
   return palette[h % palette.length];
 }
+// DIORAMA_V1: Textur-Aufloesung (einmalig, TDZ-sicher top-level)
+const TEXTUR_FAKTOR = 4;
       const nx = -dz / len;
       const nz = dx / len;
       const VERSATZ = 5; // 5 m neben die Fahrbahn (Gehweg-Kante)
@@ -355,7 +357,6 @@ function fassadenTextur(breiteM, hoeheM) {
   tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
   texturCache.set(bodenKey, tex);
   // damit Backstein und Fenster aus der Pilot-Perspektive ruhig wirken.
-  const TEXTUR_FAKTOR = 4;
   tex.repeat.set(
     Math.max(1, Math.round(breiteM / (14 * TEXTUR_FAKTOR))),
     Math.max(1, Math.round(hoeheM / (12 * TEXTUR_FAKTOR)))
