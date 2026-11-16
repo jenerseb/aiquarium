@@ -324,14 +324,14 @@ function fassadenTextur(breiteM, hoeheM, grundFarbe, faktor = 4) {
   const bR = Math.max(10, Math.round(breiteM / 10) * 10);
   const hR = Math.max(10, Math.round(hoeheM / 10) * 10);
   const lichtStufe = (typeof LICHT !== "undefined" && LICHT.fensterLicht > 0.6) ? "nacht" : ((typeof LICHT !== "undefined" && LICHT.fensterLicht > 0.4) ? "abend" : "tag");
+  const farbe = grundFarbe || '#b3563f';
   const key = `Fx${bR}_H${hR}_x${TEXTUR_FAKTOR}_${farbe}`;
   if (texturCache.has(key)) return texturCache.get(key);
   const c = document.createElement('canvas');
-  c.width = 128; c.height = 128;
+  g.fillStyle = toene[Math.floor(Math.random() * toene.length)];
   const g = c.getContext('2d');
   const toene = ['#6b4a3a', '#5d4033', '#715039', '#635046'];
-  g.fillStyle = toene[Math.floor(Math.random() * toene.length)];
-  const farbe = grundFarbe || '#b3563f';
+  c.width = 128; c.height = 128;
   g.fillRect(0, 0, 128, 128);
   g.fillStyle = 'rgba(0,0,0,.12)';
   for (let y = 0; y < 128; y += 6) g.fillRect(0, y, 128, 1); // Ziegelreihen
