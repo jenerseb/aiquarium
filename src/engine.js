@@ -142,6 +142,22 @@ function heileDurchSchlaf(ch) {
 
 // --- Schritt ausfuehren (Engine rechnet, Modell spuert nur Konsequenzen) ---------
 
+// Feed-Dedup: identische in_feed-Nachricht nicht zweimal direkt hintereinander speichern.
+function letzteFeedNachricht(db, characterId) {
+  try {
+    const r = db.prepare('SELECT payload_json FROM events WHERE character_id = ? AND in_feed = 1 ORDER BY id DESC LIMIT 1').get(characterId);
+    return r ? String(r.payload_json || '') : '';
+  } catch { return ''; }
+}
+
+function speichereFeed(db, characterId, typ, payload) {
+  const text = JSON.stringify(payload);
+  if (letzteFeedNachricht(db, characterId) === text) return false; // identisch → kein Spam
+  db.prepare('INSERT INTO events (character_id, tick, type, payload_json, in_feed) VALUES (?, 0, ?, ?, 1)')
+    .run(characterId, typ, text);
+  return true;
+}
+
 // --- Routen-State: schrittweises Laufen statt Teleport (Punkt 1) -------------------------------
 // Aktive Route liegt in action_meta_json: { route: [{x,z}...], wegIndex, zielPoi, restM }.
 // Pro Tick läuft die Figur SCHRITT_M (1.4 m/s * 20 s Tick = 28 m).
@@ -214,9 +230,36 @@ function waehleExploreZiel(db, karte, ch) {
 }
 
 // Route starten: A* zum Ziel, Waypoints in Meta ablegen.
+// PATHFINDING-FIX: Ziel ist immer ein Strassenknoten (entryNodeId) –
+// die Figur bleibt auf Graph-Kanten; erst bei Ankunft wird auf die
+// POI-Koordinate gesetzt ("Tuerschwelle betreten", kein Wand-Durchbruch).
+// Gibt null zurueck, wenn keine Graph-Route existiert (keine Luftlinie!).
 function starteRoute(db, karte, ch, zielX, zielZ, zielPoi) {
-  const start = pf.findeWegFuerKoordinaten(karte.navGraph, Number(ch.pos_x), Number(ch.pos_z), Number(zielX), Number(zielZ));
-  const weg = (start && start.weg) || [];
+  const navGraph = karte.navGraph;
+  if (navGraph && zielPoi) {
+    const poiZeilen = db.prepare('SELECT id, pos_x, pos_z FROM pois').all();
+    const idx = new Map(poiZeilen.map((p) => [p.id, p]));
+    const ziel = idx.get(zielPoi);
+    if (ziel) {
+      const snap = pf.snappePois(navGraph, [ziel]);
+      const eintritt = snap.get(ziel.id);
+      if (eintritt) {
+        const start = pf.findeWegFuerKoordinaten(navGraph, Number(ch.pos_x), Number(ch.pos_z), eintritt.x, eintritt.z);
+        const weg = (start && start.weg && !start.keineRoute) ? start.weg : [];
+        if (weg.length < 2) return null;
+        const meta = {
+          route: weg.map((p) => ({ x: Math.round(Number(p.x) * 10) / 10, z: Math.round(Number(p.z) * 10) / 10 })),
+          wegIndex: 0,
+          zielPoi: zielPoi || null,
+          restM: Math.round((start.distanzM || 0) * 10) / 10,
+        };
+        speichereRoute(db, ch, meta);
+        return meta;
+      }
+    }
+  }
+  const start = pf.findeWegFuerKoordinaten(navGraph, Number(ch.pos_x), Number(ch.pos_z), Number(zielX), Number(zielZ));
+  const weg = (start && start.weg && !start.keineRoute) ? start.weg : [];
   if (weg.length < 2) return null;
   const meta = {
     route: weg.map((p) => ({ x: Math.round(Number(p.x) * 10) / 10, z: Math.round(Number(p.z) * 10) / 10 })),
@@ -272,24 +315,45 @@ async function fuehreSchrittAus(db, deps, characterId, schritt, jetztMs) {
 
   if (action === 'walk_to') {
     const ziel = poiVonId(zielId);
-    if (!ziel) return { ok: false, grund: 'ziel_unbekannt', notizen };
+    if (!ziel) {
+      // Strukturierte Diagnose (Dev-/Debug-Modus): welches target, was wäre erlaubt
+      try {
+        const devAn = String(process.env.AIQUARIUM_DEV ?? '1') !== '0';
+        if (devAn) {
+          const alle = db.prepare('SELECT id FROM pois ORDER BY id').all().map((r) => r.id);
+          const dbg = { code: 'whitelist', reason: `Whitelist-Verstoß: target "${String(zielId || '')}" unbekannt (erlaubt: ${alle.join(', ')}).`, feld: 'target', wert: String(zielId || ''), erlaubt: alle, rawResponse: JSON.stringify(schritt || {}), model: '', tier: 'engine' };
+          console.log(`[not:whitelist] ${dbg.reason}`);
+          console.log(`[rawResponse]\n${dbg.rawResponse}\n[/rawResponse]`);
+        }
+      } catch { /* Diagnose darf nie crashen */ }
+      return { ok: false, grund: 'ziel_unbekannt', notizen };
+    }
     // Route fortsetzen oder neu starten (kein Teleport mehr)
     let meta = (ch.current_action === 'walk_to' || ch.current_action === 'explore_street') ? ladeRoute(ch) : null;
+    let routenStart = false;
     if (!meta || meta.zielPoi !== ziel.id) {
       meta = starteRoute(db, karte, ch, Number(ziel.pos_x), Number(ziel.pos_z), ziel.id);
       if (!meta) {
-        // Fallback: kein Graph-Weg – direkt, aber als Route mit 1 Punkt (kein Sprung im Frontend)
-        meta = { route: [{ x: Number(ziel.pos_x), z: Number(ziel.pos_z) }], wegIndex: 0, zielPoi: ziel.id, restM: 0 };
-        speichereRoute(db, ch, meta);
+        // PATHFINDING-FIX: keine Luftlinie mehr – ohne Graph-Route bleibt
+        // die Figur stehen statt quer durch Haeuser zu laufen.
+        return { ok: false, grund: 'keine_route', notizen };
       }
       notizen.push(`Du machst dich auf den Weg zu ${ziel.name}.`);
+      routenStart = true;
     }
     ch.current_action = 'walk_to';
     ch.action_target_poi = ziel.id;
     lasseZeitVergehen(ch, 20); // ein Tick = 20 s Aquarium-Zeit
     const schritt = geheSchritt(db, ch, meta);
     if (!schritt.angekommen) {
-      notizen.push(`unterwegs (${schritt.restM.toFixed(0)} m übrig)`);
+      // LAUF-SPAM-FIX: unterwegs nur Status weiterführen (pos/route persistiert),
+      // KEINE Feed-Zeile, KEIN action-Event – Feed nur bei Start/Ankunft/Fehler.
+      klammereCharakter(ch);
+      speichereCharakter(db, ch);
+      // Nur der echte Routen-Start erzeugt eine Feed-Notiz (einmalig), danach Stille.
+      if (routenStart) speichereFeed(db, characterId, 'aktion_' + action, { schritt, notizen });
+      else notizen.length = 0;
+      return { ok: true, notizen, charakter: ch, unterwegs: true, restM: schritt.restM };
     } else {
       ch.pos_x = Number(ziel.pos_x); ch.pos_z = Number(ziel.pos_z);
       ch.inside_poi = ziel.id;
@@ -322,15 +386,27 @@ async function fuehreSchrittAus(db, deps, characterId, schritt, jetztMs) {
       lasseZeitVergehen(ch, 20);
       const schritt2 = geheSchritt(db, ch, meta);
       const neu = entdeckeUmgebung(db, ch);
-      for (const n of neu) notizen.push(`Neu entdeckt: ${n.name}.`);
+      // Echte Ereignisse → Feed (mit Dedup); reines Weiterlaufen → nur Status, kein Spam.
+      let ereignis = false;
+      for (const n of neu) { notizen.push(`Neu entdeckt: ${n.name}.`); ereignis = true; }
       if (schritt2.angekommen) {
         speichereRoute(db, ch, null);
         ch.current_action = 'idle';
         ch.erschoepfung = Math.min(100, Number(ch.erschoepfung) + 6);
         ch.froh = Math.min(100, Math.max(-100, Number(ch.froh) + 3));
         notizen.push('Du hast dich umgesehen und atmest durch.');
+        ereignis = true;
       } else {
-        notizen.push(`unterwegs (${schritt2.restM.toFixed(0)} m übrig)`);
+        // LAUF-SPAM-FIX: kein „unterwegs (…)" in Feed/DB – Figur läuft lautlos weiter.
+        klammereCharakter(ch);
+        speichereCharakter(db, ch);
+        return { ok: true, notizen, charakter: ch, unterwegs: true, restM: schritt2.restM };
+      }
+      if (ereignis) speichereFeed(db, characterId, 'aktion_' + action, { schritt, notizen });
+      else {
+        klammereCharakter(ch);
+        speichereCharakter(db, ch);
+        return { ok: true, notizen, charakter: ch, unterwegs: true, restM: schritt2.restM };
       }
     } else {
       ch.current_action = 'idle';
@@ -376,8 +452,7 @@ async function fuehreSchrittAus(db, deps, characterId, schritt, jetztMs) {
 
   klammereCharakter(ch);
   speichereCharakter(db, ch);
-  db.prepare("INSERT INTO events (character_id, tick, type, payload_json, in_feed) VALUES (?, 0, ?, ?, 1)")
-    .run(characterId, 'aktion_' + action, JSON.stringify({ schritt, notizen }));
+  speichereFeed(db, characterId, 'aktion_' + action, { schritt, notizen });
   return { ok: true, notizen, charakter: ch };
 }
 
@@ -458,8 +533,7 @@ async function fuehreSchrittAusTeil2(db, deps, characterId, schritt) {
   ch.current_action = 'idle';
   klammereCharakter(ch);
   speichereCharakter(db, ch);
-  db.prepare("INSERT INTO events (character_id, tick, type, payload_json, in_feed) VALUES (?, 0, ?, ?, 1)")
-    .run(characterId, 'aktion_' + action, JSON.stringify({ schritt, notizen }));
+  speichereFeed(db, characterId, 'aktion_' + action, { schritt, notizen });
   return { ok: true, notizen, charakter: ch };
 }
 
@@ -521,8 +595,7 @@ async function fuehreSchrittAusTeil3(db, deps, characterId, schritt) {
   ch.current_action = 'idle';
   klammereCharakter(ch);
   speichereCharakter(db, ch);
-  db.prepare("INSERT INTO events (character_id, tick, type, payload_json, in_feed) VALUES (?, 0, ?, ?, 1)")
-    .run(characterId, 'aktion_' + action, JSON.stringify({ schritt, notizen }));
+  speichereFeed(db, characterId, 'aktion_' + action, { schritt, notizen });
   return { ok: true, notizen, charakter: ch };
 }
 
@@ -559,7 +632,8 @@ function holeNeuenPlan(db, deps, characterId, jetztMs) {
 }
 
 // Interne Variante mit KI-Quellennachweis für den Feed (Punkt 7):
-// { thought, retrospective, plan, fallback, fehler, quelle: { source, model, tokens } }
+// { thought, retrospective, plan, fallback, fehler, quelle: { source, model, tokens, debug } }
+// quelle.debug: { code, reason, rawResponse, model, tier } (Dev-/Debug-Modus)
 async function holeNeuenPlanMitMeta(db, deps, characterId, jetztMs) {
   const META_FALLBACK = { source: 'fallback', model: '', tokens: 0 };
   const META_QUEUE = { source: 'queue', model: '', tokens: 0 };
@@ -568,6 +642,7 @@ async function holeNeuenPlanMitMeta(db, deps, characterId, jetztMs) {
   const promptMod = require('./prompt');
   const ch = ladeCharakter(db, characterId);
   const orte = bekannteOrte(db).map((o) => ({ id: o.id, name: o.name, category: o.category }));
+  const devAn = String(process.env.AIQUARIUM_DEV ?? '1') !== '0';
   const letzterTick = 0;
   const ereignisse = ereignisSeit(db, characterId, letzterTick);
   const ctx = {
@@ -586,12 +661,15 @@ async function holeNeuenPlanMitMeta(db, deps, characterId, jetztMs) {
       fallback: true, quelle: META_FALLBACK };
   }
   const antwort = await brain.decide({
-    prompt: gebaut.prompt, whitelist: [], apiKey: process.env.OPENROUTER_API_KEY || 'mock',
-    slot: undefined, musing: false, orte: orte.map((o) => o.name), role: 'alltag',
+    prompt: gebaut.prompt, whitelist: gebaut.whitelist, apiKey: process.env.OPENROUTER_API_KEY || 'mock',
+    slot: undefined, musing: false, orte: orte.map((o) => o.id), role: 'alltag', schema: 'plan',
   });
   // KI-Quelle für den Dev-Feed: usedModel + Tokens + Soll-Modell aus decide-Antwort.
   // Bei Fallback: [not:soll:grund] [fallback] [modell] – sonst [modell] [free] [tok].
   const usage = (antwort && (antwort.usage || antwort.tokens)) || {};
+  const debugEinzeln = antwort && antwort.debug && typeof antwort.debug === 'object' ? antwort.debug : null;
+  const debugListe = Array.isArray(antwort && antwort.versuchDebug) ? antwort.versuchDebug.filter(Boolean) : [];
+  if (!debugListe.length && debugEinzeln) debugListe.push(debugEinzeln);
   const quelle = {
     source: antwort && antwort.stale ? 'fallback' : 'llm',
     model: String((antwort && (antwort.usedModel || antwort.modell || antwort.model)) || ''),
@@ -600,14 +678,42 @@ async function holeNeuenPlanMitMeta(db, deps, characterId, jetztMs) {
     grund: String((antwort && (antwort.grund || '')) || ''),
     grund2: String((antwort && (antwort.grund2 || '')) || ''),
     reason: String((antwort && (antwort.versuch === 'fallback' ? antwort.reason || '' : '')) || ''),
+    debug: debugEinzeln || null,
+    debugVersuche: debugListe.length > 0 ? debugListe : undefined,
+  };
+  const loggeDebug = (dbg) => {
+    if (!dbg || !devAn) return;
+    try {
+      console.log(`[not:${dbg.code || '?'}] model=${dbg.model || '?'} tier=${dbg.tier || '?'} – ${dbg.reason || ''}`);
+      console.log(`[rawResponse:${dbg.model || '?'}]\n${String(dbg.rawResponse ?? '')}\n[/rawResponse]`);
+    } catch { /* Logging darf nie crashen */ }
   };
   let obj = null;
   try { obj = JSON.parse(antwort.raw || '{}'); } catch { obj = null; }
-  const geprueft = checks.validatePlan(obj, gebaut.whitelist);
+  // validatePlan mit raw: liefert fehlerDetails { code, reason, rawResponse, feld, wert, erlaubt }
+  // orte (bekannte IDs) nur als Kontext fürs Debug mitgegeben – walk_to zu unentdeckten POIs
+  // ist Discovery-Kernmechanik und bleibt valide (Fehler erst auf Ausführungsebene: ort_unbekannt).
+  const geprueft = checks.validatePlan(obj, { intents: gebaut.whitelist, raw: String(antwort.raw || ''), orte: orte.map((o) => o.id) });
   if (!geprueft.ok) {
+    const fehlerDebug = Array.isArray(geprueft.fehlerDetails) && geprueft.fehlerDetails.length > 0 ? geprueft.fehlerDetails : [];
+    const fallbackQuelle = { ...quelle, source: 'fallback', debug: fehlerDebug[0] || debugEinzeln || null, debugVersuche: fehlerDebug.length > 0 ? fehlerDebug : (debugListe.length > 0 ? debugListe : undefined), fehlerDetails: fehlerDebug };
+    for (const dbg of (fallbackQuelle.debugVersuche || [])) loggeDebug(dbg);
+    if (devAn) {
+      try {
+        db.prepare("INSERT INTO events (character_id, tick, type, payload_json, in_feed) VALUES (?, 0, 'llm_debug', ?, 1)")
+          .run(characterId, JSON.stringify({ quelle: fallbackQuelle, fehler: geprueft.failures }));
+      } catch { /* Gehirn-Log darf nie crashen */ }
+    }
     return { thought: geprueft.thought || 'Plan verworfen.', retrospective: geprueft.retrospective || '',
       plan: [{ action: 'rest', target: null, detail: 'Kurze Pause' }, { action: 'explore_street', target: null, detail: 'Umschauen' }],
-      fallback: true, fehler: geprueft.failures, quelle: { ...quelle, source: 'fallback' } };
+      fallback: true, fehler: geprueft.failures, fehlerDetails: fehlerDebug, quelle: fallbackQuelle };
+  }
+  if (antwort && antwort.stale && debugEinzeln && devAn) {
+    loggeDebug(debugEinzeln);
+    try {
+      db.prepare("INSERT INTO events (character_id, tick, type, payload_json, in_feed) VALUES (?, 0, 'llm_debug', ?, 1)")
+        .run(characterId, JSON.stringify({ quelle, fehler: [] }));
+    } catch { /* Gehirn-Log darf nie crashen */ }
   }
   return { thought: geprueft.thought, retrospective: geprueft.retrospective, plan: geprueft.plan, fallback: false, roh: antwort, quelle };
 }
@@ -773,6 +879,14 @@ async function tick(db, deps, characterId, jetztMs) {
       };
     }
   } catch { routeInfo = null; }
+  // LAUF-SPAM-FIX: unterwegs nur Route/Status melden, kein Feed, kein Gedanke-Wiederholung.
+  // Einzige Ausnahme: echte Start-/Ankunftsnotizen (genau einmal pro Ereignis).
+  if (ergebnis && ergebnis.unterwegs) {
+    const startNotizen = (ergebnis.notizen || []).filter((n) =>
+      /auf den Weg|schlenderst los|Angekommen bei|durchatmest|Neu entdeckt/.test(String(n || '')));
+    return { ok: true, schritt, ergebnis, notizen: startNotizen, gedanke: '', quelle: planQuelle, route: routeInfo,
+      status: { currentStatus: 'walking', remainingMeters: Number(routeInfo ? routeInfo.restM || 0 : 0), targetPoi: String((routeInfo && routeInfo.zielPoi) || schritt.target || '') } };
+  }
   return { ok: true, schritt, ergebnis, notizen, gedanke, nightly: nightlyNotiz, quelle: planQuelle, route: routeInfo };
 }
 

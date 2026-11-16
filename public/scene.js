@@ -14,7 +14,10 @@ const renderer = new THREE.WebGLRenderer({ antialias: true });
 // DIORAMA_V1: warmer Miniatur-Look, leichtgewichtig (kein Postprocessing)
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
 renderer.toneMappingExposure = 1.15;
-renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+// GRAFIK-FREEZE: PixelRatio 1.5 (Retina/4K schonen), kein Schatten-Rendering
+// (Diorama nutzt Baked-Look via Vertex-Colors + Lambert, keine shadowMap).
+renderer.shadowMap.enabled = false;
+renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.5));
 renderer.setSize(window.innerWidth, window.innerHeight);
 stage.appendChild(renderer.domElement);
 
@@ -22,8 +25,9 @@ const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x0a0e13);
 scene.fog = new THREE.FogExp2(0x0a0e13, 0.00085); // DIORAMA_V1: sanfter Horizont-Dunst
 
-const camera = new THREE.PerspectiveCamera(55, window.innerWidth / window.innerHeight, 0.5, 3000);
+const camera = new THREE.PerspectiveCamera(55, window.innerWidth / window.innerHeight, 0.5, 2500);
 camera.position.set(30, 25, 40);
+camera.updateProjectionMatrix();
 
 const sonne = new THREE.DirectionalLight(0xfff2dd, 2.6);
 sonne.position.set(120, 220, 100);
@@ -126,7 +130,10 @@ function baueHimmel() {
   himmelZeichnen(hamburgStunde());
   himmelTex = new THREE.CanvasTexture(himmelCanvas);
   himmelTex.colorSpace = THREE.SRGBColorSpace;
-  const geo = new THREE.SphereGeometry(1400, 24, 16);
+  // GRAFIK-FREEZE: Kuppel (r=2000) umfasst Overview-Kamera (dist 420) + Wolken
+  // aus jedem Winkel; camera.far=2500. Material fog:false -> nur die Stadt
+  // blendet im FogExp2-Dunst aus, der Himmel selbst nicht.
+  const geo = new THREE.SphereGeometry(2000, 24, 16);
   const mat = new THREE.MeshBasicMaterial({ map: himmelTex, side: THREE.BackSide, fog: false, depthWrite: false });
   himmelMesh = new THREE.Mesh(geo, mat);
   himmelMesh.position.set(235, 0, 105);
@@ -725,15 +732,13 @@ function textSprite(text, gross) {
 
 // --- Figur (Kiezling) -------------------------------------------------------------------------
 // Vorderseite = +Z (Blickrichtung bei rotation.y = atan2(dx, dz)). Augen auf +Z.
-// --- DIORAMA_V1: Grasbueschel, Blumen & ECHTE Kiez-Bäume (je 1 InstancedMesh-Draw-Call) ---
+// --- DIORAMA_V1: ECHTE Kiez-Bäume (2 InstancedMesh-Draw-Calls) ---
 // Bäume stammen aus data/hamburg_geodata.json (Straßenbaumkataster):
 // Stamm + niedliche, leicht unregelmäßige Low-Poly-Krone, skaliert nach
 // echtem kronendurchmesser + baumhoehe (je ~75 % Diorama-Maßstab).
-let grasMesh = null;
-let blumenMesh = null;
+// (Grasbüschel/Blumen ersatzlos gestrichen – nur Parkflächen + echte Bäume.)
 let baeumeStamm = null;
 let baeumeKrone = null;
-let grasBasis = null;
 // Warme Grüntöne je Gattung (Linde, Ahorn, Platane, Eiche, ...).
 const BAUM_FARBEN = {
   linde: 0x6fa055, ahorn: 0x5d8a4a, platane: 0x7fa35a, eiche: 0x4f7a3e,
@@ -750,61 +755,12 @@ function baumFarbeFuer(gattung) {
   const palette = Object.values(BAUM_FARBEN);
   return palette[h % palette.length];
 }
-function baueDioramaGruen(parks, trees) {
-  const flaechen = [];
-  for (const q of parks || []) {
-    if (q.kreis) flaechen.push({ x: q.kreis.x, z: q.kreis.z, r: q.kreis.r });
-    else if (Array.isArray(q.polygon) && q.polygon.length) {
-      let sx = 0; let sz = 0;
-      for (const pt of q.polygon) { sx += pt[0]; sz += pt[1]; }
-      flaechen.push({ x: sx / q.polygon.length, z: sz / q.polygon.length, r: 22 });
-    }
-  }
-  if (!flaechen.length) flaechen.push({ x: 0, z: 0, r: 30 }, { x: 235, z: 105, r: 40 });
-  // Ca. 600 kleine stilisierte Grasbüschel auf Park- und Grünflächen.
-  const grasGeo = new THREE.ConeGeometry(0.28, 1.1, 5);
-  grasGeo.translate(0, 0.55, 0);
-  const grasMat = new THREE.MeshLambertMaterial({ color: 0x7fa35a });
-  const N_GRAS = 600;
-  grasMesh = new THREE.InstancedMesh(grasGeo, grasMat, N_GRAS);
-  grasBasis = new Float32Array(N_GRAS * 3);
-  const dummy = new THREE.Object3D();
-  for (let i = 0; i < N_GRAS; i += 1) {
-    const f = flaechen[i % flaechen.length];
-    const a = ((i * 137.5) % 360) * Math.PI / 180;
-    const rr = Math.sqrt(((i * 7919) % 100) / 100) * f.r;
-    dummy.position.set(f.x + Math.cos(a) * rr, 0, f.z + Math.sin(a) * rr);
-    grasBasis[i * 3] = dummy.position.x; grasBasis[i * 3 + 1] = 0; grasBasis[i * 3 + 2] = dummy.position.z;
-    const s = 0.7 + ((i * 31) % 60) / 100;
-    dummy.scale.set(s, s, s);
-    dummy.rotation.y = (i * 2.3) % 6.28;
-    dummy.updateMatrix();
-    grasMesh.setMatrixAt(i, dummy.matrix);
-  }
-  grasMesh.instanceMatrix.needsUpdate = true;
-  scene.add(grasMesh);
-  const blGeo = new THREE.SphereGeometry(0.22, 6, 5);
-  const blMat = new THREE.MeshLambertMaterial({ color: 0xffffff });
-  const BL_FARBEN = [0xe86a8a, 0xf2d06b, 0xffffff, 0xc96a4a, 0x9a6ac8];
-  blumenMesh = new THREE.InstancedMesh(blGeo, blMat, 120);
-  const farbe = new THREE.Color();
-  for (let i = 0; i < 120; i += 1) {
-    const f = flaechen[i % flaechen.length];
-    const a = ((i * 89.7) % 360) * Math.PI / 180;
-    const rr = Math.sqrt(((i * 4561) % 100) / 100) * f.r;
-    dummy.position.set(f.x + Math.cos(a) * rr, 0.75, f.z + Math.sin(a) * rr);
-    dummy.scale.set(1, 1, 1);
-    dummy.rotation.set(0, 0, 0);
-    dummy.updateMatrix();
-    blumenMesh.setMatrixAt(i, dummy.matrix);
-    blumenMesh.setColorAt(i, farbe.setHex(BL_FARBEN[i % BL_FARBEN.length]));
-  }
-  if (blumenMesh.instanceColor) blumenMesh.instanceColor.needsUpdate = true;
-  scene.add(blumenMesh);
+function baueDioramaBaeume(trees) {
   // ECHTE Kiez-Bäume: zwei InstancedMesh (Stämme + Low-Poly-Kronen),
   // jeweils skaliert nach echtem kronendurchmesser / baumhoehe (~75 %).
   const echte = (trees || []).filter((t) => Number.isFinite(Number(t.x)) && Number.isFinite(Number(t.z)));
   const N_BAEUME = Math.max(1, Math.min(1500, echte.length || 90));
+  const dummy = new THREE.Object3D();
   const stGeo = new THREE.CylinderGeometry(0.35, 0.5, 2.6, 6);
   stGeo.translate(0, 1.3, 0);
   const stMat = new THREE.MeshLambertMaterial({ color: 0x6b4a3a });
@@ -827,8 +783,8 @@ function baueDioramaGruen(parks, trees) {
     const hochM = t ? Math.max(4, Math.min(22, Number(t.baumhoehe) || 8)) : 8;
     const sKrone = (kroneM / 2 / 2.0) * 0.75; // Kugel-Radius 2 m -> echte Halbk Krone, 75 %
     const sHoch = Math.max(0.5, (hochM * 0.75) / (2.6 + 3.1));
-    const bx = t ? Number(t.x) : flaechen[i % flaechen.length].x;
-    const bz = t ? Number(t.z) : flaechen[i % flaechen.length].z;
+    const bx = t ? Number(t.x) : (i % 2 ? 30 : -30);
+    const bz = t ? Number(t.z) : (i % 3 ? 40 : -40);
     dummy.position.set(bx, 0, bz);
     dummy.scale.set(sHoch, sHoch, sHoch);
     dummy.rotation.y = (i * 1.7) % 6.28;
@@ -845,23 +801,6 @@ function baueDioramaGruen(parks, trees) {
   baeumeKrone.instanceMatrix.needsUpdate = true;
   scene.add(baeumeStamm);
   scene.add(baeumeKrone);
-}
-const _grasDummy = { obj: null };
-function grasWiegen(jetzt) {
-  if (!grasMesh || !grasBasis) return;
-  if (!_grasDummy.obj) _grasDummy.obj = new THREE.Object3D();
-  const o = _grasDummy.obj;
-  const N = Math.min(60, grasMesh.count);
-  for (let i = 0; i < N; i += 1) {
-    o.position.set(grasBasis[i * 3], 0, grasBasis[i * 3 + 2]);
-    o.rotation.z = Math.sin(jetzt / 900 + i * 0.7) * 0.08;
-    o.rotation.y = (i * 2.3) % 6.28;
-    const s = 0.7 + ((i * 31) % 60) / 100;
-    o.scale.set(s, s, s);
-    o.updateMatrix();
-    grasMesh.setMatrixAt(i, o.matrix);
-  }
-  grasMesh.instanceMatrix.needsUpdate = true;
 }
 function wolkenFaerben() {
   const h = hamburgStunde();
@@ -918,6 +857,14 @@ let FIGUR_ROUTE = null; // { waypoints: [{x, z}], wegIndex }
 function figurZielSetzen(x, z, heading) {
   FIGUR_ZIEL.set(Number(x) || 0, 0, Number(z) || 0);
   if (Number.isFinite(Number(heading))) FIGUR_HEADING = Number(heading);
+}
+// Reload-Fix: beim ersten State-Sync sofort auf Live-Koordinaten snappen
+// (kein Loslaufen ab apartment), danach weiche Interpolation via Route.
+let FIGUR_SOFORT_SYNC = true;
+function figurSofortSetzen(x, z, heading) {
+  if (!Z.figur) return;
+  Z.figur.position.set(Number(x) || 0, 0, Number(z) || 0);
+  figurZielSetzen(x, z, heading);
 }
 function figurRouteSetzen(route) {
   if (route && Array.isArray(route.waypoints) && route.waypoints.length > 0) {
@@ -1249,9 +1196,27 @@ function feedEintrag(typ, text, zeit, quelle) {
   if (!liste) return;
   const d = document.createElement('div');
   d.className = `eintrag ${typ}`;
-  d.innerHTML = `${esc(text)}<small>${esc(zeit || '')}${DEV && quelle ? ' ' + badgeHtml(quelle) : ''}</small>`;
+  d.innerHTML = `${esc(text)}<small>${esc(zeit || '')}${DEV && quelle ? ' ' + badgeHtml(quelle) : ''}</small>${DEV && quelle ? debugKastenHtml(quelle) : ''}`;
   liste.prepend(d);
   while (liste.children.length > 60) liste.lastChild.remove();
+}
+
+// Aufklappbarer Debug-Kasten (nur ?mode=dev): exakte reason + komplette rawResponse je Fehlversuch
+function debugKastenHtml(quelle) {
+  try {
+    const versuche = Array.isArray(quelle.debugVersuche) ? quelle.debugVersuche
+      : (quelle.debug ? [quelle.debug] : (Array.isArray(quelle.fehlerDetails) ? quelle.fehlerDetails : []));
+    if (!versuche || versuche.length === 0) return '';
+    const bloque = versuche.map((v, i) => {
+      const code = esc(String(v.code || '?'));
+      const reason = esc(String(v.reason || '–'));
+      const modell = esc(String(v.model || quelle.model || '?'));
+      const tier = esc(String(v.tier || '?'));
+      const roh = String(v.rawResponse ?? '');
+      return `<div class="dbg-versuch"><b>[${code}] ${modell} (${tier})</b><br>${reason}<br><pre>${esc(roh)}</pre></div>`;
+    }).join('');
+    return `<details class="dbg"><summary>🔍 Debug (${versuche.length} Versuch${versuche.length > 1 ? 'e' : ''})</summary>${bloque}</details>`;
+  } catch { return ''; }
 }
 
 // Dev-Badges (Punkt 7, nur ?mode=dev): [gemma] [free] [148 tok] / [plan-queue] / [fallback]
@@ -1291,11 +1256,18 @@ function badgeHtml(quelle) {
   return badges.map((b) => `[${esc(b)}]`).join(' ');
 }
 
-function staatAnwenden(s) {
+function staatAnwenden(s, opts) {
   Z.staat = s;
   if (!s || !s.charakter) return;
   const ch = s.charakter;
-  figurZielSetzen(ch.pos_x, ch.pos_z, ch.heading_rad);
+  const sofort = (opts && opts.sofort) || FIGUR_SOFORT_SYNC;
+  if (sofort) {
+    // Erster Sync nach (Re-)Load: Figur exakt auf Live-Position setzen, Restweg via Route.
+    figurSofortSetzen(ch.pos_x, ch.pos_z, ch.heading_rad);
+    FIGUR_SOFORT_SYNC = false;
+  } else {
+    figurZielSetzen(ch.pos_x, ch.pos_z, ch.heading_rad);
+  }
   figurRouteSetzen(s.route || null); // Waypoints für weiche Interpolation (Punkt 1)
   if (ch.inside_poi) {
     // Indoor: EXAKT das eine ALKIS-Einzelhaus transparent (world_meta_json.alkis_id).
@@ -1342,9 +1314,9 @@ function staatAnwenden(s) {
     setzeIndoorTransparenz(null);
   }
   aktualisiereSchilder(s.pois || []);
-    wolkenTreiben(Math.min(0.1, (jetzt - letzteZeit) / 1000 || 0.016)); // DIORAMA_V1: dt aus Loop-Zeit (Fix)
-    grasWiegen(jetzt); // DIORAMA_V1: Gras im Wind
-    wolkenFaerben(); // DIORAMA_V1: Wolken an Tageszeit
+  const jetzt = performance.now() / 1000; // Sekundenbasis wie letzteZeit (Fix: war undeklariert)
+  wolkenTreiben(Math.min(0.1, (jetzt - letzteZeit) / 1000 || 0.016)); // DIORAMA_V1: dt aus Loop-Zeit (Fix)
+  wolkenFaerben(); // DIORAMA_V1: Wolken an Tageszeit
   hudAktualisieren();
   if (s.gedanke) { Z.gedanke = s.gedanke; blasePositionieren(); }
   for (const e of (s.feed || []).slice(0, 6)) {
@@ -1433,7 +1405,14 @@ function gehirnHtml(b, tab) {
   if (tab === 'chronik') {
     const tage = (b.summaries || []).map((s) => `<div class="karte gelb"><b>${esc(s.date_str)}</b> – ${esc(s.headline)}</div>`).join('');
     const ruhm = (b.fame || []).map((f) => `<div class="karte">🕯️ ${esc(f.name)} – ${esc(f.cause_of_death || '')} <small>(${esc(String(f.days_lived ?? ''))} Tage)</small><br><small>${esc(String(f.summary_text || '').slice(0, 160))}</small></div>`).join('');
-    return `<h3>Tages-Schlagzeilen</h3>${tage || '<p>Noch keine – er muss erst einmal schlafen.</p>'}<h3>Hall of Fame</h3>${ruhm || '<p>Noch niemand gestorben. Gut so.</p>'}`;
+    // LLM-Fehlerdiagnose (Gehirn-Log): exakte reason + komplette rawResponse, aufklappbar
+    const fehler = (b.llmFehler || []).map((e) => {
+      const vs = (e.versuche || []).map((v) =>
+        `<div class="karte rot"><b>[${esc(String(v.code || '?'))}] ${esc(String(v.model || '?'))} (${esc(String(v.tier || '?'))})</b><br>`
+        + `${esc(String(v.reason || '–'))}<br><pre>${esc(String(v.rawResponse ?? ''))}</pre></div>`).join('');
+      return `<details class="dbg gehirn-dbg"><summary>⚠️ LLM-Fehler #${e.id} (${esc(e.created_at || '')}) – ${(e.fehler || []).map(esc).join(', ') || 'fallback'}</summary>${vs || '<p>–</p>'}</details>`;
+    }).join('');
+    return `<h3>Tages-Schlagzeilen</h3>${tage || '<p>Noch keine – er muss erst einmal schlafen.</p>'}<h3>Hall of Fame</h3>${ruhm || '<p>Noch niemand gestorben. Gut so.</p>'}<h3>LLM-Fehler (Debug)</h3>${fehler || '<p>Keine Fehler protokolliert.</p>'}`;
   }
   // kopf (Standard)
   const ch = (Z.staat && Z.staat.charakter) || {};
@@ -1500,7 +1479,7 @@ async function ladeKarte() {
     Z.karte = karte;
     try { baueStrassen(karte.streets); } catch (err) { console.warn('[karte] strassen:', err.message); }
     try { baueParks(karte.parks); } catch (err) { console.warn('[karte] parks:', err.message); }
-    try { baueDioramaGruen(karte.parks, karte.trees); } catch (err) { console.warn("[karte] gruen:", err.message); } // DIORAMA_V1
+    try { baueDioramaBaeume(karte.trees); } catch (err) { console.warn("[karte] baeume:", err.message); } // DIORAMA_V1
     try { baueGebaeude(karte.buildings); } catch (err) { console.warn('[karte] gebaeude:', err.message); }
     try { bauePoiSchilder(karte.pois); } catch (err) { console.warn('[karte] poi-marker:', err.message); }
     try { baueStrassennamen(karte.streets); } catch (err) { console.warn('[karte] schilder:', err.message); }
@@ -1525,7 +1504,9 @@ async function ladeKarte() {
 async function ladeState() {
   try {
     const s = await ladeJson('/api/state');
-    staatAnwenden(s);
+    // Reload-Fix: erster Sync snapt sofort auf (x, z), danach weich interpolieren.
+    FIGUR_SOFORT_SYNC = true;
+    staatAnwenden(s, { sofort: true });
     for (const e of (s.feed || []).slice(0, 8).reverse()) {
       try {
         const p = JSON.parse(e.payload_json || '{}');
@@ -1549,7 +1530,10 @@ function starteLiveUpdates() {
         if (ev.typ === 'tick') {
           if (ev.gedanke) Z.gedanke = ev.gedanke;
           if (ev.route) figurRouteSetzen(ev.route);
+          // Feed nur bei echten Ereignissen: schritt/gedanke nur wenn gesetzt
+          // (unterwegs-Ticks senden bewusst leere schritt/gedanke/notizen).
           if (ev.schritt) feedEintrag('gedanke', `${ev.schritt.action}${ev.schritt.target ? ' → ' + ev.schritt.target : ''}${ev.schritt.detail ? ': ' + ev.schritt.detail : ''}`, '', ev.quelle || null);
+          else if (ev.gedanke) feedEintrag('gedanke', String(ev.gedanke).slice(0, 200), '', ev.quelle || null);
           for (const n of (ev.notizen || [])) feedEintrag('', String(n).slice(0, 200), '', null);
           // Frischen State holen (Figur-Position, Werte, POIs)
           ladeJson('/api/state').then(staatAnwenden).catch(() => {});
@@ -1560,13 +1544,19 @@ function starteLiveUpdates() {
   } catch { /* ohne SSE läuft die Szene trotzdem (statisch + State) */ }
 }
 
-// --- Render-Loop --------------------------------------------------------------------------------------------------------------
+// --- Render-Loop (GRAFIK-FREEZE: 30 FPS, Tab-Pause, far 480) ---------------------------
 let letzteZeit = performance.now() / 1000;
+let letztesBild = 0;
 function loop() {
   requestAnimationFrame(loop);
+  // Tab versteckt: kein Rendering, keine Updates (GPU-Pause).
+  if (typeof document !== 'undefined' && document.hidden) return;
   const jetzt = performance.now() / 1000;
+  // 30-FPS-Cap: vollkommen fluessig fuers Diorama, halbiert die GPU-Last.
+  if (jetzt - letztesBild < 1 / 30) return;
   const dt = Math.max(0.001, Math.min(0.1, jetzt - letzteZeit));
   letzteZeit = jetzt;
+  letztesBild = jetzt;
   figurUpdaten(dt);
   kameraUpdaten(dt, jetzt);
   blasePositionieren();

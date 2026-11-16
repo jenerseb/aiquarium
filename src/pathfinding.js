@@ -88,6 +88,29 @@ function findeWegFuerKoordinaten(navGraph, startX, startZ, zielX, zielZ) {
   return { startKnoten: s, zielKnoten: z, ...r };
 }
 
+// POI-Snap: jeder POI bekommt seinen naechsten Strassenknoten (entryNodeId).
+// Laufzeit-Cache (navGraph ist statisch aus data/kiez_map.json) – kein DB-Umbau.
+// Rueckgabe: Map poiId -> { knotenId, x, z, distanzM }.
+const _snapCache = new Map();
+function _cacheSchluessel(navGraph) {
+  const n = (navGraph && navGraph.nodes && navGraph.nodes.length) || 0;
+  const e = (navGraph && navGraph.edges && navGraph.edges.length) || 0;
+  const erst = (navGraph && navGraph.nodes && navGraph.nodes[0]) || {};
+  return n + '/' + e + '/' + erst.id + '/' + erst.x + '/' + erst.z;
+}
+function snappePois(navGraph, pois) {
+  const key = _cacheSchluessel(navGraph) + '#' + pois.map((p) => p.id).join(',');
+  if (_snapCache.has(key)) return _snapCache.get(key);
+  const { knoten } = baueAdjazenz(navGraph);
+  const snap = new Map();
+  for (const p of pois) {
+    const s = naechsterKnoten(knoten, Number(p.pos_x), Number(p.pos_z));
+    snap.set(p.id, { knotenId: s.knoten.id, x: s.knoten.x, z: s.knoten.z, distanzM: Math.round(s.distanzM * 10) / 10 });
+  }
+  _snapCache.set(key, snap);
+  return snap;
+}
+
 // POI-zu-POI-Route (liest Koordinaten aus Seed oder DB-Zeilen).
 function findePoiRoute(navGraph, pois, startPoiId, zielPoiId) {
   const idx = new Map(pois.map((p) => [p.id, p]));
@@ -95,7 +118,13 @@ function findePoiRoute(navGraph, pois, startPoiId, zielPoiId) {
   const z = idx.get(zielPoiId);
   if (!s) throw new Error('Start-POI unbekannt: ' + startPoiId);
   if (!z) throw new Error('Ziel-POI unbekannt: ' + zielPoiId);
-  return { startPoi: s, zielPoi: z, ...findeWegFuerKoordinaten(navGraph, s.pos_x, s.pos_z, z.pos_x, z.pos_z) };
+  // PATHFINDING-FIX: POIs liegen teils in Gebaeude-Footprints – Route immer
+  // Knoten -> entryNodeId rechnen, damit niemand quer durch Waende abkuerzt.
+  const snap = snappePois(navGraph, [s, z]);
+  const sNode = snap.get(s.id);
+  const zNode = snap.get(z.id);
+  const r = findeRoute(navGraph, sNode.knotenId, zNode.knotenId);
+  return { startPoi: s, zielPoi: z, startKnoten: { knoten: sNode, distanzM: sNode.distanzM }, zielKnoten: { knoten: zNode, distanzM: zNode.distanzM }, ...r };
 }
 
-module.exports = { dist, baueAdjazenz, naechsterKnoten, findeRoute, findeWegFuerKoordinaten, findePoiRoute };
+module.exports = { dist, baueAdjazenz, naechsterKnoten, findeRoute, findeWegFuerKoordinaten, findePoiRoute, snappePois };

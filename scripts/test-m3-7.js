@@ -89,7 +89,7 @@ async function main() {
     'figurRouteSetzen', 'atan2(dx, dz)', 'badgeHtml', 'plan-queue', 'not:', 'grund2', // 1+7: Route + Soll-Badges
   ];
   for (const s of stich) assert.ok(szene.includes(s), 'scene.js ohne: ' + s);
-    'DIORAMA_V1', 'effektiveHoehe', 'baueHimmel', 'baueWolken', 'baueDioramaGruen', 'grasWiegen', 'bevelEnabled', 'uebersprungen', 'engine/diorama', // Diorama + Modul
+    'DIORAMA_V1', 'effektiveHoehe', 'baueHimmel', 'baueWolken', 'baueDioramaBaeume', 'bevelEnabled', 'uebersprungen', 'engine/diorama', // Diorama + Modul
   console.log(`[7] punkte 2–6 ok: ${stich.length} stichworte in scene.js`);
 
   // --- Punkt 2b: Dev-Badge-Regel (Teil zwischen / und -, free-Extraktion) ---

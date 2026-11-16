@@ -56,6 +56,12 @@
   .eintrag.traum{border-color:#9b7bf0}
   .eintrag.job{border-color:var(--gruen)}
   .eintrag.warnung{border-color:var(--rot)}
+  /* Debug-Kasten (nur Dev-Modus ?mode=dev): aufklappbar, rawResponse scrollbar */
+  .dbg{margin-top:6px;border:1px dashed var(--line);border-radius:8px;padding:4px 8px;font-size:.68rem}
+  .dbg summary{cursor:pointer;color:var(--himmel);font-family:var(--mono);font-size:.64rem}
+  .dbg-versuch{margin-top:6px;padding-top:6px;border-top:1px solid var(--line)}
+  .dbg-versuch pre{max-height:160px;overflow:auto;white-space:pre-wrap;word-break:break-word;
+    background:rgba(255,255,255,.06);border-radius:6px;padding:6px;font-size:.62rem;font-family:var(--mono)}
 
   .blase{position:fixed;transform:translate(-50%,-100%);max-width:280px;background:#eef3f9;color:#0b0e13;
     border-radius:10px;padding:7px 11px;font-size:.78rem;line-height:1.35;z-index:8;display:none;

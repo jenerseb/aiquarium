@@ -279,19 +279,14 @@ async function main() {
     }
     // Volle Kette: Vertex -> glTF-Node -> +RTC -> Tile-Matrix -> ECEF.
     const weltMatrix = mat4Mal(tileMatrix, nodeWelt || IDENTITAET);
-// Kachel-Ueberlappung: dieselbe ALKIS-ID kann in 2 Kacheln stecken.
-    // Nur uebernehmen, wenn Centroid in Box (+Puffer) liegt ODER neu ist.
-    const VORHANDEN = new Set([...geb.keys()].filter((id) => {
-      const g = geb.get(id);
-      return g && g.sx / Math.max(1, g.n) > -505 && g.sx / Math.max(1, g.n) < 975;
-    }));
+// Kirchen-Fix: KEIN harter Deckel — alle Dreiecke derselben buildingId über
+    // alle Kacheln sammeln (Roh-ENU, ungerundet). Echte Duplikate werden ganz
+    // am Ende per Dreiecks-Hash entfernt, minY erst dann berechnet.
     for (let t = 0; t < idx.length; t += 3) {
       const b = bid[idx[t]];
       const id = ids[b] || ('lod2_' + b + '_' + i);
-      if (VORHANDEN.has(id)) continue; // Duplikat aus Nachbarkachel
       let g = geb.get(id);
-      if (!g) { g = { id, wall: [], roof: [], minY: Infinity, maxY: -Infinity, sx: 0, sz: 0, n: 0, cnt: 0 }; geb.set(id, g); }
-      if (g.cnt > 400) continue; // Kachel-Duplikat: ID schon reichlich belegt
+      if (!g) { g = { id, roh: [] }; geb.set(id, g); }
       const tri = [];
       let ok = true;
       // Rotierte Normalen: glTF-3x3 -> Y-up→Z-up -> Tile-3x3, normiert.
@@ -324,9 +319,6 @@ async function main() {
         const enu = ecefZuEnu(ecef[0], ecef[1], ecef[2]);
         if (!Number.isFinite(enu[0]) || !Number.isFinite(enu[1]) || !Number.isFinite(enu[2])) { ok = false; break; }
         tri.push([enu[0], enu[1], enu[2]]);
-        if (enu[1] < g.minY) g.minY = enu[1];
-        if (enu[1] > g.maxY) g.maxY = enu[1];
-        g.sx += enu[0]; g.sz += enu[2]; g.n++;
         if (!skalencheck && Math.abs(enu[0]) < 50 && Math.abs(enu[2]) < 50) {
           const wgs = ecefZuWgs84(ecef[0], ecef[1], ecef[2]);
           const m = toLocalMeters(wgs[0], wgs[1]);
@@ -348,15 +340,43 @@ async function main() {
         void e; void nn;
         nySum += u;
       }
-      (Math.abs(nySum / 3) < 0.5 ? g.wall : g.roof).push(tri);
-      g.cnt += 1;
+      g.roh.push({ tri, ny: nySum / 3 });
       dreiecke++;
     }
     console.log('[lod2] Kachel ' + (i + 1) + '/' + uris.length + ': ' + ids.length + ' Gebaeude');
   }
+  // Dedup + Erdung ganz am Ende: echte geometrische Duplikate per Hash
+  // (gerundeter Centroid + Flaeche, 1 Dezimale) entfernen, DANN minY.
+  function dreiecksHash(tri) {
+    let cx = 0, cy = 0, cz = 0;
+    for (const q of tri) { cx += q[0]; cy += q[1]; cz += q[2]; }
+    const ax = tri[1][0] - tri[0][0], ay = tri[1][1] - tri[0][1], az = tri[1][2] - tri[0][2];
+    const bx = tri[2][0] - tri[0][0], by = tri[2][1] - tri[0][1], bz = tri[2][2] - tri[0][2];
+    const fl = Math.hypot(ay * bz - az * by, az * bx - ax * bz, ax * by - ay * bx) / 2;
+    const r = (v) => Math.round(v * 10) / 10;
+    return r(cx / 3) + '|' + r(cy / 3) + '|' + r(cz / 3) + '|' + r(fl);
+  }
   const buildings = [];
+  let kirche = null;
   for (const g of geb.values()) {
-    if (!g.n || !Number.isFinite(g.minY) || !Number.isFinite(g.maxY)) continue;
+    if (!g.roh || !g.roh.length) continue;
+    // Duplikate raus (Kachel-Ueberlappung), Rest behalten.
+    const gesehen = new Set();
+    const wall = [], roof = [];
+    let minY = Infinity, maxY = -Infinity, sx = 0, sz = 0, n = 0;
+    for (const r of g.roh) {
+      const key = dreiecksHash(r.tri);
+      if (gesehen.has(key)) continue;
+      gesehen.add(key);
+      (Math.abs(r.ny) < 0.5 ? wall : roof).push(r.tri);
+      for (const q of r.tri) {
+        if (q[1] < minY) minY = q[1];
+        if (q[1] > maxY) maxY = q[1];
+        sx += q[0]; sz += q[2]; n++;
+      }
+    }
+    if (!n || !Number.isFinite(minY) || !Number.isFinite(maxY)) continue;
+    g.wall = wall; g.roof = roof; g.minY = minY; g.maxY = maxY; g.sx = sx; g.sz = sz; g.n = n;
     // Plausibilitaet: Kiez-Box + 60 m Puffer (TEST_MODUS: nur Testfleck),
     // Hoehe 2..80 m (Ausreisser wie Fernmeldeturm fallen raus).
     const cx = g.sx / g.n;
@@ -370,7 +390,10 @@ async function main() {
     const norm = (arr) => arr.map((tri) => tri.map((p) => [Math.round(p[0] * 10) / 10, Math.round((p[1] - base) * 10) / 10, Math.round(p[2] * 10) / 10]));
     const hh = Math.round(h * 10) / 10;
     buildings.push({ id: g.id, centroid: [Math.round(cx * 10) / 10, Math.round(cz * 10) / 10], minY: 0, maxY: hh, wallTriangles: norm(g.wall), roofTriangles: norm(g.roof) });
+    const tris = g.wall.length + g.roof.length;
+    if (!kirche || tris > kirche.tris) kirche = { id: g.id, tris, maxY: hh, centroid: [Math.round(cx), Math.round(cz)] };
   }
+  if (kirche) console.log('[lod2] groesstes gebaeude: ' + kirche.id + ' mit ' + kirche.tris + ' dreiecken, maxY ' + kirche.maxY + ' m @(' + kirche.centroid[0] + ',' + kirche.centroid[1] + ')');
   const daten = { meta: { origin: ORIGIN, testModus: TEST_MODUS || undefined, testBox: TEST_MODUS ? TEST_BOX : undefined, generatedAt: new Date().toISOString(), source: 'daten-hamburg.de 3D-Tiles LoD2 (b3dm) + 3D-Stadtmodell LoD2-DE', lizenz: LIZENZ, zaehlung: { buildings: buildings.length, dreiecke } }, buildings };
   fs.mkdirSync(path.dirname(OUT_DATEI), { recursive: true });
   fs.writeFileSync(OUT_DATEI, JSON.stringify(daten), 'utf8');

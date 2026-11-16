@@ -125,6 +125,19 @@ function apiBrain() {
       return { id: b.id, title: b.title, kind: b.kind, eintraege: n };
     });
   } catch { buecher = []; }
+  // LLM-Fehlerdiagnose fürs Gehirn-Log: letzte llm_debug-Events (reason + rawResponse, ungekürzt)
+  let llmFehler = [];
+  try {
+    llmFehler = db.prepare("SELECT id, payload_json, created_at FROM events WHERE character_id = ? AND type = 'llm_debug' ORDER BY id DESC LIMIT 8").all(characterId)
+      .map((e) => {
+        try {
+          const p = JSON.parse(e.payload_json || '{}');
+          const q = p.quelle || {};
+          const versuche = Array.isArray(q.debugVersuche) ? q.debugVersuche : (q.debug ? [q.debug] : []);
+          return { id: e.id, created_at: e.created_at, fehler: p.fehler || [], versuche };
+        } catch { return null; }
+      }).filter(Boolean);
+  } catch { llmFehler = []; }
   return {
     sheet, loops, works, fame, summaries: summ,
     memories: {
@@ -133,6 +146,7 @@ function apiBrain() {
       firstToGoLong: langzeit.length > 0 ? langzeit[langzeit.length - 1] : null,
     },
     buecher,
+    llmFehler,
   };
 }
 
