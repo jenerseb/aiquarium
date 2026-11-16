@@ -3,6 +3,7 @@
 // prozeduraler Backstein-Textur, POI-Schilder, Figur, 2-Modi-Kamera (pilot/overview).
 // Bezug: three.module.js liegt lokal unter ./engine/three.module.js (kein CDN).
 import * as THREE from './engine/three.module.js';
+import { TEXTUR_FAKTOR, DIORAMA_FASSADEN, DIORAMA_DAECHER, dioramaFarbe } from "./engine/diorama.js";
 
 const $ = (id) => document.getElementById(id);
 const DEV = new URLSearchParams(location.search).has('dev') || new URLSearchParams(location.search).get('mode') === 'dev';
@@ -294,18 +295,6 @@ function baueStrassennamen(strassen) {
       const dz = z2 - z1;
       const len = Math.hypot(dx, dz) || 1;
 // DIORAMA_V1: warme Hamburger Fassadenpalette (Backstein, Creme, Sandstein, Altbau-Grau)
-const DIORAMA_FASSADEN = ['#b3563f', '#c97e5a', '#e3c893', '#d9b98a', '#9aa0a8', '#8f4f43'];
-// DIORAMA_V1: Daecher (Terrakotta, Schiefer, Kupfergruen)
-const DIORAMA_DAECHER = ['#9c4a3b', '#343942', '#4e786c'];
-function dioramaFarbe(id, palette) {
-  let h = 0;
-  const s = String(id);
-  for (let i = 0; i < s.length; i += 1) h = (h * 31 + s.charCodeAt(i)) >>> 0;
-  return palette[h % palette.length];
-}
-// DIORAMA_V1: Textur-Aufloesung (einmalig, TDZ-sicher top-level)
-const TEXTUR_FAKTOR = 4;
-      const nx = -dz / len;
       const nz = dx / len;
       const VERSATZ = 5; // 5 m neben die Fahrbahn (Gehweg-Kante)
       const mx = (x1 + x2) / 2 + nx * VERSATZ;
@@ -324,8 +313,7 @@ const TEXTUR_FAKTOR = 4;
 // Fenster leuchten warm je nach Tageszeit (LICHT.fensterLicht).
 const texturCache = new Map();
 
-function fassadenTextur(breiteM, hoeheM) {
-  const licht = (typeof LICHT !== 'undefined' && LICHT.fensterLicht) || 0.25;
+function fassadenTextur(breiteM, hoeheM, grundFarbe, faktor = 4) {
   // Cache-Key enthält Breite+Höhe im Meter-Raster (10 m): gleiche Kachelgröße
   // teilt sich die Textur, verschiedene Größen bekommen eigenen Repeat (400 %).
   const bR = Math.max(10, Math.round(breiteM / 10) * 10);
@@ -358,8 +346,8 @@ function fassadenTextur(breiteM, hoeheM) {
   texturCache.set(bodenKey, tex);
   // damit Backstein und Fenster aus der Pilot-Perspektive ruhig wirken.
   tex.repeat.set(
-    Math.max(1, Math.round(breiteM / (14 * TEXTUR_FAKTOR))),
-    Math.max(1, Math.round(hoeheM / (12 * TEXTUR_FAKTOR)))
+    Math.max(1, Math.round(breiteM / (14 * (typeof TEXTUR_FAKTOR !== "undefined" ? TEXTUR_FAKTOR : faktor)))),
+    Math.max(1, Math.round(hoeheM / (12 * (typeof TEXTUR_FAKTOR !== "undefined" ? TEXTUR_FAKTOR : faktor))))
   );
   texturCache.set(key, tex);
   return tex;
@@ -424,7 +412,7 @@ function baueGebaeude(buildings) {
       gebaut++;
     } catch (err) {
       uebersprungen++;
-      console.warn(`[gebaeude ${b && b.id}] uebersprungen: ${err.message}`);
+      console.warn(`[gebaeude ${b && b.id}] uebersprungen: ${err.message} :: ${(err.stack || "").split("\n")[1] || ""}`);
     }
   }
   console.log(`[gebaeude] ${gebaut}/${liste.length} gebaut, ${uebersprungen} uebersprungen (Bevel-Fallback/Guard)`);
