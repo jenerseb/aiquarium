@@ -113,10 +113,33 @@ const MEMORY = {
   decayLong: 0.03,
 };
 
-// ---- OpenRouter-Routing: einheitliche { primary, fallback }-Paare pro Rolle ----
-// Dev-Modus (AIQUARIUM_DEV !== '0', Standard): überall :free-Modelle (0,00 €).
-// Live (AIQUARIUM_DEV === '0'): alltag primary free → fallback paid, Rest fix.
+// ---- Modell-Routing: primary + fallback-1 + fallback-2 pro Rolle ----
+// Google-Direct (GEMINI_API_KEY): primärer Provider, OpenRouter bleibt Fallback.
+// Dev-Modus (AIQUARIUM_DEV !== '0', Standard): Google-Direct wenn Key gesetzt, sonst :free-Modelle (0,00 €).
+// Live (AIQUARIUM_DEV === '0'): alltag primary free → fallback paid, Rest fix (ohne Key).
 const OPENROUTER_BASE = 'https://openrouter.ai/api/v1/chat/completions';
+
+// ---- Google-Direct (eigener Key, kein OpenRouter-BYOK) ----
+// GEMINI_API_KEY: 'AQ....' = Vertex AI Express, 'AIza...' = AI Studio.
+const GEMINI = {
+  apiKey: String(process.env.GEMINI_API_KEY || '').trim() || null,
+  modell: String(process.env.GEMINI_MODEL || 'gemini-2.5-flash').trim() || 'gemini-2.5-flash',
+};
+
+function googleDirektAktiv() {
+  return Boolean(GEMINI.apiKey) && process.env.NODE_ENV !== 'test';
+}
+
+function googleSlot(maxTokens) {
+  const vertex = String(GEMINI.apiKey || '').startsWith('AQ.');
+  return {
+    provider: 'google',
+    model: GEMINI.modell,
+    providerLabel: vertex ? 'Google Direct (Vertex)' : 'Google Direct (AI Studio)',
+    reasoningExclude: false,
+    maxTokens,
+  };
+}
 
 const MODEL = {
   baseUrl: process.env.AIQUARIUM_BASE_URL || OPENROUTER_BASE,
@@ -134,26 +157,35 @@ const MODEL = {
 };
 
 const SLOTS = {
-  // Aktiv solange AIQUARIUM_DEV !== '0' (garantiert 0,00 € beim Testen)
-  dev: {
-    primary: { model: process.env.AIQUARIUM_DEV_MODEL || 'google/gemma-4-26b-a4b-it:free', reasoningExclude: true, maxTokens: 1800 },
-    fallback: { model: 'google/gemma-4-26b-a4b-it', reasoningExclude: false, maxTokens: 1200 },
-  },
-  // Live-Alltag (AIQUARIUM_DEV=0): erst kostenlose Gemma-Variante testen, bei Rate-Limit/Fehler auf Paid-Gemma ausweichen
-  alltag: {
-    primary: { model: process.env.AIQUARIUM_MODEL || 'google/gemma-4-26b-a4b-it:free', reasoningExclude: false, maxTokens: 1200 },
-    fallback: { model: process.env.AIQUARIUM_FALLBACK_MODEL || 'google/gemma-4-26b-it', reasoningExclude: false, maxTokens: 1200 },
-  },
-  // Welt-Schiedsrichter (Ladenpreise, Job-Zusagen): einheitliches primary/fallback-Paar zum schnellen Tauschen
-  arbiter: {
-    primary: { model: process.env.AIQUARIUM_ARBITER_MODEL || 'z-ai/glm-5.3-flash', reasoningExclude: false, maxTokens: 900 },
-    fallback: { model: process.env.AIQUARIUM_ARBITER_FALLBACK || 'z-ai/glm-5.3-flash', reasoningExclude: false, maxTokens: 900 },
-  },
-  // Nächtliche Schlaf-Konsolidierung (1x pro Tag): einheitliches primary/fallback-Paar
-  nightly: {
-    primary: { model: process.env.AIQUARIUM_NIGHTLY_MODEL || 'xiaomi/mimo-v2.6-pro', reasoningExclude: false, maxTokens: 1400 },
-    fallback: { model: process.env.AIQUARIUM_NIGHTLY_FALLBACK || 'xiaomi/mimo-v2.6-pro', reasoningExclude: false, maxTokens: 1400 },
-  },
+  // Dev (?dev=1): Google-Direct wenn Key gesetzt, sonst :free-Paar (0,00 EUR).
+  // Hinweis: fallback bewusst :free (nicht paid) – Config-Mismatch bereinigt.
+  dev: googleDirektAktiv()
+    ? { primary: googleSlot(1800), fallback: { provider: 'openrouter', model: process.env.AIQUARIUM_DEV_MODEL || 'google/gemma-4-26b-a4b-it:free', reasoningExclude: true, maxTokens: 1800 }, fallback2: { provider: 'openrouter', model: 'google/gemma-4-26b-a4b-it:free', reasoningExclude: false, maxTokens: 1200 } }
+    : {
+      primary: { provider: 'openrouter', model: process.env.AIQUARIUM_DEV_MODEL || 'google/gemma-4-26b-a4b-it:free', reasoningExclude: true, maxTokens: 1800 },
+      fallback: { provider: 'openrouter', model: 'google/gemma-4-26b-a4b-it:free', reasoningExclude: false, maxTokens: 1800 },
+    },
+  // Alltag: Google-Direct vorne, OpenRouter dahinter (fallback-1 / fallback-2).
+  alltag: googleDirektAktiv()
+    ? { primary: googleSlot(1200), fallback: { provider: 'openrouter', model: process.env.AIQUARIUM_MODEL || 'google/gemma-4-26b-a4b-it:free', reasoningExclude: false, maxTokens: 1200 }, fallback2: { provider: 'openrouter', model: process.env.AIQUARIUM_FALLBACK_MODEL || 'google/gemma-4-26b-it', reasoningExclude: false, maxTokens: 1200 } }
+    : {
+      primary: { provider: 'openrouter', model: process.env.AIQUARIUM_MODEL || 'google/gemma-4-26b-a4b-it:free', reasoningExclude: false, maxTokens: 1200 },
+      fallback: { provider: 'openrouter', model: process.env.AIQUARIUM_FALLBACK_MODEL || 'google/gemma-4-26b-it', reasoningExclude: false, maxTokens: 1200 },
+    },
+  // Welt-Schiedsrichter (Ladenpreise, Job-Zusagen): Google-Direct vorne, OpenRouter dahinter.
+  arbiter: googleDirektAktiv()
+    ? { primary: googleSlot(900), fallback: { provider: 'openrouter', model: process.env.AIQUARIUM_ARBITER_MODEL || 'z-ai/glm-5.3-flash', reasoningExclude: false, maxTokens: 900 }, fallback2: { provider: 'openrouter', model: process.env.AIQUARIUM_ARBITER_FALLBACK || 'z-ai/glm-5.3-flash', reasoningExclude: false, maxTokens: 900 } }
+    : {
+      primary: { provider: 'openrouter', model: process.env.AIQUARIUM_ARBITER_MODEL || 'z-ai/glm-5.3-flash', reasoningExclude: false, maxTokens: 900 },
+      fallback: { provider: 'openrouter', model: process.env.AIQUARIUM_ARBITER_FALLBACK || 'z-ai/glm-5.3-flash', reasoningExclude: false, maxTokens: 900 },
+    },
+  // Naechtliche Schlaf-Konsolidierung (1x pro Tag): Google-Direct vorne, OpenRouter dahinter.
+  nightly: googleDirektAktiv()
+    ? { primary: googleSlot(1400), fallback: { provider: 'openrouter', model: process.env.AIQUARIUM_NIGHTLY_MODEL || 'xiaomi/mimo-v2.6-pro', reasoningExclude: false, maxTokens: 1400 }, fallback2: { provider: 'openrouter', model: process.env.AIQUARIUM_NIGHTLY_FALLBACK || 'xiaomi/mimo-v2.6-pro', reasoningExclude: false, maxTokens: 1400 } }
+    : {
+      primary: { provider: 'openrouter', model: process.env.AIQUARIUM_NIGHTLY_MODEL || 'xiaomi/mimo-v2.6-pro', reasoningExclude: false, maxTokens: 1400 },
+      fallback: { provider: 'openrouter', model: process.env.AIQUARIUM_NIGHTLY_FALLBACK || 'xiaomi/mimo-v2.6-pro', reasoningExclude: false, maxTokens: 1400 },
+    },
 };
 
 // Dev-Prio: AIQUARIUM_DEV !== '0' (Standard an → 0,00 €). Live nur mit explizit '0'.
@@ -161,9 +193,9 @@ function devPrioAn() {
   return String(process.env.AIQUARIUM_DEV ?? '1') !== '0';
 }
 
-// Zentraler Helper: Rolle → { primary, fallback }.
-// Dev-Modus: IMMER das kostenlose dev-Paar (nie versehentlich paid).
-// Live: das jeweilige Rollen-Paar.
+// Zentraler Helper: Rolle → { primary, fallback, fallback2? }.
+// Dev-Modus: Google-Direct wenn Key gesetzt, sonst kostenloses dev-Paar (nie paid).
+// Live: das jeweilige Rollen-Paar (+ Google vorne, wenn Key gesetzt).
 function getRoleSlots(role) {
   if (devPrioAn()) return SLOTS.dev;
   if (role === 'arbiter') return SLOTS.arbiter;
@@ -206,6 +238,8 @@ module.exports = {
   MODEL,
   SLOTS,
   OPENROUTER_BASE,
+  GEMINI,
+  googleDirektAktiv,
   aktiverSlot,
   fallbackSlot,
   slotFuer,

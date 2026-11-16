@@ -4,9 +4,75 @@
 // zuerst pair.primary, bei HTTP-Fehler (z. B. 429) oder ungültigem JSON
 // automatisch pair.fallback. Gibt usedModel + Tokens für den Dev-Feed zurück.
 const { validateDecision, validatePlan } = require('./checks');
-const { MODEL, getRoleSlots } = require('./config');
+const { MODEL, GEMINI, getRoleSlots } = require('./config');
 
 const PRICE = { in: 0, out: 0 }; // Free-Tier-Default, Stand 2026-11-13
+
+// ---- Google-Direct (eigener GEMINI_API_KEY, kein OpenRouter-BYOK) ----
+// Endpoint nach Key-Präfix: 'AQ.' = Vertex AI Express, 'AIza' = AI Studio.
+function googleModellIdAufraeumen(modell) {
+  return String(modell || '').replace(/^google\//, '').replace(/:free$/, '');
+}
+
+function googleEndpoint(modellId, apiKey) {
+  const id = googleModellIdAufraeumen(modellId);
+  if (String(apiKey || '').startsWith('AQ.')) {
+    return { url: `https://aiplatform.googleapis.com/v1/publishers/google/models/${id}:generateContent?key=${encodeURIComponent(apiKey)}`, label: 'Google Direct (Vertex)', modell: id };
+  }
+  return { url: `https://generativelanguage.googleapis.com/v1beta/models/${id}:generateContent?key=${encodeURIComponent(apiKey)}`, label: 'Google Direct (AI Studio)', modell: id };
+}
+
+// Direkter Google-Call mit OpenAI-kompatibler Antwort-Form (content/usage/usedModel).
+// messages: [{ role, content }] – system → systemInstruction, assistant → model, Rest → user.
+async function callGoogleDirect({ model, messages, temperature = MODEL.temperature, maxTokens = MODEL.maxTokens, jsonMode = true, timeoutMs = MODEL.timeoutMs, apiKey }) {
+  const started = Date.now();
+  const key = String(apiKey || (GEMINI && GEMINI.apiKey) || '').trim();
+  if (!key) throw Object.assign(new Error('HTTP: GEMINI_API_KEY fehlt'), { _debugCode: 'http', _modell: model });
+  const { url, label, modell } = googleEndpoint(model, key);
+  const systemTexte = (messages || []).filter((m) => m.role === 'system').map((m) => String(m.content || ''));
+  const inhalte = (messages || []).filter((m) => m.role !== 'system').map((m) => ({
+    role: m.role === 'assistant' ? 'model' : 'user',
+    parts: [{ text: String(m.content || '') }],
+  }));
+  let res;
+  try {
+    res = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        ...(systemTexte.length ? { systemInstruction: { parts: [{ text: systemTexte.join('\n') }] } } : {}),
+        contents: inhalte.length ? inhalte : [{ role: 'user', parts: [{ text: '' }] }],
+        generationConfig: { temperature, maxOutputTokens: maxTokens, ...(jsonMode ? { responseMimeType: 'application/json' } : {}) },
+      }),
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+  } catch (err) {
+    const istTimeout = err && (err.name === 'TimeoutError' || err.name === 'AbortError' || /timeout|aborted|abgebrochen/i.test(String(err.message || '')));
+    const code = istTimeout ? 'timeout' : 'http';
+    const meldung = istTimeout ? `Timeout nach ${timeoutMs} ms (AbortSignal.timeout)` : String((err && err.message) || err);
+    throw Object.assign(new Error(`${code === 'timeout' ? 'Timeout' : 'HTTP'}: ${meldung}`), { _debugCode: code, _modell: modell });
+  }
+  if (!res.ok) {
+    let body = '';
+    try { body = await res.text(); } catch { body = ''; }
+    const fehler = new Error(`HTTP ${res.status}: ${String(body || '').slice(0, 500)}`);
+    fehler._debugCode = 'http';
+    fehler._httpStatus = res.status;
+    fehler._httpBody = body;
+    fehler._modell = modell;
+    throw fehler;
+  }
+  const data = await res.json();
+  const content = data?.candidates?.[0]?.content?.parts?.[0]?.text ?? '';
+  const meta = data?.usageMetadata || {};
+  const usage = {
+    prompt_tokens: Number(meta.promptTokenCount) || 0,
+    completion_tokens: Number(meta.candidatesTokenCount) || 0,
+    total_tokens: Number(meta.totalTokenCount) || 0,
+  };
+  const cost = usage.prompt_tokens * PRICE.in + usage.completion_tokens * PRICE.out;
+  return { content, usage, cost, latencyMs: Date.now() - started, finish: data?.candidates?.[0]?.finishReason || null, usedModel: modell, providerLabel: label };
+}
 
 async function callModel({ prompt, apiKey, baseUrl = MODEL.baseUrl, model = MODEL.name,
   reasoningExclude = MODEL.reasoningExclude, maxTokens = MODEL.maxTokens,
@@ -76,15 +142,25 @@ function debugAusValidierung(v, raw, slot, tier) {
   return { code, reason, rawResponse: typeof raw === 'string' ? raw : JSON.stringify(raw ?? null), model: slot.model, tier, feld: erstes && erstes.feld, wert: erstes && erstes.wert, erlaubt: erstes && erstes.erlaubt };
 }
 
-// Ein Slot-Versuch: callModel + Validierung. Wirft bei HTTP-Fehler, gibt bei
-// ungültigem JSON { ok:false } zurück (Fallback-Kette entscheidet weiter).
-// Hängt pro Fehlversuch ein Debug-Objekt an (versuchDebug).
+// Ein Slot-Versuch: Provider-Call (google | openrouter) + Validierung.
+// Wirft bei HTTP-Fehler, gibt bei ungültigem JSON { ok:false } zurück
+// (Fallback-Kette entscheidet weiter). Hängt pro Fehlversuch ein
+// Debug-Objekt an (versuchDebug).
 // schema: 'decision' (default, {action,thought}) oder 'plan' ({thought,plan[]}) –
-async function versucheSlot({ prompt, apiKey, slot, temperature, label, whitelist, recentThoughts, musing, orte, vorhabenAktiv, schema = 'decision' }) {
-  const r = await callModel({
-    prompt, apiKey, model: slot.model, reasoningExclude: slot.reasoningExclude,
-    maxTokens: slot.maxTokens || MODEL.maxTokens, temperature,
-  });
+async function versucheSlot({ prompt, apiKey, slot, temperature, label, whitelist, recentThoughts, musing, orte, vorhabenAktiv, schema = 'decision', geminiKey }) {
+  const istGoogle = slot && slot.provider === 'google';
+  const r = istGoogle
+    ? await callGoogleDirect({
+      model: slot.model, temperature,
+      messages: [{ role: 'user', content: prompt }],
+      maxTokens: slot.maxTokens || MODEL.maxTokens,
+      jsonMode: true, timeoutMs: MODEL.timeoutMs,
+      apiKey: geminiKey || (GEMINI && GEMINI.apiKey),
+    })
+    : await callModel({
+      prompt, apiKey, model: slot.model, reasoningExclude: slot.reasoningExclude,
+      maxTokens: slot.maxTokens || MODEL.maxTokens, temperature,
+    });
   let v;
   if (schema === 'plan') {
     // Plan-Schema: einzelne Schritte in parsed.plan prüfen (step.action/step.target),
@@ -115,8 +191,10 @@ async function versucheSlot({ prompt, apiKey, slot, temperature, label, whitelis
     });
   }
   const info = {
-    usage: r.usage, finish: r.finish, modell: slot.model, usedModel: slot.model,
+    usage: r.usage, finish: r.finish, modell: slot.model, usedModel: r.usedModel || slot.model,
     versuch: label, tokens: Number(r.usage.completion_tokens) || 0, totalTokens: Number(r.usage.total_tokens) || 0,
+    provider: istGoogle ? (r.providerLabel || 'Google Direct') : 'OpenRouter',
+    providerLabel: istGoogle ? (r.providerLabel || 'Google Direct') : undefined,
   };
   return { v, raw: r.content, info, latencyMs: r.latencyMs, cost: r.cost };
 }
@@ -128,14 +206,19 @@ async function versucheSlot({ prompt, apiKey, slot, temperature, label, whitelis
  */
 async function decide(opts) {
   const { prompt, whitelist = [], recentThoughts = [], apiKey, musing = false, orte = [], vorhabenAktiv = false, role = 'alltag', schema = 'decision' } = opts;
-  if (!apiKey) {
+  const pair = getRoleSlots(role);
+  const brauchtOpenRouter = [pair.primary, pair.fallback, pair.fallback2].filter(Boolean).some((s) => s.provider !== 'google');
+  const hatGoogleKey = Boolean((GEMINI && GEMINI.apiKey) || opts.geminiKey);
+  if (!apiKey && (brauchtOpenRouter || !hatGoogleKey)) {
     return { ok: false, action: null, thought: '', musing: null, stale: true, reason: 'no_key', failures: ['no_key'] };
   }
 
-  const pair = getRoleSlots(role);
+  // Kette: primary (Google-Direct wenn Key) -> fallback-1 -> fallback-2 (OpenRouter).
+  // Labels 'primary' bleiben stabil (Engine/UI/Tests), intern fallback-1/-2.
   const attempts = [
     { slot: pair.primary, temperature: opts.temperature ?? MODEL.temperature, label: 'primary' },
     { slot: pair.fallback, temperature: MODEL.retryTemperature, label: 'fallback' },
+    ...(pair.fallback2 ? [{ slot: pair.fallback2, temperature: MODEL.retryTemperature, label: 'fallback-2' }] : []),
   ];
   let last = null;
   const total = { latencyMs: 0, cost: 0, calls: 0 };
@@ -148,7 +231,7 @@ async function decide(opts) {
     try {
       ergebnis = await versucheSlot({
         prompt, apiKey, slot: a.slot, temperature: a.temperature, label: a.label,
-        whitelist, recentThoughts, musing, orte, vorhabenAktiv, schema,
+        whitelist, recentThoughts, musing, orte, vorhabenAktiv, schema, geminiKey: opts.geminiKey,
       });
     } catch (err) {
       // HTTP-Fehler (429 etc.): nahtlos zum Fallback.
@@ -208,4 +291,4 @@ async function decide(opts) {
   return { ...(last || { ok: false, stale: true, failures: ['unknown'] }), ...total };
 }
 
-module.exports = { callModel, decide, PRICE, debugAusHttpFehler, debugAusValidierung };
+module.exports = { callModel, callGoogleDirect, decide, PRICE, debugAusHttpFehler, debugAusValidierung, googleEndpoint };
