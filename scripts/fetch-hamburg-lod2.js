@@ -378,12 +378,13 @@ async function main() {
     if (!n || !Number.isFinite(minY) || !Number.isFinite(maxY)) continue;
     g.wall = wall; g.roof = roof; g.minY = minY; g.maxY = maxY; g.sx = sx; g.sz = sz; g.n = n;
     // Plausibilitaet: Kiez-Box + 60 m Puffer (TEST_MODUS: nur Testfleck),
-    // Hoehe 2..80 m (Ausreisser wie Fernmeldeturm fallen raus).
+    // NW/S 2026-11-17: Nord bis Florapark (z -430), West bis Max-Brauer-Allee (x -505),
+    // Sued bis Millerntor-Stadion (z 546). Hoehe 2..80 m (Ausreisser wie Fernmeldeturm raus).
     const cx = g.sx / g.n;
     const cz = g.sz / g.n;
     if (TEST_MODUS) {
       if (cx < TEST_BOX.minX || cx > TEST_BOX.maxX || cz < TEST_BOX.minZ || cz > TEST_BOX.maxZ) continue;
-    } else if (cx < -505 || cx > 975 || cz < -337 || cz > 546) continue;
+    } else if (cx < -505 || cx > 975 || cz < -430 || cz > 546) continue;
     const h = g.maxY - g.minY;
     if (!(h >= 2 && h <= 80)) continue;
     const base = g.minY;

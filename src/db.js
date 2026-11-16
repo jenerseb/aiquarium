@@ -239,24 +239,36 @@ const SEED_POIS = [
   { id: 'feldstrassenbunker', name: 'Feldstrassenbunker', category: 'denkmal',
     match: { building: 'b_264581795' }, pos_x: 581.5, pos_z: 263, discovered: 0,
     public_desc: 'Ein gewaltiger gruen bewachsener Flakbunker aus dem Krieg. Heute Kultur, Clubs und ein Dachgarten obendrauf.' },
-  { id: 'rote_flora', name: 'Rote Flora', category: 'club',
+  { id: 'rote_flora', name: 'Rote Flora (Schulterblatt)', category: 'club',
     match: { building: 'b_10413828' }, pos_x: 22.1, pos_z: -360.6, discovered: 0,
     public_desc: 'Ein besetztes Kulturzentrum mit roter Fassade. Plakate, Konzerte, politischer Kiez-Treff seit Jahrzehnten.' },
   { id: 'haus73', name: 'Haus 73 (Schanze)', category: 'kneipe',
     match: { osm: 'n_278943489' }, pos_x: 1.3, pos_z: -400.5, discovered: 0,
-    public_desc: 'Eine Kellerkneipe in der Schanze.' },
+    public_desc: 'Eine Kellerkneipe in der Schanze, direkt neben der Roten Flora (Haus-73-Eingang).' },
   { id: 'knust', name: 'Knust (Neuer Kamp)', category: 'club',
     match: { osm: 'n_1525291987' }, pos_x: 445.2, pos_z: 73.6, discovered: 0,
     public_desc: 'Ein legendaerer Musikclub am Neuen Kamp. Eng, laut, direkt.' },
   { id: 'rindermarkthalle', name: 'Rindermarkthalle St. Pauli', category: 'markt',
     match: { building: 'b_142954635' }, pos_x: 325.2, pos_z: 262.5, discovered: 0,
     public_desc: 'Eine alte Markthalle voller Essensstaende aus aller Welt.' },
+  { id: 'florapark', name: 'Florapark (Schanze)', category: 'park',
+    match: null, pos_x: -42, pos_z: -348, discovered: 0,
+    public_desc: 'Eine gruene Wiese direkt hinter der Roten Flora. Baeume, Plaetze zum Sitzen, im Sommer voll mit Leuten.' },
+  { id: 'millerntor', name: 'Millerntor-Stadion', category: 'stadion',
+    match: null, pos_x: 380, pos_z: 490, discovered: 0,
+    public_desc: 'Das Stadion von St. Pauli am Harald-Stender-Platz. An Spieltagen braun-weisse Wand aus Gesaengen. (Sued-Eingang, direkt am Weg.)' },
+  { id: 'ume_no_hana', name: 'Ume no Hana (Thadenstrasse)', category: 'restaurant',
+    match: { osm: 'n_2070264168' }, pos_x: 30.9, pos_z: 271.3, discovered: 0,
+    public_desc: 'Eine kleine Ramen-Bar in der Thadenstrasse. Pho und Ramen, eng und laut.' },
+  { id: 'pizzeria_gjaeger', name: 'Pizzeria am Gruenen Jaeger', category: 'restaurant',
+    match: null, pos_x: 185, pos_z: 145, discovered: 0,
+    public_desc: 'Eine Pizzeria am Neuen Pferdemarkt, beim Gruenen Jaeger. Pizza aus dem Ofen, schnell und heiss.' },
+  { id: 'creperie', name: "L'autre Creperie (Neuer Kamp)", category: 'cafe',
+    match: { osm: 'n_11254668228' }, pos_x: 595.8, pos_z: 98.5, discovered: 0,
+    public_desc: 'Eine bretonische Creperie am Neuen Kamp. Suess und herzhaft, duenner Teig, warmer Kaffee.' },
   { id: 'spaeti', name: 'Eck-Kiosk / Spaeti', category: 'spaeti',
     match: null, pos_x: 14.2, pos_z: 60.9, discovered: 0,
     public_desc: 'Ein kleiner Kiosk mit Getraenkekisten, Kaffee, Snacks und einem Schild: Pfandannahme & Gebraucht-Elektronik.' },
-  { id: 'park_bank', name: 'Gruenflaeche & Bank am Durchgang', category: 'park',
-    match: null, pos_x: -9.7, pos_z: -58.7, discovered: 0,
-    public_desc: 'Ein paar Baeume und eine Holzbank abseits der grossen Strasse. Manchmal liegen hier leere Flaschen im Gras.' },
   { id: 'praxis', name: 'Kiez-Arztpraxis (Lippmannstrasse)', category: 'arzt',
     match: null, pos_x: 18.2, pos_z: -172, discovered: 0,
     public_desc: 'Eine kleine Hausarztpraxis mit gruenem Apotheken-Kreuz nebenan.' },
@@ -384,6 +396,26 @@ function seed(db, kiezMap) {
   if (zaehle(db, 'pois') === 0) {
     const ins = db.prepare('INSERT INTO pois (id, name, category, pos_x, pos_z, footprint_json, public_desc, world_meta_json, discovered) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)');
     for (const p of SEED_POIS) {
+      const [mx, mz] = poiPositionAusKarte(kiezMap, p);
+      const fp = footprintAusKarte(kiezMap, mx, mz);
+      const zu = poiGebaeudeZuordnung(geodata || kiezMap, p, mx, mz);
+      ins.run(p.id, p.name, p.category, mx, mz,
+        fp ? JSON.stringify(fp) : null, p.public_desc, zu ? JSON.stringify(zu) : null, p.discovered);
+    }
+  } else {
+    // NW/S-Erweiterung 2026-11-17: park_bank raus, 5 neue POIs rein, Flora-Koordinaten korrigiert.
+    try { db.prepare("DELETE FROM pois WHERE id = 'park_bank'").run(); } catch { /* ok */ }
+    const vorhanden = new Set(db.prepare('SELECT id FROM pois').all().map((r) => r.id));
+    const ins = db.prepare('INSERT OR IGNORE INTO pois (id, name, category, pos_x, pos_z, footprint_json, public_desc, world_meta_json, discovered) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)');
+    for (const p of SEED_POIS) {
+      if (vorhanden.has(p.id)) {
+        // Koordinaten-Korrektur für Flora/Haus73 in bestehenden DBs
+        if (p.id === 'rote_flora' || p.id === 'haus73') {
+          const [mx, mz] = poiPositionAusKarte(kiezMap, p);
+          db.prepare('UPDATE pois SET pos_x = ?, pos_z = ? WHERE id = ?').run(mx, mz, p.id);
+        }
+        continue;
+      }
       const [mx, mz] = poiPositionAusKarte(kiezMap, p);
       const fp = footprintAusKarte(kiezMap, mx, mz);
       const zu = poiGebaeudeZuordnung(geodata || kiezMap, p, mx, mz);

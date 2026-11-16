@@ -74,6 +74,19 @@ function apiState() {
 // IMMER kiez_map.json (OSM).
 // Parks: kiez_map.json hat keine parks-Key – wir leiten Grünflächen aus
 // park-POIs + Umkreis ab (MVP), echte OSM-leisure-Polygone wären Phase 2.
+// Diorama-Scheibe: Mittelpunkt + Radius aus POIs (für Kreisschnitt im Frontend).
+function dioramaFuer(pois) {
+  const liste = (pois || []).filter((p) => Number.isFinite(Number(p.pos_x)) && Number.isFinite(Number(p.pos_z)));
+  if (!liste.length) return { cx: 235, cz: 105, r: 560 };
+  const xs = liste.map((p) => Number(p.pos_x));
+  const zs = liste.map((p) => Number(p.pos_z));
+  const cx = (Math.min(...xs) + Math.max(...xs)) / 2;
+  const cz = (Math.min(...zs) + Math.max(...zs)) / 2;
+  const maxD = Math.max(...liste.map((p) => Math.hypot(Number(p.pos_x) - cx, Number(p.pos_z) - cz)));
+  let r = maxD + 65;
+  if (cx - r < -260) r = cx + 260; // Westkante vor Max-Brauer-Allee kappen
+  return { cx: Math.round(cx * 10) / 10, cz: Math.round(cz * 10) / 10, r: Math.round(Math.min(580, Math.max(400, r))) };
+}
 function ladeLoD2() {
   try {
     const p = require('node:path').join(__dirname, '..', 'data', 'hamburg_lod2.json');
@@ -101,6 +114,7 @@ function apiMap() {
     navGraph: karte.navGraph || null,
     parks,
     pois,
+    diorama: dioramaFuer(pois),
   };
 }
 

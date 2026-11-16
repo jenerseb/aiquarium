@@ -85,8 +85,10 @@ async function main() {
     'baueStrassennamen', 'VERSATZ = 5', 'position.set(mx, 6, mz)', // 3: Schilder andockend + aufgestellt
     'pupille', 'apfel.position.set(seite', // 4: Augen
     '220, 100', '2.6', '0xbfd8ff', '0xffffff, 0.45', // 5: Licht
-    'overviewTarget', 'panUm', '25, 900', // 6: Panning/Zoom (GROSS-Karte)
+    'overviewTarget', 'panUm', 'klemmeUeber', // 6: Panning/Zoom (Diorama-Scheibe)
     'figurRouteSetzen', 'atan2(dx, dz)', 'badgeHtml', 'plan-queue', 'not:', 'grund2', // 1+7: Route + Soll-Badges
+    'DIORAMA', 'dioramaBerechnen', 'dioramaShader', 'uDioramaRadius', 'dioramaAussenAusblenden', // Scheibe + Kreisschnitt
+    'CylinderGeometry(DIORAMA.r', '2b2d30', 'scene.fog = null', // Sockel + Nebel-Aus
   ];
   for (const s of stich) assert.ok(szene.includes(s), 'scene.js ohne: ' + s);
     'DIORAMA_V1', 'effektiveHoehe', 'baueHimmel', 'baueWolken', 'baueDioramaBaeume', 'bevelEnabled', 'uebersprungen', 'engine/diorama', // Diorama + Modul

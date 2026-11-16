@@ -68,9 +68,10 @@ function main() {
   assert.strictEqual(abweichungen.length, 0, 'bbox-abweichungen: ' + abweichungen.slice(0, 5).join(' | '));
   console.log(`[m3geo] ${buildings.length} gebäude: min.y=0, max.y=height, ecken exakt (kein spiegel, kein schweben)`);
 
-  // --- 2) POI-Deckung: alle 8 Kern-POIs (LoD2-Centroid bevorzugt, ALKIS-Fallback) ---
+  // --- 2) POI-Deckung: alle Kern-POIs + NW/S-Erweiterung (LoD2-Centroid bevorzugt, ALKIS-Fallback) ---
   const pois = db.prepare('SELECT id, pos_x, pos_z, world_meta_json FROM pois').all();
-  const KERN = ['apartment', 'otzentreff', 'kleine_pause', 'gruener_jaeger', 'b_movie', 'spaeti', 'park_bank', 'praxis'];
+  const KERN = ['apartment', 'otzentreff', 'kleine_pause', 'gruener_jaeger', 'b_movie', 'spaeti', 'florapark', 'praxis'];
+  const ERWEITERT = ['rote_flora', 'haus73', 'millerntor', 'ume_no_hana', 'pizzeria_gjaeger', 'creperie', 'knust', 'rindermarkthalle', 'feldstrassenbunker'];
   let lod2 = null;
   try {
     const roh = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'data', 'hamburg_lod2.json'), 'utf8'));
@@ -89,7 +90,7 @@ function main() {
     assert.ok(Math.min(...quad) > 50, 'LoD2-gebaeude geklumpt: quadrant leer ' + quad.join('/'));
     assert.ok(Math.max(...quad) < lod2.buildings.length * 0.6, 'LoD2-gebaeude geklumpt ' + quad.join('/'));
   }
-  for (const zielId of KERN) {
+  for (const zielId of KERN.concat(ERWEITERT)) {
     const poi = pois.find((p) => p.id === zielId);
     assert.ok(poi, 'poi fehlt: ' + zielId);
     let meta = null;
@@ -102,11 +103,11 @@ function main() {
         if (d < bd) { bd = d; bi = g.id; }
       }
       console.log(`[m3geo] ${zielId} @(${poi.pos_x},${poi.pos_z}): LoD2-haus ${bi} ${bd.toFixed(1)} m`);
-      // Coverage: Die Kerne der Tiles 34580/34581 decken Nord + Süd ab;
+      // Coverage: Die Kerne der Tiles decken Nord + Süd ab;
       // einzelne Durchgangs-Häuser (Späti-/Park-Eck) fehlen im LoD2-Tileset —
       // dort gilt der INSPIRE-Footprint als nachgewiesen (Fallback unten).
-      // Grenze 25 m für alle, 140 m für dokumentierte LoD2-Lücken.
-      const luecke = zielId === 'spaeti' || zielId === 'park_bank' ? 140 : zielId === 'gruener_jaeger' ? 120 : 25;
+      // Grenze 60 m für alle (Stadion-Arena + Offenland), 140 m für dokumentierte LoD2-Lücken.
+      const luecke = zielId === 'spaeti' ? 140 : zielId === 'gruener_jaeger' ? 120 : 60;
       assert.ok(bd < luecke, `${zielId}: kein LoD2-haus in der naehe (${bd.toFixed(1)} m)`);
       continue;
     }

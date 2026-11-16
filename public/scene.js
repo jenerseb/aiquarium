@@ -23,7 +23,7 @@ stage.appendChild(renderer.domElement);
 
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x0a0e13);
-scene.fog = new THREE.FogExp2(0x0a0e13, 0.00085); // DIORAMA_V1: sanfter Horizont-Dunst
+scene.fog = null; // Diorama-Scheibe: kein Horizont-Nebel, Himmelskuppel bleibt sauber
 
 const camera = new THREE.PerspectiveCamera(55, window.innerWidth / window.innerHeight, 0.5, 2500);
 camera.position.set(30, 25, 40);
@@ -73,7 +73,7 @@ function lichtAnpassen() {
   nachtBlau.intensity = nacht ? 0.35 : 0.0;
   const warm = nacht ? 0.06 : daemmer ? 0.03 : 0.0;
   scene.background.setRGB(0.039 + warm, 0.055 + warm * 0.5, 0.075);
-  scene.fog.color.copy(scene.background);
+  if (scene.fog) scene.fog.color.copy(scene.background);
   return { stunde: h, nacht, fensterLicht: nacht ? 1.0 : daemmer ? 0.75 : 0.25 };
 }
 let LICHT = lichtAnpassen();
@@ -172,23 +172,59 @@ function wolkenTreiben(dt) {
 }
 
 
+// --- Runde schwebende Diorama-Scheibe -------------------------------------------
+// Mittelpunkt + Radius dynamisch aus den POIs (Millerntor bis Florapark/Haus73).
+// R = maxDist + 65, Westkante auf Max-Brauer-Allee (x >= -260) gekappt.
+const DIORAMA = { cx: 235, cz: 105, r: 560 };
+function dioramaBerechnen(pois) {
+  const liste = (pois || []).filter((p) => p && Number.isFinite(Number(p.pos_x)) && Number.isFinite(Number(p.pos_z)));
+  if (!liste.length) return { ...DIORAMA };
+  const xs = liste.map((p) => Number(p.pos_x));
+  const zs = liste.map((p) => Number(p.pos_z));
+  const cx = (Math.min(...xs) + Math.max(...xs)) / 2;
+  const cz = (Math.min(...zs) + Math.max(...zs)) / 2;
+  const maxD = Math.max(...liste.map((p) => Math.hypot(Number(p.pos_x) - cx, Number(p.pos_z) - cz)));
+  let r = maxD + 65;
+  // Westkante (cx - r) nicht über die Max-Brauer-Allee (x ≈ -260) hinausschieben.
+  if (cx - r < -260) r = cx + 260;
+  DIORAMA.cx = Math.round(cx * 10) / 10;
+  DIORAMA.cz = Math.round(cz * 10) / 10;
+  DIORAMA.r = Math.round(Math.min(580, Math.max(400, r)));
+  return { ...DIORAMA };
+}
+function dioramaShader(mat) {
+  // Rasiermesserscharfer Kreisschnitt: Fragmente ausserhalb von R verwerfen.
+  mat.onBeforeCompile = (shader) => {
+    shader.uniforms.uDioramaCenter = { value: new THREE.Vector2(DIORAMA.cx, DIORAMA.cz) };
+    shader.uniforms.uDioramaRadius = { value: DIORAMA.r };
+    shader.vertexShader = shader.vertexShader
+      .replace('#include <common>', '#include <common>\nvarying vec3 vWorldPos;')
+      .replace('#include <worldpos_vertex>', '#include <worldpos_vertex>\nvWorldPos = (modelMatrix * vec4(transformed, 1.0)).xyz;');
+    shader.fragmentShader = shader.fragmentShader
+      .replace('#include <common>', '#include <common>\nvarying vec3 vWorldPos;\nuniform vec2 uDioramaCenter;\nuniform float uDioramaRadius;')
+      .replace('#include <clipping_planes_fragment>', '#include <clipping_planes_fragment>\nif (length(vWorldPos.xz - uDioramaCenter) > uDioramaRadius) discard;');
+  };
+  mat.customProgramCacheKey = () => 'diorama-kreis';
+  return mat;
+}
 // --- Boden, Strassen, Parks ------------------------------------------------------------
-// Ebene (x, z) in Metern, y = 0. GROSS-Karte x -445..915, z -277..486 → Boden mit Puffer.
+// Ebene (x, z) in Metern, y = 0. Runde Diorama-Insel statt Rechteckplatte.
 function baueBoden() {
-  const geo = new THREE.PlaneGeometry(1900, 1500);
-  // DIORAMA_V1: warmer Diorama-Untergrund (Moosgruen-Sand statt Asphaltgrau)
-  const mat = new THREE.MeshLambertMaterial({ color: 0x6f7d4e });
-  const boden = new THREE.Mesh(geo, mat);
-  boden.rotation.x = -Math.PI / 2;
-  boden.position.set(235, -0.3, 105); // Kartenmitte der GROSS-Karte
+  // 3D-Sockel: Oberseite exakt y = 0, Erde-Dunkel an Seite/Unterseite.
+  const geo = new THREE.CylinderGeometry(DIORAMA.r, DIORAMA.r * 0.96, 16, 128);
+  const oben = new THREE.MeshLambertMaterial({ color: 0x6f7d4e });
+  const seite = new THREE.MeshLambertMaterial({ color: 0x2b2d30 });
+  const boden = new THREE.Mesh(geo, [seite, oben, seite]);
+  boden.position.set(DIORAMA.cx, -8, DIORAMA.cz);
   scene.add(boden);
   // DIORAMA_V1: optionales Luftbild-Overlay (/kiez-aerial.jpg in public/), sonst prozedural
   new THREE.TextureLoader().load("/kiez-aerial.jpg",
     (tex) => {
       tex.colorSpace = THREE.SRGBColorSpace;
-      const luft = new THREE.Mesh(new THREE.PlaneGeometry(1360, 763), new THREE.MeshLambertMaterial({ map: tex, transparent: true, opacity: 0.55 }));
-      luft.rotation.x = -Math.PI / 2;
-      luft.position.set(235, -0.15, 105);
+      const luftGeo = new THREE.CircleGeometry(DIORAMA.r * 0.99, 96);
+      luftGeo.rotateX(-Math.PI / 2);
+      const luft = new THREE.Mesh(luftGeo, new THREE.MeshLambertMaterial({ map: tex, transparent: true, opacity: 0.55 }));
+      luft.position.set(DIORAMA.cx, -0.15, DIORAMA.cz);
       scene.add(luft);
     },
     undefined,
@@ -200,9 +236,9 @@ function linienBand(punkte, breite, farbe, y) {
   // Vorzeichen-Flips. Geometrie wird EINMALIG per geo.rotateX(-PI/2) in die
   // XZ-Ebene gelegt, Ausrichtung danach nur noch per rotation.y (kein
   // Euler-Mix aus rotation.x + rotation.z, der je nach Euler-Reihenfolge
-  // spiegelt/verdreht).
+  // spiegelt/verdreht). Diorama: Kreisschnitt per Shader (kein Rechteck-Überstand).
   const gruppe = new THREE.Group();
-  const mat = new THREE.MeshBasicMaterial({ color: farbe });
+  const mat = dioramaShader(new THREE.MeshBasicMaterial({ color: farbe }));
   for (let i = 1; i < punkte.length; i += 1) {
     const [x1, z1] = punkte[i - 1];
     const [x2, z2] = punkte[i];
@@ -502,7 +538,7 @@ function baueLoD2(lod) {
     geo.setAttribute('position', new THREE.Float32BufferAttribute(posArr, 3));
     geo.setAttribute('color', new THREE.Float32BufferAttribute(colArr, 3));
     geo.computeVertexNormals();
-    const mat = new THREE.MeshLambertMaterial({ vertexColors: true });
+    const mat = dioramaShader(new THREE.MeshLambertMaterial({ vertexColors: true }));
     void rau;
     const mesh = new THREE.Mesh(geo, mat);
     mesh.position.set(0, 0, 0);
@@ -677,8 +713,26 @@ function bauePoiSchilder(pois) {
   for (const p of pois || []) {
     Z.pois.set(p.id, p);
     const gruppe = bauMarkerGruppe(p);
+    // Kreis-Schnitt: Marker ausserhalb R-4 ausblenden (LoD2/Strassen via Shader).
+    const d = Math.hypot(Number(p.pos_x) - DIORAMA.cx, Number(p.pos_z) - DIORAMA.cz);
+    gruppe.visible = d <= DIORAMA.r - 4;
     scene.add(gruppe);
     Z.poiSchilder.set(p.id, gruppe);
+  }
+}
+
+function dioramaAussenAusblenden() {
+  // Baeume/Schilder ausserhalb R-4 verstecken (Rest via Shader-discard).
+  const rMax = DIORAMA.r - 4;
+  try {
+    if (typeof baeumeStamm !== 'undefined' && baeumeStamm) baeumeStamm.count = Math.min(baeumeStamm.count, 1500);
+  } catch { /* ok */ }
+  for (const [, gruppe] of Z.poiSchilder) {
+    const pos = gruppe.position;
+    if (Math.hypot(pos.x - DIORAMA.cx, pos.z - DIORAMA.cz) > rMax) gruppe.visible = false;
+  }
+  for (const s of (typeof STRASSEN_SCHILDER !== 'undefined' ? STRASSEN_SCHILDER : [])) {
+    if (Math.hypot(s.position.x - DIORAMA.cx, s.position.z - DIORAMA.cz) > rMax) s.visible = false;
   }
 }
 
@@ -1050,9 +1104,19 @@ function bindeSteuerung() {
   const el = renderer.domElement;
   let drag = null;
   el.style.touchAction = 'none';
-  // Panning im overview-Modus (Punkt 6): Rechts-Drag oder Shift+Links-Drag
-  // verschiebt das Fokus-Ziel flach über XZ (geklemmt ±350 m). Touch: 2 Finger.
-  const PAN_GRENZE = 700;
+  // Panning im overview-Modus: Rechts-Drag oder Shift+Links-Drag
+  // verschiebt das Fokus-Ziel flach über XZ (geklemmt auf Scheibe R*0.85 um Center). Touch: 2 Finger.
+  const klemmeUeber = () => {
+    const r = DIORAMA.r * 0.85;
+    const dx = Z.over.ziel.x - DIORAMA.cx;
+    const dz = Z.over.ziel.z - DIORAMA.cz;
+    const d = Math.hypot(dx, dz);
+    if (d > r) {
+      Z.over.ziel.x = DIORAMA.cx + (dx / d) * r;
+      Z.over.ziel.z = DIORAMA.cz + (dz / d) * r;
+    }
+    Z.over.ziel.y = 0;
+  };
   function panUm(dxPx, dyPx) {
     const sk = Z.over.dist / 500; // weiter weg = schneller schieben
     const vor = new THREE.Vector3();
@@ -1063,9 +1127,7 @@ function bindeSteuerung() {
     const rechts = new THREE.Vector3().crossVectors(vor, new THREE.Vector3(0, 1, 0)).normalize();
     Z.over.ziel.addScaledVector(rechts, -dxPx * sk);
     Z.over.ziel.addScaledVector(vor, dyPx * sk);
-    Z.over.ziel.x = THREE.MathUtils.clamp(Z.over.ziel.x, -PAN_GRENZE, PAN_GRENZE);
-    Z.over.ziel.z = THREE.MathUtils.clamp(Z.over.ziel.z, -PAN_GRENZE, PAN_GRENZE);
-    Z.over.ziel.y = 0;
+    klemmeUeber();
   }
   el.addEventListener('pointerdown', (e) => {
     drag = { x: e.clientX, y: e.clientY, pan: (e.button === 2) || e.shiftKey };
@@ -1101,9 +1163,7 @@ function bindeSteuerung() {
     else if (taste === 'a' || taste === 'arrowleft') { Z.over.ziel.x -= schritt; e.preventDefault(); }
     else if (taste === 'd' || taste === 'arrowright') { Z.over.ziel.x += schritt; e.preventDefault(); }
     else return;
-    Z.over.ziel.x = THREE.MathUtils.clamp(Z.over.ziel.x, -PAN_GRENZE, PAN_GRENZE);
-    Z.over.ziel.z = THREE.MathUtils.clamp(Z.over.ziel.z, -PAN_GRENZE, PAN_GRENZE);
-    Z.over.ziel.y = 0;
+    klemmeUeber();
   });
   // 2-Finger-Drag auf Touch = Panning
   el.addEventListener('touchmove', (e) => {
@@ -1477,12 +1537,17 @@ async function ladeKarte() {
     // Kanonisch: /api/map (sauber). Beide Datei-Aliase bleiben serverseitig aktiv.
     const karte = await ladeJson('/api/map');
     Z.karte = karte;
+    // Diorama-Scheibe: Mittelpunkt + Radius aus POIs (muss VOR Boden/Shadern stehen).
+    dioramaBerechnen(karte.pois);
+    Z.over.ziel.set(DIORAMA.cx, 0, DIORAMA.cz);
+    try { baueBoden(); } catch (err) { console.warn('[karte] boden:', err.message); }
     try { baueStrassen(karte.streets); } catch (err) { console.warn('[karte] strassen:', err.message); }
     try { baueParks(karte.parks); } catch (err) { console.warn('[karte] parks:', err.message); }
     try { baueDioramaBaeume(karte.trees); } catch (err) { console.warn("[karte] baeume:", err.message); } // DIORAMA_V1
     try { baueGebaeude(karte.buildings); } catch (err) { console.warn('[karte] gebaeude:', err.message); }
     try { bauePoiSchilder(karte.pois); } catch (err) { console.warn('[karte] poi-marker:', err.message); }
     try { baueStrassennamen(karte.streets); } catch (err) { console.warn('[karte] schilder:', err.message); }
+    dioramaAussenAusblenden();
     // Initial-Kamera: pilot, +40° rechts vom Blickwinkel (Start-Frame, siehe Kamera-Kapitel)
     const h0 = 0; // Blickrichtung initial: +z (wird per State überschrieben)
     Z.pilot.theta = h0 + PILOT_START_Versatz;

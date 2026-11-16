@@ -1,4 +1,4 @@
- * Fußweg-Knoten für das St.-Pauli-Dreieck (Lerchenstraße / Otzenstraße /
+/* Fußweg-Knoten für das St.-Pauli-Dreieck (Lerchenstraße / Otzenstraße /
  * Beim Grünen Jäger / Stresemannstraße / Brigittenstraße).
  *
  * Aufruf: node scripts/fetch-osm.js
@@ -13,11 +13,12 @@ const ORIGIN = { lat: 53.5588, lon: 9.9612 };
 
 // Bounding Box rund um den markierten St.-Pauli-Kiez
 // (GROSS 2026-11-16: Sued bis B-Movie, Ost bis Neuer Kamp 30;
-//  NORD+OST 2026-11-16: Flora/Haus73/Bunker drin)
+//  NORD+OST 2026-11-16: Flora/Haus73/Bunker drin;
+//  NW/S 2026-11-17: West bis Max-Brauer-Allee, Nord bis Florapark, Sued bis Stadion)
 const BBOX = {
-  south: 53.5525,
-  west: 9.9578,
-  north: 53.5637,
+  south: 53.5500,
+  west: 9.9560,
+  north: 53.5640,
   east: 9.9725,
 };
 
