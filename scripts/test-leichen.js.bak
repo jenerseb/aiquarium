@@ -1,0 +1,56 @@
+'use strict';
+// Dauer-Sicherung: Leichen-Scan — benutzte, aber nirgends definierte Identifier
+// in scene.js (Funktions-Scope, grob). Faengt TDZ-Leichen wie licht/nx vor dem Browser.
+const fs = require('node:fs');
+const assert = require('node:assert');
+const src = '/workspaces/seb-dev/aiquarium/aiquarium-app/public/scene.js';
+let t = fs.readFileSync(src, 'utf8');
+t = t.replace(/`(?:[^`\\]|\\.)*`/g, '``').replace(/'(?:[^'\\\n]|\\.)*'/g, "''").replace(/"(?:[^"\\\n]|\\.)*"/g, '""');
+const lines = t.split('\n').map((l) => l.replace(/\/\/.*$/, ''));
+const definiert = new Set();
+for (const l of lines) {
+  let m = l.match(/^\s*(?:const|let|var|function)\s+([A-Za-z_$][\w$]*)/);
+  if (m) definiert.add(m[1]);
+  m = l.match(/^\s*import\s+{([^}]*)}/);
+  if (m) m[1].split(',').forEach((s) => definiert.add(s.trim()));
+  m = l.match(/^\s*for\s*\(\s*(?:const|let|var)\s+([A-Za-z_$][\w$]*)/);
+  if (m) definiert.add(m[1]);
+  const cm = l.match(/^\s*catch\s*\(\s*([A-Za-z_$][\w$]*)\s*\)/);
+  if (cm) definiert.add(cm[1]);
+}
+['THREE', 'document', 'window', 'performance', 'requestAnimationFrame', 'fetch', 'EventSource', 'URLSearchParams', 'Intl', 'location', 'setInterval', 'clearInterval', 'setTimeout', 'console', 'Math', 'JSON', 'Number', 'String', 'Boolean', 'Array', 'Object', 'Map', 'Set', 'Float32Array', 'Infinity', 'NaN', 'undefined', 'isFinite', 'isNaN', 'parseInt', 'parseFloat', 'Image'].forEach((g) => definiert.add(g));
+const params = new Map();
+for (const l of lines) {
+  const fm = l.match(/^\s*function\s+([A-Za-z_$][\w$]*)\s*\(([^)]*)\)/);
+  if (fm) params.set(fm[1], fm[2].split(',').map((s) => s.trim().split('=')[0].trim()).filter(Boolean));
+}
+// Objekt-Keys + bekannte Props sind keine Leichen
+const keys = new Set();
+for (const l of lines) {
+  for (const m of l.matchAll(/(?:^|[{,])\s*([A-Za-z_$][\w$]*)\s*:/g)) keys.add(m[1]);
+  for (const m of l.matchAll(/\.([A-Za-z_$][\w$]*)/g)) keys.add(m[1]);
+}
+const KEYW = new Set(['const', 'let', 'var', 'function', 'return', 'if', 'else', 'for', 'while', 'of', 'in', 'new', 'true', 'false', 'null', 'this', 'try', 'catch', 'continue', 'break', 'typeof', 'void', 'delete', 'await', 'async', 'import', 'export', 'from', 'do', 'instanceof', 'throw']);
+const leichen = [];
+let fn = null;
+for (let i = 0; i < lines.length; i++) {
+  const l = lines[i];
+  const fm = l.match(/^\s*function\s+([A-Za-z_$][\w$]*)\s*\(/);
+  if (fm) fn = fm[1];
+  if (!fn) continue;
+  for (const m of l.matchAll(/(?<![.\w$])([a-z][A-Za-z0-9$]*)/g)) {
+    const w = m[1];
+    if (KEYW.has(w) || definiert.has(w) || keys.has(w) || (params.get(fn) || []).includes(w)) continue;
+    let lokal = false;
+    for (let j = i; j >= 0 && j > i - 80; j--) {
+      if (new RegExp('^\\s*(?:const|let|var)\\s+' + w + '\\b').test(lines[j])) { lokal = true; break; }
+      if (j < i && /^\s*function\s+/.test(lines[j])) break;
+    }
+    if (lokal) continue;
+    leichen.push(fn + '::' + w + '@' + (i + 1));
+  }
+}
+console.log('[leichen] ' + leichen.length + ' verdaechtige: ' + leichen.slice(0, 8).join(' | '));
+const ECHTE = leichen.filter((s) => !s.includes('::farben@') && !s.includes('::l@') && !s.includes('::r@'));
+assert.strictEqual(ECHTE.length, 0, 'undefinierte Identifier in scene.js: ' + ECHTE.slice(0, 5).join(' | '));
+console.log('[leichen] ALLES OK (keine toten Referenzen)');

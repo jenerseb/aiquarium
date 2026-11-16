@@ -295,6 +295,7 @@ function baueStrassennamen(strassen) {
       const dz = z2 - z1;
       const len = Math.hypot(dx, dz) || 1;
 // DIORAMA_V1: warme Hamburger Fassadenpalette (Backstein, Creme, Sandstein, Altbau-Grau)
+      const nx = -dz / len;
       const nz = dx / len;
       const VERSATZ = 5; // 5 m neben die Fahrbahn (Gehweg-Kante)
       const mx = (x1 + x2) / 2 + nx * VERSATZ;
@@ -313,12 +314,16 @@ function baueStrassennamen(strassen) {
 // Fenster leuchten warm je nach Tageszeit (LICHT.fensterLicht).
 const texturCache = new Map();
 
+// DIORAMA-Fix: Fenster-Helligkeit aus Tageszeit-Faktor (0..1) — fehlte komplett.
+function berechneLicht(faktor) {
+  return Math.max(0, Math.min(1, Number(faktor) || 0));
+}
 function fassadenTextur(breiteM, hoeheM, grundFarbe, faktor = 4) {
   // Cache-Key enthält Breite+Höhe im Meter-Raster (10 m): gleiche Kachelgröße
   // teilt sich die Textur, verschiedene Größen bekommen eigenen Repeat (400 %).
   const bR = Math.max(10, Math.round(breiteM / 10) * 10);
   const hR = Math.max(10, Math.round(hoeheM / 10) * 10);
-  const lichtStufe = licht > 0.6 ? 'nacht' : licht > 0.4 ? 'abend' : 'tag';
+  const lichtStufe = (typeof LICHT !== "undefined" && LICHT.fensterLicht > 0.6) ? "nacht" : ((typeof LICHT !== "undefined" && LICHT.fensterLicht > 0.4) ? "abend" : "tag");
   const key = `Fx${bR}_H${hR}_x${TEXTUR_FAKTOR}_${farbe}`;
   if (texturCache.has(key)) return texturCache.get(key);
   const c = document.createElement('canvas');
@@ -333,8 +338,8 @@ function fassadenTextur(breiteM, hoeheM, grundFarbe, faktor = 4) {
   const bodenKey = `${bR}x${hR}_${lichtStufe}_x4`;
   for (let fx = 0; fx < 4; fx += 1) {
     for (let fy = 0; fy < 3; fy += 1) {
-  if (texturCache.has(bodenKey)) return texturCache.get(bodenKey);
-      g.fillStyle = an ? `rgba(255,${190 + Math.floor(licht * 40)},120,${0.5 + licht * 0.5})` : 'rgba(12,18,26,.9)';
+  const lichtStufe = berechneLicht((typeof LICHT !== "undefined" && LICHT.fensterLicht) || 0.25);
+      g.fillStyle = an ? `rgba(255,${190 + Math.floor(lichtStufe * 40)},120,${0.5 + lichtStufe * 0.5})` : "rgba(12,18,26,.9)";
       g.fillRect(12 + fx * 28, 14 + fy * 36, 16, 22);
       g.strokeStyle = 'rgba(0,0,0,.5)';
       g.strokeRect(12 + fx * 28, 14 + fy * 36, 16, 22);
