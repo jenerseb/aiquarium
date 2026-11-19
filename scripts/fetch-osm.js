@@ -43,6 +43,8 @@ const OVERPASS_QUERY = `
   way["amenity"~"^(bar|pub|restaurant|fast_food|cafe|cinema|nightclub|arts_centre|community_centre|theatre)$"](${BBOX.south},${BBOX.west},${BBOX.north},${BBOX.east});
   node["historic"~"^(bunker|memorial|monument)$"](${BBOX.south},${BBOX.west},${BBOX.north},${BBOX.east});
   way["historic"~"^(bunker|memorial|monument)$"](${BBOX.south},${BBOX.west},${BBOX.north},${BBOX.east});
+  way["leisure"~"^(park|garden|pitch|common|playground|dog_park)$"](${BBOX.south},${BBOX.west},${BBOX.north},${BBOX.east});
+  way["landuse"~"^(grass|meadow|cemetery|recreation_ground|village_green)$"](${BBOX.south},${BBOX.west},${BBOX.north},${BBOX.east});
 );
 out body;
 >;
@@ -50,19 +52,35 @@ out skel qt;
 `.trim();
 
 async function fetchOverpass() {
-  const url = 'https://maps.mail.ru/osm/tools/overpass/api/interpreter';
-  const res = await fetch(url, {
-    method: 'POST',
-    headers: { 
-      'Content-Type': 'application/x-www-form-urlencoded',
-      'Accept': 'application/json',
-      'User-Agent': 'AIquarium-Hamburg-MVP/0.1 (local-dev)',
-    },
-    body: `data=${encodeURIComponent(OVERPASS_QUERY)}`,
-    signal: AbortSignal.timeout(30000),
-  });
-  if (!res.ok) throw new Error(`Overpass HTTP ${res.status}`);
-  return res.json();
+  // Mirror-Kette (2026-11-17): mail.ru timeoutet/502t häufig — overpass-api.de zuerst.
+  const mirrors = [
+    'https://overpass-api.de/api/interpreter',
+    'https://maps.mail.ru/osm/tools/overpass/api/interpreter',
+    'https://overpass.kumi.systems/api/interpreter',
+    'https://overpass.private.coffee/api/interpreter',
+  ];
+  let letzterFehler = null;
+  for (const url of mirrors) {
+    try {
+      console.log('[osm] Mirror: ' + url);
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/x-www-form-urlencoded',
+          'Accept': 'application/json',
+          'User-Agent': 'AIquarium-Hamburg-MVP/0.1 (local-dev)',
+        },
+        body: `data=${encodeURIComponent(OVERPASS_QUERY)}`,
+        signal: AbortSignal.timeout(150000), // 150 s: Overpass braucht bei großen Queries länger
+      });
+      if (!res.ok) throw new Error(`Overpass HTTP ${res.status}`);
+      return res.json();
+    } catch (err) {
+      letzterFehler = err;
+      console.warn('[osm] Mirror fehlgeschlagen: ' + err.message);
+    }
+  }
+  throw letzterFehler || new Error('Kein Overpass-Mirror erreichbar');
 }
 
 function buildMapFromOsm(osm) {
@@ -78,6 +96,7 @@ function buildMapFromOsm(osm) {
 
   const buildings = [];
   const streets = [];
+  const parks = [];
   const osmPois = []; // ALLE Amenity/Historic-Nodes+Ways (Test: ungefiltert importieren)
   for (const [nid, tags] of nodesTags) {
     const p = nodesById.get(nid);
@@ -117,6 +136,21 @@ function buildMapFromOsm(osm) {
       });
       continue;
     }
+    // 1b. Grünflächen (Parks/Gärten/Wiesen/Friedhöfe) als Polygone (Bugfix:
+    // parks fehlten komplett -> server.js zeichnete nur einen POI-Kreis).
+    if (!tags.highway && pts.length >= 3 && (tags.leisure || tags.landuse)) {
+      const isGruen = /^(park|garden|pitch|common|playground|dog_park)$/.test(String(tags.leisure || ''))
+        || /^(grass|meadow|cemetery|recreation_ground|village_green)$/.test(String(tags.landuse || ''));
+      if (isGruen) {
+        parks.push({
+          id: `p_${el.id}`,
+          name: tags.name || null,
+          polygon: pts.map((p) => [p.x, p.z]),
+        });
+        continue;
+      }
+    }
+    // 2. Straßen & Gehwege für Rendering + Pathfinding-Graph
     // 2. Straßen & Gehwege für Rendering + Pathfinding-Graph
     if (tags.highway) {
       streets.push({
@@ -251,6 +285,9 @@ function buildMapFromOsm(osm) {
     },
     buildings,
     streets,
+    parks,
+    osmPois, // Test: ALLE Amenities/Historics der Box (Namen teils null)
+    streets,
     osmPois, // Test: ALLE Amenities/Historics der Box (Namen teils null)
     navGraph: {
       nodes: [...navNodesMap.values()],
@@ -311,6 +348,7 @@ async function main() {
     if (!map.buildings.length || !map.navGraph.nodes.length) {
       throw new Error(`Overpass lieferte leere Karte (${map.buildings.length} Gebaeude) – behalte alte Datei`);
     }
+    console.log(`[osm] Gespeichert in ${OUT_FILE}: ${map.buildings.length} Gebäude, ${map.navGraph.nodes.length} Wegknoten, ${(map.parks || []).length} Grünflächen.`);
     fs.writeFileSync(OUT_FILE, JSON.stringify(map, null, 2), 'utf8');
     console.log(`[osm] Gespeichert in ${OUT_FILE}: ${map.buildings.length} Gebäude, ${map.navGraph.nodes.length} Wegknoten.`);
   } catch (err) {

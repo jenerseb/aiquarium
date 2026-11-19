@@ -554,8 +554,9 @@ function baueLoD2(lod) {
   console.log(`[lod2] ${lod.length} gebäude gemergt: ${Math.round(wandPos.length / 9)} wand- + ${Math.round(dachPos.length / 9)} dach-dreiecke, 2 draw calls`);
 }
 
-// LoD2-Highlight: separates Overlay-Mesh NUR für das betretene POI-Haus
-// (wallTriangles + roofTriangles, opacity 0.28 + warmer Glow).
+// LoD2-Highlight: Overlay-Mesh NUR für das betretene POI-Haus. KEIN Zusatzlicht,
+// KEINE Fremdfarbe mehr: das Haus pulsiert in seiner EIGENEN Wandfarbe
+// (emissive-Puls, polygonOffset gegen Z-Fighting mit dem gemergten Mesh).
 function setzeLoD2Highlight(gebId) {
   if (lodHighlight) { scene.remove(lodHighlight); lodHighlight = null; }
   if (glowLicht) { scene.remove(glowLicht); glowLicht = null; }
@@ -571,19 +572,32 @@ function setzeLoD2Highlight(gebId) {
   const geo = new THREE.BufferGeometry();
   geo.setAttribute('position', new THREE.Float32BufferAttribute(posArr, 3));
   geo.computeVertexNormals();
-  const mat = new THREE.MeshLambertMaterial({ color: 0xffc98a, transparent: true, opacity: 0.28, depthWrite: false });
+  const wand = lodWandfarbe(b.id);
+  const mat = new THREE.MeshLambertMaterial({
+    color: wand, transparent: true, opacity: 0.22,
+    emissive: wand, emissiveIntensity: 0.0,
+    polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2,
+    depthWrite: false,
+  });
   lodHighlight = new THREE.Mesh(geo, mat);
   lodHighlight.position.set(0, 0, 0);
   scene.add(lodHighlight);
-  const mitte = new THREE.Vector3(b.centroid[0], (b.maxY || 10) * LOD_SKALA / 2, b.centroid[1]);
-  glowLicht = new THREE.PointLight(0xffc98a, 60, 30);
-  glowLicht.position.set(mitte.x, 4, mitte.z);
-  scene.add(glowLicht);
+}
+
+// Puls: betretenes Haus in seiner EIGENEN Farbe etwas heller und wieder normal
+// (~2.2 s Periode, sanft). Wird aus loop() aufgerufen.
+function highlightPulsen(ms) {
+  const p = 0.5 + 0.5 * Math.sin(ms / 700);
+  const st = 0.06 + 0.30 * p;
+  if (lodHighlight && lodHighlight.material) lodHighlight.material.emissiveIntensity = st;
+  for (const m of indoorPuls) m.emissiveIntensity = st;
 }
 
 // Indoor-Transparenz (Extrusions-Modus): genau EIN Einzelhaus halbtransparent.
-let glowLicht = null;
+let glowLicht = null; // (früher warmer Glow – entfernt; nur noch Puls in Eigenfarbe)
+let indoorPuls = [];
 function setzeIndoorTransparenz(gebaeudeId) {
+  indoorPuls = [];
   // LoD2-Modus: gemergtes Mesh bleibt, Overlay highlightet das eine Haus.
   if (Z.gebaeude.has('__lod2_walls')) {
     if (!gebaeudeId) setzeLoD2Highlight(null);
@@ -595,17 +609,14 @@ function setzeIndoorTransparenz(gebaeudeId) {
     for (const kind of gruppe.children) {
       if (!kind.material) continue;
       kind.material.transparent = aktiv;
-      kind.material.opacity = aktiv ? 0.28 : 1.0;
+      kind.material.opacity = aktiv ? 0.55 : 1.0;
       kind.material.needsUpdate = false;
+      if (kind.material.emissive) {
+        kind.material.emissive.setHex(0xffffff);
+        kind.material.emissiveIntensity = 0;
+        if (aktiv) indoorPuls.push(kind.material);
+      }
     }
-  }
-  if (glowLicht) { scene.remove(glowLicht); glowLicht = null; }
-  if (gebaeudeId && Z.gebaeude.has(gebaeudeId)) {
-    glowLicht = new THREE.PointLight(0xffc98a, 60, 30);
-    const pos = new THREE.Vector3();
-    new THREE.Box3().setFromObject(Z.gebaeude.get(gebaeudeId)).getCenter(pos);
-    glowLicht.position.set(pos.x, 4, pos.z);
-    scene.add(glowLicht);
   }
 }
 
@@ -1322,6 +1333,18 @@ function badgeHtml(quelle) {
   return badges.map((b) => `[${esc(b)}]`).join(' ');
 }
 
+// Punkt-im-Polygon (Fußprint-Test, Winding unabhängig): liegts (x, z) im Haus?
+function punktInPolygon(x, z, poly) {
+  if (!Array.isArray(poly) || poly.length < 3) return false;
+  let innen = false;
+  for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+    const xi = poly[i][0], zi = poly[i][1];
+    const xj = poly[j][0], zj = poly[j][1];
+    if (((zi > z) !== (zj > z)) && (x < ((xj - xi) * (z - zi)) / (zj - zi) + xi)) innen = !innen;
+  }
+  return innen;
+}
+
 function staatAnwenden(s, opts) {
   Z.staat = s;
   if (!s || !s.charakter) return;
@@ -1356,20 +1379,32 @@ function staatAnwenden(s, opts) {
         }
       } catch { /* fallback unten */ }
       if (!bestId) {
+        // Fix: Fallback anhand der FIGUR-Position (ch.pos_x/pos_z), nicht des
+        // POI-Markers – der Marker kann an der Straße snappen, die Figur sitzt im Haus.
+        const fx = Number(ch.pos_x);
+        const fz = Number(ch.pos_z);
         if (Z.gebaeude.has('__lod2_walls')) {
-          // LoD2-Fallback: nächstes Haus per Centroid (30 m).
-          let bd = 30;
+          // 1) OSM-Footprint, der die Figur enthält -> dessen Centroid auf LoD2 mappen.
+          const osm = (Z.karte.buildings || []).find((b) => Array.isArray(b.footprint) && punktInPolygon(fx, fz, b.footprint));
+          let refX = fx, refZ = fz;
+          if (osm) {
+            const fp = osm.footprint;
+            refX = fp.reduce((s, p) => s + p[0], 0) / fp.length;
+            refZ = fp.reduce((s, p) => s + p[1], 0) / fp.length;
+          }
+          // 2) Nächstes LoD2-Haus zur Referenz (45 m Toleranz).
+          let bd = 45;
           for (const g of Z.karte.lod2 || []) {
-            const d = Math.hypot(g.centroid[0] - Number(poi.pos_x), g.centroid[1] - Number(poi.pos_z));
+            const d = Math.hypot(g.centroid[0] - refX, g.centroid[1] - refZ);
             if (d < bd) { bd = d; bestId = g.id; }
           }
         } else {
-          let bestD = 30;
+          let bestD = 45;
           for (const [id] of Z.gebaeude) {
             const box = new THREE.Box3().setFromObject(Z.gebaeude.get(id));
             const mitte = new THREE.Vector3();
             box.getCenter(mitte);
-            const d = Math.hypot(mitte.x - Number(poi.pos_x), mitte.z - Number(poi.pos_z));
+            const d = Math.hypot(mitte.x - fx, mitte.z - fz);
             if (d < bestD) { bestD = d; bestId = id; }
           }
         }
@@ -1651,6 +1686,7 @@ function loop() {
   letztesBild = jetzt;
   figurUpdaten(dt);
   pinsSchweben(performance.now()); // Bojen-Schweben der POI-Pins (ms-Basis)
+  highlightPulsen(performance.now()); // betretenes Haus pulst in Eigenfarbe
   kameraUpdaten(dt, jetzt);
   blasePositionieren();
   renderer.render(scene, camera);

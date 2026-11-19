@@ -221,9 +221,9 @@ CREATE TABLE IF NOT EXISTS hall_of_fame (
 // Alle Anker auf echte OSM-Strassenpunkte gesnappt (Dez 2026, verifiziert):
 // max. 7,3 m zum naechsten Strassenpunkt – kein Marker schwebt mehr im Nichts.
 const SEED_POIS = [
-  { id: 'apartment', name: 'Kleine Einzimmerwohnung (Lerchenstrasse)', category: 'home',
-    match: null, pos_x: -3, pos_z: -114, discovered: 1,
-    public_desc: 'Deine kleine Einzimmerwohnung. Ein schmales Bett, ein Schreibtisch fuer Projekte, und ein Buecherregal mit deinem Notizbuch und alten Hamburg-Buechern.' },
+  { id: 'apartment', name: 'Kleine Einzimmerwohnung (Beckstrasse)', category: 'home',
+    match: { building: 'b_51281656' }, pos_x: 260, pos_z: -4, discovered: 1,
+    public_desc: 'Deine kleine Einzimmerwohnung an der Beckstrasse. Ein schmales Bett, ein Schreibtisch fuer Projekte, und ein Buecherregal mit deinem Notizbuch und alten Hamburg-Buechern.' },
   { id: 'otzentreff', name: 'Otzentreff (Otzenstrasse)', category: 'kneipe',
     match: { osm: 'n_2070259277' }, pos_x: 46, pos_z: 399.7, discovered: 0,
     public_desc: 'Eine urige Eckkneipe mit warmem Licht hinter den Scheiben. Am Tresen stehen Glaeser, abends wird gelacht und geredet.' },
@@ -317,7 +317,7 @@ const SEED_BOOKS = [
     ] },
   { id: 'notizbuch', title: 'Dein eigenes Notizbuch', kind: 'notebook',
     entries: [
-      { topic: 'ankunft', title: 'Erste Nacht', content: 'In der Lerchenstrasse angekommen. 18 Euro in der Tasche.' },
+      { topic: 'ankunft', title: 'Erste Nacht', content: 'In der Beckstrasse angekommen. 18 Euro in der Tasche.' },
     ] },
 ];
 
@@ -432,6 +432,16 @@ function seed(db, kiezMap) {
           const [mx, mz] = poiPositionAusKarte(kiezMap, p);
           db.prepare('UPDATE pois SET pos_x = ?, pos_z = ? WHERE id = ?').run(mx, mz, p.id);
         }
+        // Wohnungs-Umzug 2026-11-17: apartment -> Beckstrasse (b_51281656).
+        // Bestehende DBs: Position + Name + Beschreibung + Footprint mitziehen,
+        // und jede Figur, die noch in der alten Wohnung "drin" ist, umziehen.
+        if (p.id === 'apartment') {
+          const [mx, mz] = poiPositionAusKarte(kiezMap, p);
+          const fp = footprintAusKarte(kiezMap, mx, mz);
+          db.prepare('UPDATE pois SET pos_x = ?, pos_z = ?, name = ?, public_desc = ?, footprint_json = COALESCE(?, footprint_json) WHERE id = ?')
+            .run(mx, mz, p.name, p.public_desc, fp ? JSON.stringify(fp) : null, p.id);
+          db.prepare("UPDATE character SET pos_x = ?, pos_z = ? WHERE inside_poi = 'apartment'").run(mx, mz);
+        }
         continue;
       }
       const [mx, mz] = poiPositionAusKarte(kiezMap, p);
@@ -455,7 +465,7 @@ function seed(db, kiezMap) {
     inv.run(charId, 'notizblock', 'Notizblock', 1);
     inv.run(charId, 'schluessel', 'Wohnungsschluessel', 1);
     db.prepare("INSERT INTO memories (character_id, tier, kind, text, initial_weight, worth) VALUES (?, 'short', 'moment', ?, 4.0, 4.0)").run(
-      charId, 'Ankunft in der Lerchenstrasse mit 18 Euro. Die Wohnung riecht nach frischer Farbe.');
+      charId, 'Ankunft in der Beckstrasse mit 18 Euro. Die Wohnung riecht nach frischer Farbe.');
   } else {
     charId = db.prepare('SELECT id FROM character ORDER BY id LIMIT 1').get().id;
   }
