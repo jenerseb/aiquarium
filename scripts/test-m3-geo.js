@@ -136,7 +136,7 @@ function main() {
 
   // --- 3) scene.js enthält das Pflicht-Mapping (keine Regression) ---
   const szene = fs.readFileSync(path.join(__dirname, '..', 'public', 'scene.js'), 'utf8');
-  for (const stich of ['-fp[0][1]', 'fp[i][0], -fp[i][1]', 'mesh.position.set(0, 0, 0)', 'bb.min.y', 'form.holes.push', 'bevelThickness: 0.3', '0.28', 'InstancedMesh', 'kronendurchmesser', 'baumhoehe', 'wolkenTreiben', 'FogExp2', 'ACESFilmicToneMapping', 'baueLoD2', 'LOD_SKALA', 'setzeLoD2Highlight', 'opacity: 0.28']) {
+  for (const stich of ['-fp[0][1]', 'fp[i][0], -fp[i][1]', 'mesh.position.set(0, 0, 0)', 'bb.min.y', 'form.holes.push', 'bevelThickness: 0.3', 'indoorPuls', 'InstancedMesh', 'kronendurchmesser', 'baumhoehe', 'wolkenTreiben', 'FogExp2', 'ACESFilmicToneMapping', 'baueLoD2', 'LOD_SKALA', 'setzeLoD2Highlight', 'emissiveIntensity']) {
     assert.ok(szene.includes(stich), 'scene.js ohne pflicht-fix: ' + stich);
   }
   assert.ok(!szene.includes('mesh.position.y = h'), 'regression: mesh.position.y = h ist zurueck!');

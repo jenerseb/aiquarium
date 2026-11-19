@@ -151,7 +151,6 @@ function buildMapFromOsm(osm) {
       }
     }
     // 2. Straßen & Gehwege für Rendering + Pathfinding-Graph
-    // 2. Straßen & Gehwege für Rendering + Pathfinding-Graph
     if (tags.highway) {
       streets.push({
         id: `w_${el.id}`,
@@ -175,13 +174,6 @@ function buildMapFromOsm(osm) {
         });
       }
 
-      streets.push({
-        id: `w_${el.id}`,
-        name: tags.name || null,
-        kind: tags.highway,
-        points: pts.map((p) => [p.x, p.z]),
-      });
-
       for (let i = 0; i < pts.length; i += 1) {
         const p = pts[i];
         if (!navNodesMap.has(p.id)) {
@@ -194,6 +186,23 @@ function buildMapFromOsm(osm) {
       }
     }
   }
+
+  // 2c. Straßen-Dedup (Flackern-Fix): Overpass liefert Wege teils doppelt
+  // (identische Geometrie als 2 Eintraege). Key = sortierte Endpunkte + name/kind.
+  const seenStreets = new Set();
+  const streetsDedup = [];
+  for (const seg of streets) {
+    const a = seg.points[0];
+    const b = seg.points[seg.points.length - 1];
+    const k1 = `${a[0].toFixed(1)},${a[1].toFixed(1)}|${b[0].toFixed(1)},${b[1].toFixed(1)}|${seg.name || ''}|${seg.kind}`;
+    const k2 = `${b[0].toFixed(1)},${b[1].toFixed(1)}|${a[0].toFixed(1)},${a[1].toFixed(1)}|${seg.name || ''}|${seg.kind}`;
+    const sig = k1 < k2 ? k1 : k2;
+    if (seenStreets.has(sig)) continue;
+    seenStreets.add(sig);
+    streetsDedup.push(seg);
+  }
+  streets.length = 0;
+  streets.push(...streetsDedup);
 
   // 2b. Zusammenhang naehen: gleiche Koordinate (10-cm-Raster) = ein Knoten.
   // Overpass liefert Ways unverbunden; ohne Naht zerfaellt der Graph.
@@ -287,8 +296,6 @@ function buildMapFromOsm(osm) {
     streets,
     parks,
     osmPois, // Test: ALLE Amenities/Historics der Box (Namen teils null)
-    streets,
-    osmPois, // Test: ALLE Amenities/Historics der Box (Namen teils null)
     navGraph: {
       nodes: [...navNodesMap.values()],
       edges: navEdges,
@@ -348,9 +355,8 @@ async function main() {
     if (!map.buildings.length || !map.navGraph.nodes.length) {
       throw new Error(`Overpass lieferte leere Karte (${map.buildings.length} Gebaeude) – behalte alte Datei`);
     }
-    console.log(`[osm] Gespeichert in ${OUT_FILE}: ${map.buildings.length} Gebäude, ${map.navGraph.nodes.length} Wegknoten, ${(map.parks || []).length} Grünflächen.`);
+    console.log(`[osm] Neue Karte: ${map.buildings.length} Gebäude, ${(map.streets || []).length} Straßen, ${(map.parks || []).length} Grünflächen, ${map.navGraph.nodes.length} Wegknoten.`);
     fs.writeFileSync(OUT_FILE, JSON.stringify(map, null, 2), 'utf8');
-    console.log(`[osm] Gespeichert in ${OUT_FILE}: ${map.buildings.length} Gebäude, ${map.navGraph.nodes.length} Wegknoten.`);
   } catch (err) {
     if (fs.existsSync(OUT_FILE)) {
       console.warn(`[osm] Overpass nicht erreichbar (${err.message}) — BEHALTE bestehende Karte.`);

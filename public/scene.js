@@ -209,14 +209,26 @@ function dioramaShader(mat) {
 }
 // --- Boden, Strassen, Parks ------------------------------------------------------------
 // Ebene (x, z) in Metern, y = 0. Runde Diorama-Insel statt Rechteckplatte.
+let bodenGruppe = null; // idempotenter Boden (Sockel + Luftbild), siehe baueBoden()
 function baueBoden() {
+  // Idempotent: ladeKarte() baut den Boden nach dem Diorama-Update neu –
+  // die alte Gruppe (Sockel + Luftbild) wird sauber entfernt.
+  if (bodenGruppe) {
+    scene.remove(bodenGruppe);
+    bodenGruppe.traverse((o) => {
+      if (o.geometry) o.geometry.dispose();
+      if (o.material) o.material.dispose();
+    });
+    bodenGruppe = null;
+  }
+  const gruppe = new THREE.Group();
   // 3D-Sockel: Oberseite exakt y = 0, Erde-Dunkel an Seite/Unterseite.
   const geo = new THREE.CylinderGeometry(DIORAMA.r, DIORAMA.r * 0.96, 16, 128);
   const oben = new THREE.MeshLambertMaterial({ color: 0x6f7d4e });
   const seite = new THREE.MeshLambertMaterial({ color: 0x2b2d30 });
   const boden = new THREE.Mesh(geo, [seite, oben, seite]);
   boden.position.set(DIORAMA.cx, -8, DIORAMA.cz);
-  scene.add(boden);
+  gruppe.add(boden);
   // DIORAMA_V1: optionales Luftbild-Overlay (/kiez-aerial.jpg in public/), sonst prozedural
   new THREE.TextureLoader().load("/kiez-aerial.jpg",
     (tex) => {
@@ -225,11 +237,13 @@ function baueBoden() {
       luftGeo.rotateX(-Math.PI / 2);
       const luft = new THREE.Mesh(luftGeo, new THREE.MeshLambertMaterial({ map: tex, transparent: true, opacity: 0.55 }));
       luft.position.set(DIORAMA.cx, -0.15, DIORAMA.cz);
-      scene.add(luft);
+      gruppe.add(luft);
     },
     undefined,
     () => { /* kein Luftbild -> prozeduraler Boden bleibt */ }
   );
+  scene.add(gruppe);
+  bodenGruppe = gruppe;
 }
 function linienBand(punkte, breite, farbe, y) {
   // Flache Baender direkt in Welt-Metern: Mittelpunkt aus (x, z), keine
@@ -261,14 +275,19 @@ function baueStrassen(strassen) {
     const pts = s.points || [];
     if (pts.length < 2) continue;
     const neben = s.kind === "footway" || s.kind === "path" || s.kind === "pedestrian" || s.kind === "living_street" || s.kind === "service";
-    const breit = neben ? 3.4 : 5.5;
-    scene.add(linienBand(pts, breit + 1.6, 0x8a7a63, 0.03)); // DIORAMA_V1: sandiger Gehweg
+    // 2026-11-17 BALANCE: Wege schmaler (frueher 3.4/5.5 + 1.6 Gehweg-Rand),
+    // damit Gassen nicht wie Autobahnen wirken.
+    const breit = neben ? 2.4 : 4.2;
+    // 2026-11-17 FLACKERN-FIX: klare Y-Staffelung mit Abstand (frueher Gehweg
+    // 0.03 / Pflaster 0.05 / Asphalt 0.05 / Parks 0.03 -> Z-Fighting).
+    // Parks 0.02 < Gehweg 0.05 < Pflaster/Asphalt 0.08 < Fuge 0.11.
+    scene.add(linienBand(pts, breit + 0.8, 0x8a7a63, 0.05)); // sandiger Gehweg-Rand
     if (neben) {
-      // DIORAMA_V1: Kopfsteinpflaster (warmgrau) fuer kleine St.-Pauli-Gassen
-      scene.add(linienBand(pts, breit, 0x9a9186, 0.05));
-      scene.add(linienBand(pts, breit * 0.55, 0x847b6e, 0.06));
+      // Kopfsteinpflaster (warmgrau) fuer kleine St.-Pauli-Gassen
+      scene.add(linienBand(pts, breit, 0x9a9186, 0.08));
+      scene.add(linienBand(pts, breit * 0.55, 0x847b6e, 0.11));
     } else {
-      scene.add(linienBand(pts, breit, 0x3a3f45, 0.05)); // Asphalt (y = 0.05)
+      scene.add(linienBand(pts, breit, 0x3a3f45, 0.08)); // Asphalt
     }
   }
 }
@@ -281,13 +300,13 @@ function baueParks(parks) {
       const gk = new THREE.CircleGeometry(p.kreis.r, 28);
       gk.rotateX(-Math.PI / 2);
       mesh = new THREE.Mesh(gk, mat);
-      mesh.position.set(p.kreis.x, 0.03, p.kreis.z);
+      mesh.position.set(p.kreis.x, 0.02, p.kreis.z);
     } else if (Array.isArray(p.polygon) && p.polygon.length >= 3) {
       const form = new THREE.Shape(p.polygon.map(([x, z]) => new THREE.Vector2(x, -z)));
       const gp = new THREE.ShapeGeometry(form);
       gp.rotateX(-Math.PI / 2);
       mesh = new THREE.Mesh(gp, mat);
-      mesh.position.set(0, 0.03, 0);
+      mesh.position.set(0, 0.02, 0);
     }
     if (mesh) scene.add(mesh);
   }
@@ -1601,6 +1620,14 @@ async function ladeKarte() {
     Z.karte = karte;
     // Diorama-Scheibe: Mittelpunkt + Radius aus POIs (muss VOR Boden/Shadern stehen).
     dioramaBerechnen(karte.pois);
+    // Kanonisch: Server-Diorama (/api/map) übernimmt, wenn geliefert –
+    // garantiert identische Geometrie mit fetch-luftbild.js.
+    const d = karte.diorama;
+    if (d && Number.isFinite(Number(d.cx)) && Number.isFinite(Number(d.cz)) && Number.isFinite(Number(d.r))) {
+      DIORAMA.cx = Number(d.cx);
+      DIORAMA.cz = Number(d.cz);
+      DIORAMA.r = Number(d.r);
+    }
     Z.over.ziel.set(DIORAMA.cx, 0, DIORAMA.cz);
     try { baueBoden(); } catch (err) { console.warn('[karte] boden:', err.message); }
     try { baueStrassen(karte.streets); } catch (err) { console.warn('[karte] strassen:', err.message); }
