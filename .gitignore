@@ -1,6 +1,9 @@
 .env
 node_modules/
-data/
+data/*
+!data/kiez_map.json
+!data/hamburg_geodata.json
+!data/hamburg_lod2.json
 *.sqlite
 *.sqlite-wal
 *.sqlite-shm
