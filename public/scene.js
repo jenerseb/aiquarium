@@ -7,6 +7,8 @@ import { TEXTUR_FAKTOR, DIORAMA_FASSADEN, DIORAMA_DAECHER, dioramaFarbe } from "
 
 const $ = (id) => document.getElementById(id);
 const DEV = new URLSearchParams(location.search).has('dev') || new URLSearchParams(location.search).get('mode') === 'dev';
+// TEST-FLAG: Gruenzeug (Parks + Baeume) temporär ausblenden — true zum Anzeigen.
+const ZEIGE_GRUEN = false;
 
 // --- Renderer / Szene ---------------------------------------------------------------
 const stage = $('stage');
@@ -14,9 +16,12 @@ const renderer = new THREE.WebGLRenderer({ antialias: true });
 // DIORAMA_V1: warmer Miniatur-Look, leichtgewichtig (kein Postprocessing)
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
 renderer.toneMappingExposure = 1.15;
-// GRAFIK-FREEZE: PixelRatio 1.5 (Retina/4K schonen), kein Schatten-Rendering
-// (Diorama nutzt Baked-Look via Vertex-Colors + Lambert, keine shadowMap).
-renderer.shadowMap.enabled = false;
+// GRAFIK-FREEZE: PixelRatio 1.5 (Retina/4K schonen). Schatten: STATISCH —
+// die Schattenkarte wird einmalig nach dem Szenenbau gerendert (die Sonne
+// steht fest), danach ~0 Kosten pro Frame.
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+renderer.shadowMap.autoUpdate = false; // manuell via needsUpdate
 renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.5));
 renderer.setSize(window.innerWidth, window.innerHeight);
 stage.appendChild(renderer.domElement);
@@ -31,6 +36,10 @@ camera.updateProjectionMatrix();
 
 const sonne = new THREE.DirectionalLight(0xfff2dd, 2.6);
 sonne.position.set(120, 220, 100);
+sonne.castShadow = true;
+sonne.shadow.mapSize.set(2048, 2048);
+sonne.shadow.bias = -0.0004;
+sonne.shadow.normalBias = 1.5;
 scene.add(sonne);
 const hemi = new THREE.HemisphereLight(0xbfd8ff, 0x4a453f, 1.4);
 scene.add(hemi);
@@ -184,13 +193,10 @@ function dioramaBerechnen(pois) {
   const cx = (Math.min(...xs) + Math.max(...xs)) / 2;
   const cz = (Math.min(...zs) + Math.max(...zs)) / 2;
   const maxD = Math.max(...liste.map((p) => Math.hypot(Number(p.pos_x) - cx, Number(p.pos_z) - cz)));
-  let r = maxD + 90; // +90 statt +65: ~5 % mehr Radius, Randbäume/POIs bleiben drin
-  // Westkante (cx - r): Max-Brauer-Allee-Kappe 2026-11-19 auf -290 gezogen,
-  // damit das +90 greift (bei -260 klemmte das Cap r wieder auf maxD+65).
-  if (cx - r < -290) r = cx + 290;
+  let r = maxD + 160; // +160 (90 + 70): Map gross genug, alle POIs mit Puffer drin
   DIORAMA.cx = Math.round(cx * 10) / 10;
   DIORAMA.cz = Math.round(cz * 10) / 10;
-  DIORAMA.r = Math.round(Math.min(660, Math.max(400, r)));
+  DIORAMA.r = Math.round(Math.min(760, Math.max(400, r)));
   return { ...DIORAMA };
 }
 function dioramaShader(mat) {
@@ -231,6 +237,7 @@ function baueBoden() {
   const oben = new THREE.MeshLambertMaterial({ color: 0x6f7d4e });
   const seite = new THREE.MeshLambertMaterial({ color: 0x2b2d30 });
   const boden = new THREE.Mesh(geo, [seite, oben, seite]);
+  boden.receiveShadow = true; // Gebaeude-Schatten auf dem Boden
   boden.position.set(DIORAMA.cx, -8, DIORAMA.cz);
   gruppe.add(boden);
   // DIORAMA_V1: optionales Luftbild-Overlay (/kiez-aerial.jpg in public/), sonst prozedural
@@ -248,6 +255,8 @@ function baueBoden() {
       const luft = new THREE.Mesh(luftGeo, new THREE.MeshLambertMaterial({ map: tex, transparent: true, opacity: 0.55, depthWrite: false }));
       luft.position.set(DIORAMA.cx, 0.005, DIORAMA.cz);
       gruppe.add(luft);
+      // Dächer mit dem Luftbild texturieren (LoD2), sobald es da ist.
+      try { baueDachLuftbild(tex); } catch (err) { console.warn('[luftbild] dächer:', err.message); }
     },
     undefined,
     () => { /* kein Luftbild -> prozeduraler Boden bleibt */ }
@@ -262,7 +271,7 @@ function linienBand(punkte, breite, farbe, y) {
   // Euler-Mix aus rotation.x + rotation.z, der je nach Euler-Reihenfolge
   // spiegelt/verdreht). Diorama: Kreisschnitt per Shader (kein Rechteck-Überstand).
   const gruppe = new THREE.Group();
-  const mat = dioramaShader(new THREE.MeshBasicMaterial({ color: farbe }));
+  const mat = dioramaShader(new THREE.MeshLambertMaterial({ color: farbe }));
   for (let i = 1; i < punkte.length; i += 1) {
     const [x1, z1] = punkte[i - 1];
     const [x2, z2] = punkte[i];
@@ -273,6 +282,7 @@ function linienBand(punkte, breite, farbe, y) {
     const geo = new THREE.PlaneGeometry(len, breite);
     geo.rotateX(-Math.PI / 2); // XZ-Ebene: lokal X -> Welt-X, lokal Y -> Welt -Z (symmetrisch, ok)
     const m = new THREE.Mesh(geo, mat);
+    m.receiveShadow = true; // Gebaeude-Schatten fallen auf Strassen/Gehwege
     m.rotation.y = -Math.atan2(dz, dx); // lange Achse auf (dx, dz) drehen
     m.position.set((x1 + x2) / 2, y, (z1 + z2) / 2);
     gruppe.add(m);
@@ -494,6 +504,8 @@ function baueGebaeude(buildings) {
       const fassFarbe = b.colour || "#b3563f"; // DIORAMA_V1-Fix: direkt, ohne Hash-Funktion (TDZ-sicher)
       const mat = new THREE.MeshLambertMaterial({ map: fassadenTextur(maxX - minX, h, fassFarbe) });
       const mesh = new THREE.Mesh(geo, mat);
+      mesh.castShadow = true;
+      mesh.receiveShadow = true;
       mesh.position.set(0, 0, 0); // exakt auf dem Boden, kein Schweben
       const dachFarbe = b.roofColour || "#343942"; // DIORAMA_V1-Fix: direkt Schiefer, ohne Hash-Funktion
       const dachMatBau = new THREE.MeshLambertMaterial({ color: new THREE.Color(dachFarbe) });
@@ -536,12 +548,102 @@ function lodWandfarbe(id) {
   for (let i = 0; i < s.length; i += 1) h = (h * 31 + s.charCodeAt(i)) >>> 0;
   return palette[h % palette.length];
 }
+// --- Miniatur-Fassaden-Kachel (cute Stil: Backstein + Fenster, kein Fotorealismus)
+const FASSADE_KACHEL = 2.625; // 1 Kachel = 1 Etage (3,5 m * 0.75 Diorama-Skala)
+let fassKachel = null;
+function fassadenKachel() {
+  if (fassKachel) return fassKachel;
+  const c = document.createElement('canvas');
+  c.width = 128;
+  c.height = 128;
+  const g = c.getContext('2d');
+  // Grundmauer hell — die warme Vertex-Farbe der Wand tintet die Kachel.
+  g.fillStyle = '#f4efe7';
+  g.fillRect(0, 0, 128, 128);
+  // Backstein-Reihen mit versetzten Fugen
+  g.strokeStyle = 'rgba(70,40,30,0.18)';
+  g.lineWidth = 2;
+  for (let y = 0; y <= 128; y += 16) { g.beginPath(); g.moveTo(0, y + 0.5); g.lineTo(128, y + 0.5); g.stroke(); }
+  for (let row = 0; row < 8; row += 1) {
+    const off = (row % 2) * 16;
+    for (let x = off; x <= 128; x += 32) {
+      g.beginPath(); g.moveTo(x + 0.5, row * 16); g.lineTo(x + 0.5, (row + 1) * 16); g.stroke();
+    }
+  }
+  // Fenster: 2 Stueck, dunkles Glas, heller Rahmen, Sprossen
+  const fenster = (x, y) => {
+    g.fillStyle = '#e8e2d6';
+    g.fillRect(x - 3, y - 3, 46, 56); // Rahmen
+    g.fillStyle = '#33404f';
+    g.fillRect(x, y, 40, 50);         // Glas
+    g.fillStyle = '#dfe7f0';
+    g.fillRect(x + 17, y, 6, 50);     // Mittel-Sprosse
+    g.fillRect(x, y + 22, 40, 5);     // Quer-Sprosse
+  };
+  fenster(14, 36);
+  fenster(78, 36);
+  const tex = new THREE.CanvasTexture(c);
+  tex.wrapS = THREE.RepeatWrapping;
+  tex.wrapT = THREE.RepeatWrapping;
+  tex.colorSpace = THREE.SRGBColorSpace;
+  fassKachel = tex;
+  return tex;
+}
+
+// --- Dächer mit dem Luftbild texturieren (UV = georeferenzierte Position) ---
+let dachLuftMesh = null;
+let luftTex = null;
+function baueDachLuftbild(tex) {
+  luftTex = tex;
+  if (dachLuftMesh) {
+    scene.remove(dachLuftMesh);
+    dachLuftMesh.geometry.dispose();
+    dachLuftMesh.material.dispose();
+    dachLuftMesh = null;
+  }
+  const lod = (Z.karte && Z.karte.lod2) || [];
+  const gruppe = Z.gebaeude.get('__lod2_walls');
+  if (!gruppe || !lod.length) return; // noch keine Gebaeude / kein LoD2-Modus
+  const posArr = [];
+  const uvArr = [];
+  const span = 2 * DIORAMA.r;
+  for (const b of lod) {
+    for (const tri of b.roofTriangles || []) {
+      for (const p of tri) {
+        posArr.push(p[0], p[1] * LOD_SKALA, p[2]);
+        uvArr.push((p[0] - (DIORAMA.cx - DIORAMA.r)) / span, ((DIORAMA.cz + DIORAMA.r) - p[2]) / span);
+      }
+    }
+  }
+  if (!posArr.length) return;
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.Float32BufferAttribute(posArr, 3));
+  geo.setAttribute('uv', new THREE.Float32BufferAttribute(uvArr, 2));
+  geo.computeVertexNormals();
+  dachLuftMesh = new THREE.Mesh(geo, dioramaShader(new THREE.MeshLambertMaterial({ map: tex })));
+  dachLuftMesh.castShadow = true;
+  dachLuftMesh.receiveShadow = true;
+  scene.add(dachLuftMesh);
+  // farbige Dächer aus dem gemergten Mesh nehmen (kein Z-Fighting)
+  const daecherAlt = gruppe.userData.daecher;
+  if (daecherAlt) {
+    gruppe.remove(daecherAlt);
+    daecherAlt.geometry.dispose();
+    daecherAlt.material.dispose();
+    gruppe.userData.daecher = null;
+  }
+  renderer.shadowMap.needsUpdate = true; // Schattenkarte mit neuen Dächern frisch
+  console.log(`[lod2] dächer mit luftbild texturiert: ${Math.round(posArr.length / 9)} dreiecke`);
+}
+
 function baueLoD2(lod) {
   for (const [, m] of Z.gebaeude) { scene.remove(m); }
   Z.gebaeude.clear();
   if (lodHighlight) { scene.remove(lodHighlight); lodHighlight = null; }
+  if (dachLuftMesh) { scene.remove(dachLuftMesh); dachLuftMesh.geometry.dispose(); dachLuftMesh.material.dispose(); dachLuftMesh = null; }
   const wandPos = [];
   const wandCol = [];
+  const wandUV = [];
   const dachPos = [];
   const dachCol = [];
   const tmpFarbe = new THREE.Color();
@@ -551,7 +653,11 @@ function baueLoD2(lod) {
     const wr = 0.92 + ((String(b.id).length * 7) % 12) / 100;
     for (const tri of b.wallTriangles || []) {
       for (const p of tri) {
-        wandPos.push(p[0], p[1] * LOD_SKALA, p[2]);
+        const wy = p[1] * LOD_SKALA;
+        wandPos.push(p[0], wy, p[2]);
+        // Miniatur-UVs aus Weltposition: 1 Kachel = 1 Etage (3,5 m * 0.75),
+        // u diagonal (x - z) damit alle Wandrichtungen ohne Face-Info kacheln.
+        wandUV.push((p[0] - p[2]) / FASSADE_KACHEL, wy / FASSADE_KACHEL);
         wandCol.push(tmpFarbe.r * wr, tmpFarbe.g * wr, tmpFarbe.b * wr);
       }
     }
@@ -563,21 +669,25 @@ function baueLoD2(lod) {
       }
     }
   }
-  function meshAus(posArr, colArr, rau) {
+  function meshAus(posArr, colArr, uvArr) {
     const geo = new THREE.BufferGeometry();
     geo.setAttribute('position', new THREE.Float32BufferAttribute(posArr, 3));
     geo.setAttribute('color', new THREE.Float32BufferAttribute(colArr, 3));
+    if (uvArr) geo.setAttribute('uv', new THREE.Float32BufferAttribute(uvArr, 2));
     geo.computeVertexNormals();
-    const mat = dioramaShader(new THREE.MeshLambertMaterial({ vertexColors: true }));
-    void rau;
+    const mat = dioramaShader(new THREE.MeshLambertMaterial({ vertexColors: true, map: uvArr ? fassadenKachel() : null }));
     const mesh = new THREE.Mesh(geo, mat);
+    mesh.castShadow = true;
+    mesh.receiveShadow = true;
     mesh.position.set(0, 0, 0);
     return mesh;
   }
-  const waende = meshAus(wandPos, wandCol);
-  const daecher = meshAus(dachPos, dachCol);
+  const waende = meshAus(wandPos, wandCol, wandUV);
+  const daecher = meshAus(dachPos, dachCol, null);
   const gruppe = new THREE.Group();
   gruppe.add(waende, daecher);
+  gruppe.userData.daecher = daecher; // Referenz fuer den Luftbild-Tausch
+  if (luftTex) { try { baueDachLuftbild(luftTex); } catch { /* egal */ } }
   gruppe.userData.lod2 = true;
   scene.add(gruppe);
   Z.gebaeude.set('__lod2_walls', gruppe);
@@ -1648,14 +1758,27 @@ async function ladeKarte() {
       DIORAMA.r = Number(d.r);
     }
     Z.over.ziel.set(DIORAMA.cx, 0, DIORAMA.cz);
+    // Schatten-Kamera ueber die Scheibe spannen; Sonne zielt aufs Zentrum.
+    sonne.target.position.set(DIORAMA.cx, 0, DIORAMA.cz);
+    scene.add(sonne.target);
+    const sk = DIORAMA.r + 120;
+    sonne.shadow.camera.left = -sk;
+    sonne.shadow.camera.right = sk;
+    sonne.shadow.camera.top = sk;
+    sonne.shadow.camera.bottom = -sk;
+    sonne.shadow.camera.near = 1;
+    sonne.shadow.camera.far = 1600;
+    sonne.shadow.camera.updateProjectionMatrix();
     try { baueBoden(); } catch (err) { console.warn('[karte] boden:', err.message); }
     try { baueStrassen(karte.streets); } catch (err) { console.warn('[karte] strassen:', err.message); }
-    try { baueParks(karte.parks); } catch (err) { console.warn('[karte] parks:', err.message); }
-    try { baueDioramaBaeume(karte.trees); } catch (err) { console.warn("[karte] baeume:", err.message); } // DIORAMA_V1
+    if (ZEIGE_GRUEN) { try { baueParks(karte.parks); } catch (err) { console.warn('[karte] parks:', err.message); } }
+    if (ZEIGE_GRUEN) { try { baueDioramaBaeume(karte.trees); } catch (err) { console.warn("[karte] baeume:", err.message); } } // DIORAMA_V1
     try { baueGebaeude(karte.buildings); } catch (err) { console.warn('[karte] gebaeude:', err.message); }
     try { bauePoiSchilder(karte.pois); } catch (err) { console.warn('[karte] poi-marker:', err.message); }
     try { baueStrassennamen(karte.streets); } catch (err) { console.warn('[karte] schilder:', err.message); }
     dioramaAussenAusblenden();
+    // Schattenkarte einmalig frisch rendern (statisch, autoUpdate=false).
+    renderer.shadowMap.needsUpdate = true;
     // Initial-Kamera: pilot, +40° rechts vom Blickwinkel (Start-Frame, siehe Kamera-Kapitel)
     const h0 = 0; // Blickrichtung initial: +z (wird per State überschrieben)
     Z.pilot.theta = h0 + PILOT_START_Versatz;
