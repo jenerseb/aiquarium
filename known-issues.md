@@ -1,3 +1,13 @@
+# test 
+
+- gebäude highlight wenn er drin sit funktioneirt nicht richtig: die positionen werden wohl falsch gecheckt, aueßrdem ist das highlight komisch. es soll kein extra leuchten eingeblenet werden. nur das gebäude soll in seiner farbe zu etwas helelr und wieder normal pulsieren.
+
+
+- glaube parkfläche nbuggen. die erste parkfläche wird als kreis gezeichnet, dann folgt keine weitere.
+
+.
+
+
 
 
 # Job-Zusage erreicht den Prompt nicht → Hungerschleife statt Schichtarbeit
