@@ -163,6 +163,27 @@ function kommunikationsRegel(mitHandy) {
 
 // --- Prompt-Bau ------------------------------------------------------------------
 
+// --- Aktiver Job als Prompt-Block (Fix "Hungerschleife") ---------------------------
+// known-issues.md: Der Arbiter nimmt Jobs an, aber das Modell weiß nichts davon
+// und plant endlos look_for_work. Deshalb: wenn ein aktiver Job existiert,
+// bekommt das Modell einen "DEIN JOB"-Block – OHNE Zahlen (Welt-Regel: die
+// Engine rechnet Lohn/Abrechnung, das Modell spürt nur Konsequenzen).
+function jobText(db, characterId) {
+  try {
+    const arbiter = require('./arbiter');
+    const job = arbiter.aktiverJob(db, characterId);
+    if (!job) return null;
+    const poiRow = db.prepare('SELECT name FROM pois WHERE id = ?').get(job.poi_id);
+    const ort = poiRow ? poiRow.name : job.poi_id;
+    const n = Number(job.shifts_completed) || 0;
+    const schichten = n === 1 ? 'Du hast dort schon eine Schicht geschafft.' : (n > 1 ? `Du hast dort schon ${n} Schichten geschafft.` : '');
+    return 'DEIN JOB: Du hast eine Zusage als ' + job.role_title + ' bei ' + ort + '. ' + schichten
+      + ' Eine Schicht dort macht hungrig und müde, aber danach hast du wieder Geld in der Tasche. '
+      + 'Du musst NICHT mehr nach Arbeit suchen – look_for_work und take_job sind jetzt sinnlos. '
+      + 'Wenn du Geld brauchst, plane stattdessen work_shift bei ' + ort + '.';
+  } catch { return null; }
+}
+
 function buildPrompt(db, ch, ctx) {
   const c = ctx || {};
   const mem = require('./memory');
@@ -181,6 +202,7 @@ function buildPrompt(db, ch, ctx) {
     'SO FÜHLT SICH DEIN KÖRPER AN (keine Zahlen, nur Gefühl):',
     ...koerperSaetze(ch),
     '',
+    ...(jobText(db, ch.id) ? [jobText(db, ch.id), ''] : []),
     sheetText(db, ch.id),
     '',
     memoriesText(top),
@@ -215,6 +237,6 @@ function buildPrompt(db, ch, ctx) {
 module.exports = {
   gesundGefuehl, frohGefuehl, hungerGefuehl, erschoepfungGefuehl, geldGefuehl, koerperSaetze,
   sheetText, memoriesText, loopsText, inventarText, hatHandy, buecherText,
-  OFFENE_INTENTS, whitelistFuer, orteText, kommunikationsRegel, buildPrompt,
+  OFFENE_INTENTS, whitelistFuer, orteText, kommunikationsRegel, buildPrompt, jobText,
 };
 

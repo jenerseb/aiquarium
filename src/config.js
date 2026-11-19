@@ -52,7 +52,9 @@ const FROH = {
 
 // ---- Sekundärwerte ----
 const SEKUNDAER = {
-  hunger: { min: 0, max: 100, start: 20, proStunde: 3.5, proSchicht: 15 },
+  // 2026-11-17 Balance-Fix: Hunger-Regen leicht runter (3.5→2.5 / 15→12),
+  // damit eine Schicht mehr als eine Mahlzeit deckt (siehe ECONOMY.priceBounds).
+  hunger: { min: 0, max: 100, start: 20, proStunde: 2.5, proSchicht: 12 },
   erschoepfung: { min: 0, max: 100, start: 15, proStunde: 3.0, proSchicht: 22 },
   geld: { start: 18.0, einheit: 'EUR' },
 };
@@ -82,18 +84,20 @@ const ECONOMY = {
   shiftDurationS: 20 * 60,
   wageBounds: [8.0, 18.0], // € pro 20-Min-Schicht
   priceBounds: {
-    spaeti: [1.0, 6.0],
-    imbiss: [3.5, 10.0],
-    kneipe: [2.5, 12.0],
-    club: [4.0, 15.0],
-    kino: [7.0, 13.0],
+    // 2026-11-17 Balance-Fix: Preise gesenkt (Lohn bleibt [8,18] = ~14 € Ø).
+    // Eine Schicht soll 2–3 Mahlzeiten + Puffer decken, sonst Hunger-Loop.
+    spaeti: [1.0, 5.0],
+    imbiss: [2.5, 7.0],
+    kneipe: [2.0, 9.0],
+    club: [3.0, 12.0],
+    kino: [6.0, 11.0],
     // NW/S-Erweiterung 2026-11-17: Stadion + Gastro am Kiez-Rand
-    restaurant: [4.0, 14.0],
-    cafe: [2.0, 8.0],
-    stadion: [5.0, 15.0],
-    park: [0.0, 4.0],
-    markt: [1.0, 12.0],
-    denkmal: [0.0, 8.0],
+    restaurant: [3.0, 10.0],
+    cafe: [1.5, 6.0],
+    stadion: [4.0, 12.0],
+    park: [0.0, 3.0],
+    markt: [1.0, 9.0],
+    denkmal: [0.0, 6.0],
   },
   deltaBounds: {
     consumeHunger: [-50, -5],

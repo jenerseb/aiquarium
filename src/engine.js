@@ -489,7 +489,9 @@ async function fuehreSchrittAusTeil2(db, deps, characterId, schritt) {
     const poi = schritt.target ? db.prepare('SELECT * FROM pois WHERE id = ?').get(schritt.target) : db.prepare('SELECT * FROM pois WHERE id = ?').get(ch.inside_poi);
     const job = arbiter.aktiverJob(db, characterId);
     if (job) {
-      notizen.push(`Du hast schon Arbeit als ${job.role_title}.`);
+      // Musterbremse (known-issues.md "Hungerschleife"): mit aktivem Job ist
+      // weiteres Arbeitssuchen sinnlos – klar auf work_shift lenken.
+      notizen.push(`Du hast schon Arbeit als ${job.role_title} bei ${job.poi_id}. Such nicht weiter – plane stattdessen work_shift bei ${job.poi_id}, wenn du Geld brauchst.`);
     } else if (!poi) {
       return { ok: false, grund: 'ort_unbekannt', notizen };
     } else {
@@ -565,9 +567,18 @@ async function fuehreSchrittAusTeil3(db, deps, characterId, schritt) {
     if (nb) {
       let eintraege = [];
       try { eintraege = JSON.parse(nb.entries_json); } catch { eintraege = []; }
-      eintraege.push({ topic: 'notiz_' + Date.now(), title: detail.slice(0, 60) || 'Notiz', content: detail });
-      db.prepare("UPDATE books SET entries_json = ? WHERE id = 'notizbuch'").run(JSON.stringify(eintraege));
-      notizen.push('Du hast etwas in dein Notizbuch geschrieben.');
+      // Feedback-Loop-Fix ("Ankunft notieren" x1343): identische Einträge
+      // (normalisierter Titel + Text) werden nicht doppelt ins Notizbuch geschrieben.
+      const norm = (s) => String(s || '').toLowerCase().replace(/[^a-z0-9äöüß]+/g, ' ').trim();
+      const titel = (detail.slice(0, 60) || 'Notiz').trim();
+      const duplikat = eintraege.some((e) => norm(e.title) === norm(titel) && norm(e.content) === norm(detail));
+      if (duplikat) {
+        notizen.push('Das steht schon in deinem Notizbuch – du schreibst es nicht doppelt.');
+      } else {
+        eintraege.push({ topic: 'notiz_' + Date.now(), title: titel, content: detail });
+        db.prepare("UPDATE books SET entries_json = ? WHERE id = 'notizbuch'").run(JSON.stringify(eintraege));
+        notizen.push('Du hast etwas in dein Notizbuch geschrieben.');
+      }
     }
     lasseZeitVergehen(ch, dauerFuer(schritt));
   } else if (action === 'work_on_project') {
@@ -872,7 +883,12 @@ async function tick(db, deps, characterId, jetztMs) {
     if (Number(frisch.geld) < Number(grenzen[0])) {
       db.prepare("INSERT INTO events (character_id, tick, type, payload_json, in_feed) VALUES (?, 0, 'interrupt', ?, 1)")
         .run(characterId, JSON.stringify({ grund: 'geld_reicht_nicht', schritt }));
-      return { ok: true, schritt, ergebnis: { ok: false, grund: 'geld_reicht_nicht' }, notizen: ['Das Geld reicht nicht – Plan wird neu gemacht.'], interrupt: 'geld_reicht_nicht', gedanke };
+      // Job-Hint: mit aktivem Job ist die Antwort auf leere Tasche work_shift,
+      // nicht wieder look_for_work (Fix "Hungerschleife", known-issues.md).
+      const jHint = arbiter.aktiverJob(db, characterId);
+      const notiz = ['Das Geld reicht nicht – Plan wird neu gemacht.']
+        .concat(jHint ? [`Du hast einen Job als ${jHint.role_title} bei ${jHint.poi_id} – plane eine Schicht (work_shift), um wieder Geld zu bekommen.`] : []);
+      return { ok: true, schritt, ergebnis: { ok: false, grund: 'geld_reicht_nicht' }, notizen: notiz, interrupt: 'geld_reicht_nicht', gedanke };
     }
   }
   const ergebnis = await schrittAusfuehren(db, deps, characterId, schritt, jetztMs);
