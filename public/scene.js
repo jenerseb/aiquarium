@@ -217,7 +217,10 @@ function baueBoden() {
     scene.remove(bodenGruppe);
     bodenGruppe.traverse((o) => {
       if (o.geometry) o.geometry.dispose();
-      if (o.material) o.material.dispose();
+      // Material kann ein ARRAY sein (Zylinder: [seite, oben, seite]) –
+      // o.material.dispose() auf das Array wuerde crashen (Fix: weisser Boden).
+      const mats = Array.isArray(o.material) ? o.material : [o.material];
+      for (const m of mats) if (m) m.dispose();
     });
     bodenGruppe = null;
   }
@@ -232,6 +235,9 @@ function baueBoden() {
   // DIORAMA_V1: optionales Luftbild-Overlay (/kiez-aerial.jpg in public/), sonst prozedural
   new THREE.TextureLoader().load("/kiez-aerial.jpg",
     (tex) => {
+      // Stale-Guard: wenn der Boden inzwischen neu gebaut wurde (ladeKarte()),
+      // darf das Bild NICHT mehr in die entfernte Gruppe gehaengt werden.
+      if (bodenGruppe !== gruppe) return;
       tex.colorSpace = THREE.SRGBColorSpace;
       const luftGeo = new THREE.CircleGeometry(DIORAMA.r * 0.99, 96);
       luftGeo.rotateX(-Math.PI / 2);
@@ -281,13 +287,13 @@ function baueStrassen(strassen) {
     // 2026-11-17 FLACKERN-FIX: klare Y-Staffelung mit Abstand (frueher Gehweg
     // 0.03 / Pflaster 0.05 / Asphalt 0.05 / Parks 0.03 -> Z-Fighting).
     // Parks 0.02 < Gehweg 0.05 < Pflaster/Asphalt 0.08 < Fuge 0.11.
-    scene.add(linienBand(pts, breit + 0.8, 0x8a7a63, 0.05)); // sandiger Gehweg-Rand
+    // 2026-11-19 WEGE-LOOK: Nebenwege = EIN schlichter Strich ohne Outlines;
+    // Hauptstrassen behalten Gehweg-Rand + Asphalt.
     if (neben) {
-      // Kopfsteinpflaster (warmgrau) fuer kleine St.-Pauli-Gassen
-      scene.add(linienBand(pts, breit, 0x9a9186, 0.08));
-      scene.add(linienBand(pts, breit * 0.55, 0x847b6e, 0.11));
+      scene.add(linienBand(pts, breit, 0x9a9186, 0.05)); // einfacher Pflaster-Strich
     } else {
-      scene.add(linienBand(pts, breit, 0x3a3f45, 0.08)); // Asphalt
+      scene.add(linienBand(pts, breit + 0.8, 0x8a7a63, 0.05)); // sandiger Gehweg-Rand
+      scene.add(linienBand(pts, breit, 0x3a3f45, 0.08));       // Asphalt
     }
   }
 }
