@@ -83,9 +83,9 @@ function dioramaFuer(pois) {
   const cx = (Math.min(...xs) + Math.max(...xs)) / 2;
   const cz = (Math.min(...zs) + Math.max(...zs)) / 2;
   const maxD = Math.max(...liste.map((p) => Math.hypot(Number(p.pos_x) - cx, Number(p.pos_z) - cz)));
-  let r = maxD + 65;
-  if (cx - r < -260) r = cx + 260; // Westkante vor Max-Brauer-Allee kappen
-  return { cx: Math.round(cx * 10) / 10, cz: Math.round(cz * 10) / 10, r: Math.round(Math.min(580, Math.max(400, r))) };
+  let r = maxD + 90; // +90 statt +65: identisch zu scene.js dioramaBerechnen
+  if (cx - r < -290) r = cx + 290; // Westkante: Kappe auf -290, sonst klemmt das +90
+  return { cx: Math.round(cx * 10) / 10, cz: Math.round(cz * 10) / 10, r: Math.round(Math.min(660, Math.max(400, r))) };
 }
 function ladeLoD2() {
   try {

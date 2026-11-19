@@ -184,12 +184,13 @@ function dioramaBerechnen(pois) {
   const cx = (Math.min(...xs) + Math.max(...xs)) / 2;
   const cz = (Math.min(...zs) + Math.max(...zs)) / 2;
   const maxD = Math.max(...liste.map((p) => Math.hypot(Number(p.pos_x) - cx, Number(p.pos_z) - cz)));
-  let r = maxD + 65;
-  // Westkante (cx - r) nicht über die Max-Brauer-Allee (x ≈ -260) hinausschieben.
-  if (cx - r < -260) r = cx + 260;
+  let r = maxD + 90; // +90 statt +65: ~5 % mehr Radius, Randbäume/POIs bleiben drin
+  // Westkante (cx - r): Max-Brauer-Allee-Kappe 2026-11-19 auf -290 gezogen,
+  // damit das +90 greift (bei -260 klemmte das Cap r wieder auf maxD+65).
+  if (cx - r < -290) r = cx + 290;
   DIORAMA.cx = Math.round(cx * 10) / 10;
   DIORAMA.cz = Math.round(cz * 10) / 10;
-  DIORAMA.r = Math.round(Math.min(580, Math.max(400, r)));
+  DIORAMA.r = Math.round(Math.min(660, Math.max(400, r)));
   return { ...DIORAMA };
 }
 function dioramaShader(mat) {
@@ -302,7 +303,8 @@ function baueStrassen(strassen) {
 }
 
 function baueParks(parks) {
-  const mat = new THREE.MeshLambertMaterial({ color: 0x4d7a3f }); // DIORAMA_V1: warmes Wiesengruen
+  // 2026-11-19: Parks am Diorama-Kreis clippen (davor standen sie über die Kante).
+  const mat = dioramaShader(new THREE.MeshLambertMaterial({ color: 0x4d7a3f })); // warmes Wiesengruen
   for (const p of parks || []) {
     let mesh = null;
     if (p.kreis) {
@@ -847,17 +849,25 @@ function baueDioramaBaeume(trees) {
   geo.translate(0, 0.5, 0); // Basis am Boden (y = 0)
   const mat = new THREE.MeshLambertMaterial({ color: 0x4f7a3e }); // einfacher Grün-Ton
   baeumeStamm = new THREE.InstancedMesh(geo, mat, N_BAEUME);
+  // 2026-11-19: Bäume GEOMETRISCH am Diorama-Kreis clippen (Instanzen außerhalb
+  // werden nicht gesetzt). Ein Shader-Clip ginge ohne instanceMatrix-Behandlung
+  // nicht – alle Bäume hätten die Position des Mesh-Ursprungs und wären weg.
+  const limit = DIORAMA.r + 10; // +10 m: Randbäume dürfen die Kante noch säumen
+  let plaziert = 0;
   for (let i = 0; i < N_BAEUME; i += 1) {
     const t = echte.length ? echte[i % echte.length] : null;
     const hochM = t ? Math.max(4, Math.min(22, Number(t.baumhoehe) || 8)) : 8;
     const sHoch = hochM * 0.75; // ~75 % Diorama-Maßstab wie bisher
     const bx = t ? Number(t.x) : (i % 2 ? 30 : -30);
     const bz = t ? Number(t.z) : (i % 3 ? 40 : -40);
+    if (Math.hypot(bx - DIORAMA.cx, bz - DIORAMA.cz) > limit) continue; // außerhalb: weg
     dummy.position.set(bx, 0, bz);
     dummy.scale.set(1, sHoch, 1); // Höhe skaliert, Breite konstanter Standard
     dummy.updateMatrix();
-    baeumeStamm.setMatrixAt(i, dummy.matrix);
+    baeumeStamm.setMatrixAt(plaziert, dummy.matrix);
+    plaziert += 1;
   }
+  baeumeStamm.count = plaziert; // ungesetzte Slots weg (keine Geisterbäume)
   baeumeStamm.instanceMatrix.needsUpdate = true;
   scene.add(baeumeStamm);
 }
