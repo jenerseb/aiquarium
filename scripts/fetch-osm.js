@@ -323,3 +323,10 @@ async function main() {
     fs.writeFileSync(OUT_FILE, JSON.stringify(map, null, 2), 'utf8');
   }
 }
+
+if (require.main === module) {
+  main().catch((err) => {
+    console.error('[osm] FEHLER: ' + err.message);
+    process.exit(1);
+  });
+}
