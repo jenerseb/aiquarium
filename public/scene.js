@@ -241,8 +241,11 @@ function baueBoden() {
       tex.colorSpace = THREE.SRGBColorSpace;
       const luftGeo = new THREE.CircleGeometry(DIORAMA.r * 0.99, 96);
       luftGeo.rotateX(-Math.PI / 2);
-      const luft = new THREE.Mesh(luftGeo, new THREE.MeshLambertMaterial({ map: tex, transparent: true, opacity: 0.55 }));
-      luft.position.set(DIORAMA.cx, -0.15, DIORAMA.cz);
+      // 2026-11-19 TIEFENORDNUNG: Das Bild liegt UEBER der Boden-Oberkante
+      // (y = 0), aber unter Parks (0.02) und Strassen (0.05/0.08). Bei -0.15
+      // war es unter der opaken Platte begraben (nur gruener Boden sichtbar).
+      const luft = new THREE.Mesh(luftGeo, new THREE.MeshLambertMaterial({ map: tex, transparent: true, opacity: 0.55, depthWrite: false }));
+      luft.position.set(DIORAMA.cx, 0.005, DIORAMA.cz);
       gruppe.add(luft);
     },
     undefined,
