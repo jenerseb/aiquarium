@@ -1,12 +1,5 @@
-# test 
-
-- gebäude highlight wenn er drin sit funktioneirt nicht richtig: die positionen werden wohl falsch gecheckt, aueßrdem ist das highlight komisch. es soll kein extra leuchten eingeblenet werden. nur das gebäude soll in seiner farbe zu etwas helelr und wieder normal pulsieren.
-
-
-- glaube parkfläche nbuggen. die erste parkfläche wird als kreis gezeichnet, dann folgt keine weitere.
-
-.
-
+# Straßen und Wege
+Straßen und Wege überlagern sich doof und flackern. Strapßen sollen Wege püberdecken! außerdem wege schmaler machen.
 
 
 
@@ -32,5 +25,11 @@
 2. **`src/engine.js`:** Zusätzlich könnte der `geld_reicht_nicht`-Interrupt bei aktivem Job eine Hint-Notiz liefern („Du könntest stattdessen als Küchenhilfe eine Schicht arbeiten“), damit der nächste Plan reagiert.
 3. Optional: Aktiven Job auch im `Gehirn`-Overlay (Character-Sheet-Tab) sichtbar machen.
 
-## Randnotiz (kleiner zweiter Befund)
+
+-----
+-----
+-----
+
+
+# Randnotiz (kleiner zweiter Befund)
 - `src/arbiter.js` (Z. 214, 275, 308) und `src/db.js` (Z. 457) insertieren Memories **direkt per SQL** statt über `speichereMemory()` aus `src/memory.js` – dabei umgehen sie Kapazitätscheck und „First-to-go“-Ersetzung der 25-Slot-Regel. Bei wenigen Events harmlos, sollte aber vereinheitlicht werden.

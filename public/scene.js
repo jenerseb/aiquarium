@@ -247,12 +247,17 @@ function baueBoden() {
       // darf das Bild NICHT mehr in die entfernte Gruppe gehaengt werden.
       if (bodenGruppe !== gruppe) return;
       tex.colorSpace = THREE.SRGBColorSpace;
+      // Schärfe bei flachem Kamerawinkel: maximale Anisotropie der GPU nutzen
+      tex.anisotropy = renderer.capabilities.getMaxAnisotropy();
       const luftGeo = new THREE.CircleGeometry(DIORAMA.r * 0.99, 96);
       luftGeo.rotateX(-Math.PI / 2);
       // 2026-11-19 TIEFENORDNUNG: Das Bild liegt UEBER der Boden-Oberkante
       // (y = 0), aber unter Parks (0.02) und Strassen (0.05/0.08). Bei -0.15
       // war es unter der opaken Platte begraben (nur gruener Boden sichtbar).
-      const luft = new THREE.Mesh(luftGeo, new THREE.MeshLambertMaterial({ map: tex, transparent: true, opacity: 0.55, depthWrite: false }));
+      // 2026-11-19 OPACITY 100 %: Das Luftbild liegt voll deckend auf dem
+      // Sockel (transparent: false → Opaque-Pass, kein Sortier-Flackern).
+      const luft = new THREE.Mesh(luftGeo, new THREE.MeshLambertMaterial({ map: tex, transparent: false, opacity: 1.0, depthWrite: true }));
+      luft.receiveShadow = true; // Gebaeude-Schatten auf dem Luftbild
       luft.position.set(DIORAMA.cx, 0.005, DIORAMA.cz);
       gruppe.add(luft);
       // Dächer mit dem Luftbild texturieren (LoD2), sobald es da ist.

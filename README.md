@@ -202,6 +202,21 @@ nah am Apartment. Beispiel: `node scripts/poi-vorschlag.js 10` oder
    `SEED_POIS.length`, kein Hochzählen nötig).
 
 
+## Deployment (VPS)
+
+Das AIquarium läuft auch als Website auf einem VPS – ohne `npm install`
+(keine Abhängigkeiten), nur Node ≥ 22.5. Kurzfassung:
+
+```bash
+git pull && npm run check && sudo systemctl restart aiquarium
+```
+
+Wichtig: Die `.env` (API-Keys) kommt **nie** mit dem Git und muss einmalig
+auf dem VPS angelegt werden; die Welt-DB entsteht beim ersten Start
+automatisch. `public/kiez-aerial.jpg` und die Geodaten sind getrackt und
+kommen mit jedem Pull mit. Komplett-Anleitung inkl. systemd-Unit,
+nginx-SSE-Config und Troubleshooting: **[deploy-vps.md](deploy-vps.md)**.
+
 ## Gut zu wissen
 
 - **Kosten:** Tagsüber laufen günstige/Free-Modelle

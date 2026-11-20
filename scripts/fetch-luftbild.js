@@ -22,7 +22,8 @@ const DB_PFAD = '/home/node/.local/share/aiquarium/world.sqlite'; // = cfg.DB.de
 const WMS = 'https://geodienste.hamburg.de/wms_dop_zeitreihe_belaubt';
 const LAYER = 'dop_zeitreihe_belaubt';
 const JAHR = 2024; // neuester verfügbacher Jahrgang (Zeitreihe 2005..2024)
-const PX = 2048;   // Auflösung: 2048 px auf ~1160 m => ~0.57 m/px
+const PX = 4096;   // Auflösung: 4096 px auf ~1160 m => ~0,28 m/px (WMS-Max ist 4096,
+                   // 8192 wird abgelehnt; DOP nativ 0,20 m/px => fast Nativauflösung)
 const OUT = path.join(__dirname, '..', 'public', 'kiez-aerial.jpg');
 
 function dioramaFuer(pois) {
