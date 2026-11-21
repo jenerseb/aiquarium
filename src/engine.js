@@ -489,15 +489,24 @@ async function fuehreSchrittAusTeil2(db, deps, characterId, schritt) {
   const detail = String(schritt.detail || '').slice(0, 280);
 
   if (action === 'collect_deposit') {
-    const park = db.prepare("SELECT * FROM pois WHERE category = 'park' AND discovered = 1").get();
-    if (park) { ch.pos_x = Number(park.pos_x); ch.pos_z = Number(park.pos_z); }
-    const n = 1 + Math.floor(Math.random() * 3);
-    const hat = db.prepare("SELECT count FROM inventory WHERE character_id = ? AND item_key = 'pfand'").get(characterId);
-    if (hat) db.prepare("UPDATE inventory SET count = count + ? WHERE character_id = ? AND item_key = 'pfand'").run(n, characterId);
-    else db.prepare("INSERT INTO inventory (character_id, item_key, label, count) VALUES (?, 'pfand', 'Pfandflaschen', ?)").run(characterId, n);
+    const ort = ch.inside_poi ? db.prepare('SELECT id, category FROM pois WHERE id = ?').get(ch.inside_poi) : null;
+    if (ch.inside_poi && (!ort || ort.category !== 'park')) {
+      return { ok: false, grund: 'falscher_ort', notizen: ['Pfandflaschen kannst du nur draußen auf den Straßen oder im Park sammeln.'] };
+    }
+    const n = Math.random() < 0.65 ? (1 + Math.floor(Math.random() * 2)) : 0;
+    if (n > 0) {
+      const hat = db.prepare("SELECT count FROM inventory WHERE character_id = ? AND item_key = 'pfand'").get(characterId);
+      if (hat) db.prepare("UPDATE inventory SET count = count + ? WHERE character_id = ? AND item_key = 'pfand'").run(n, characterId);
+      else db.prepare("INSERT INTO inventory (character_id, item_key, label, count) VALUES (?, 'pfand', 'Pfandflaschen', ?)").run(characterId, n);
+      notizen.push(`Du hast ${n} ${n === 1 ? 'leere Flasche' : 'leere Flaschen'} ${ort ? 'im Gebuesch' : 'auf der Strasse'} gefunden und eingesteckt.`);
+    } else {
+      notizen.push('Du hast gesucht, aber diesmal keine Pfandflaschen gefunden.');
+    }
     lasseZeitVergehen(ch, dauerFuer(schritt));
-    notizen.push(`Du hast ${n} leere Flaschen im Gebuesch gefunden und eingesteckt.`);
   } else if (action === 'return_deposit') {
+    if (ch.inside_poi !== 'spaeti') {
+      return { ok: false, grund: 'nur_am_spaeti', notizen: ['Pfandflaschen kannst du nur am Späti (spaeti) abgeben.'] };
+    }
     const hat = db.prepare("SELECT count FROM inventory WHERE character_id = ? AND item_key = 'pfand'").get(characterId);
     const n = hat ? Number(hat.count) : 0;
     if (n > 0) {

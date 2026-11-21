@@ -7,8 +7,8 @@ import { TEXTUR_FAKTOR, DIORAMA_FASSADEN, DIORAMA_DAECHER, dioramaFarbe } from "
 
 const $ = (id) => document.getElementById(id);
 const DEV = new URLSearchParams(location.search).has('dev') || new URLSearchParams(location.search).get('mode') === 'dev';
-// TEST-FLAG: Gruenzeug (Parks + Baeume) temporär ausblenden — true zum Anzeigen.
-const ZEIGE_GRUEN = false;
+// TEST-FLAG: Gruenzeug (Parks + Baeume) sowie Strassen/Wege nur im Dev-Modus (?dev / ?mode=dev) einblenden.
+const ZEIGE_GRUEN = DEV;
 // Helligkeit aller Dachgrafiken (1.0 = Original, < 1.0 = dunkler, z. B. 0.55..0.85)
 const DACH_HELLIGKEIT = 0.6;
 // Optionaler Uhrzeit-Override zum Testen von Auf-/Untergang (null = echte Hamburger Zeit, sonst z. B. 6.5, 13.0, 19.5, 23.0)
@@ -2337,7 +2337,7 @@ async function ladeKarte() {
     sonne.shadow.camera.far = 1600;
     sonne.shadow.camera.updateProjectionMatrix();
     try { baueBoden(); } catch (err) { console.warn('[karte] boden:', err.message); }
-    try { baueStrassen(karte.streets); } catch (err) { console.warn('[karte] strassen:', err.message); }
+    if (DEV) { try { baueStrassen(karte.streets); } catch (err) { console.warn('[karte] strassen:', err.message); } }
     if (ZEIGE_GRUEN) { try { baueParks(karte.parks); } catch (err) { console.warn('[karte] parks:', err.message); } }
     if (ZEIGE_GRUEN) { try { baueDioramaBaeume(karte.trees); } catch (err) { console.warn("[karte] baeume:", err.message); } } // DIORAMA_V1
     try { baueGebaeude(karte.buildings); } catch (err) { console.warn('[karte] gebaeude:', err.message); }
