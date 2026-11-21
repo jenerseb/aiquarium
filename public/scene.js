@@ -834,6 +834,7 @@ function baueDachLuftbild(tex) {
 }
 
 function baueLoD2(lod) {
+  if (Z.karte) Z.karte.lod2 = lod;
   for (const [, m] of Z.gebaeude) { scene.remove(m); }
   Z.gebaeude.clear();
   if (lodHighlight) { scene.remove(lodHighlight); lodHighlight = null; }
@@ -1339,33 +1340,73 @@ function wolkenFaerben() {
 
 function baueFigur() {
   const g = new THREE.Group();
-  const haut = new THREE.MeshLambertMaterial({ color: 0xd9a37e });
-  const jacke = new THREE.MeshLambertMaterial({ color: 0x3b5b7d });
-  const hose = new THREE.MeshLambertMaterial({ color: 0x23262b });
+  const haut = new THREE.MeshLambertMaterial({ color: 0xe3af8a });
+  const jacke = new THREE.MeshLambertMaterial({ color: 0x4b7f82 });
+  const schalMat = new THREE.MeshLambertMaterial({ color: 0xf2c166 });
+  const hose = new THREE.MeshLambertMaterial({ color: 0x32465c });
+  const schuhMat = new THREE.MeshLambertMaterial({ color: 0x5c3d2e });
+  const hutMat = new THREE.MeshLambertMaterial({ color: 0xd96b43 });
+  const hutBandMat = new THREE.MeshLambertMaterial({ color: 0xf4e4c1 });
+
   const kopf = new THREE.Mesh(new THREE.SphereGeometry(0.42, 20, 16), haut);
   kopf.position.y = 2.05;
   kopf.castShadow = true;
-  // Zwei Augen auf der Vorderseite (+Z): weiße Augäpfel + dunkle Pupillen (Punkt 4)
+
+  // Zwei Augen + zarte Wangen auf der Vorderseite (+Z)
   const weissMat = new THREE.MeshBasicMaterial({ color: 0xffffff });
   const pupilleMat = new THREE.MeshBasicMaterial({ color: 0x14181f });
+  const wangeMat = new THREE.MeshBasicMaterial({ color: 0xe88d82 });
   for (const seite of [-1, 1]) {
     const apfel = new THREE.Mesh(new THREE.SphereGeometry(0.09, 12, 10), weissMat);
     apfel.position.set(seite * 0.16, 2.12, 0.35);
     const pupille = new THREE.Mesh(new THREE.SphereGeometry(0.045, 10, 8), pupilleMat);
     pupille.position.set(seite * 0.16, 2.12, 0.42);
-    g.add(apfel, pupille);
+    const wange = new THREE.Mesh(new THREE.SphereGeometry(0.055, 8, 8), wangeMat);
+    wange.scale.set(1.2, 0.7, 0.5);
+    wange.position.set(seite * 0.25, 1.98, 0.34);
+    g.add(apfel, pupille, wange);
   }
+
+  // Kleiner Hut (Krempe + Krone + Hutband, leicht schräg)
+  const hut = new THREE.Group();
+  const krempe = new THREE.Mesh(new THREE.CylinderGeometry(0.50, 0.54, 0.045, 18), hutMat);
+  const krone = new THREE.Mesh(new THREE.CylinderGeometry(0.28, 0.35, 0.24, 18), hutMat);
+  krone.position.y = 0.13;
+  const band = new THREE.Mesh(new THREE.CylinderGeometry(0.355, 0.36, 0.05, 18), hutBandMat);
+  band.position.y = 0.045;
+  krempe.castShadow = true;
+  krone.castShadow = true;
+  hut.add(krempe, krone, band);
+  hut.position.set(0, 2.41, -0.02);
+  hut.rotation.set(-0.08, 0, -0.06);
+
   const rumpf = new THREE.Mesh(new THREE.CylinderGeometry(0.34, 0.4, 1.0, 12), jacke);
   rumpf.position.y = 1.25;
   rumpf.castShadow = true;
-  const beinL = new THREE.Mesh(new THREE.CylinderGeometry(0.13, 0.15, 0.8, 8), hose);
-  beinL.position.set(-0.16, 0.4, 0);
-  beinL.castShadow = true;
-  const beinR = beinL.clone();
-  beinR.position.x = 0.16;
-  beinR.castShadow = true;
+
+  // Gemütlicher Schal am Kragen
+  const schal = new THREE.Mesh(new THREE.TorusGeometry(0.31, 0.075, 8, 18), schalMat);
+  schal.rotation.x = Math.PI / 2;
+  schal.position.y = 1.73;
+
+  // Bein-Gruppen mit Drehpunkt oben an der Hüfte (y = 0.8 statt Mitte/Knie)
+  const baueBein = (x) => {
+    const bein = new THREE.Group();
+    bein.position.set(x, 0.8, 0);
+    const rohr = new THREE.Mesh(new THREE.CylinderGeometry(0.13, 0.15, 0.76, 8), hose);
+    rohr.position.y = -0.38;
+    rohr.castShadow = true;
+    const schuh = new THREE.Mesh(new THREE.BoxGeometry(0.22, 0.14, 0.32), schuhMat);
+    schuh.position.set(0, -0.73, 0.06);
+    schuh.castShadow = true;
+    bein.add(rohr, schuh);
+    return bein;
+  };
+  const beinL = baueBein(-0.16);
+  const beinR = baueBein(0.16);
   g.userData.beinL = beinL;
   g.userData.beinR = beinR;
+
   // Warmer Helm-Ring, damit man ihn im Dunkeln findet
   const ring = new THREE.Mesh(
     new THREE.TorusGeometry(0.62, 0.045, 8, 28),
@@ -1373,7 +1414,7 @@ function baueFigur() {
   );
   ring.rotation.x = Math.PI / 2;
   ring.position.y = 0.12;
-  g.add(kopf, rumpf, beinL, beinR, ring);
+  g.add(kopf, hut, rumpf, schal, beinL, beinR, ring);
   // Dev-Marker: markante, dicke senkrechte 55-m-Säule an den Füßen — hängt als Child an
   // der Charakter-Gruppe und bewegt sich damit automatisch mit (auch indoor).
   const devLineGeo = new THREE.CylinderGeometry(0.30, 0.30, 55, 8);
