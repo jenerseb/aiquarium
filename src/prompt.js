@@ -125,7 +125,17 @@ function hatHandy(db, characterId) {
   return r && Number(r.count) > 0;
 }
 
-function buecherText(db, daheim = true) {
+function tagesLimitsFuer(db, characterId, jetztMs = Date.now()) {
+  try {
+    const arbiter = require('./arbiter');
+    return {
+      webSearchHeute: arbiter.hatTagesLimit(db, characterId, 'web_search', jetztMs),
+      lexikonHeute: arbiter.hatTagesLimit(db, characterId, 'stadtlexikon', jetztMs),
+    };
+  } catch { return { webSearchHeute: false, lexikonHeute: false }; }
+}
+
+function buecherText(db, daheim = true, lexikonHeute = false) {
   let buecher = [];
   try {
     buecher = db.prepare('SELECT id, title, kind, entries_json FROM books').all();
@@ -135,7 +145,11 @@ function buecherText(db, daheim = true) {
   const a = ['Regal daheim (nur in apartment):'];
   for (const b of buecher) {
     if (b.id === 'stadtlexikon') {
-      a.push(`- „${b.title}“ (stadtlexikon – liefert bei read_book mit Thema/detail immer frische Infos zu Orten & Unternehmungen)`);
+      if (lexikonHeute) {
+        a.push(`- „${b.title}“ (stadtlexikon – heute schon gelesen, erst morgen wieder)`);
+      } else {
+        a.push(`- „${b.title}“ (stadtlexikon – liefert bei read_book mit Thema/detail immer frische Infos zu Orten & Unternehmungen)`);
+      }
       continue;
     }
     let eintraege = [];
@@ -171,9 +185,14 @@ function hatAktivenJob(db, characterId) {
   } catch { return false; }
 }
 
-function whitelistFuer(db, characterId, orte, ch = null) {
+function whitelistFuer(db, characterId, orte, ch = null, jetztMs = Date.now()) {
+  const { webSearchHeute, lexikonHeute } = tagesLimitsFuer(db, characterId, jetztMs);
   let liste = OFFENE_INTENTS.filter((a) => !['send_sms', 'send_email', 'web_search'].includes(a));
-  if (hatHandy(db, characterId)) liste.push('send_sms', 'send_email', 'web_search');
+  if (hatHandy(db, characterId)) {
+    liste.push('send_sms', 'send_email');
+    if (!webSearchHeute) liste.push('web_search');
+  }
+  if (lexikonHeute) liste = liste.filter((a) => a !== 'read_book');
   if (ch) {
     const hatJob = hatAktivenJob(db, characterId);
     const pfand = hatPfand(db, characterId);
@@ -207,11 +226,14 @@ function orteText(orte, db = null) {
   return a.join('\n');
 }
 
-function kommunikationsRegel(mitHandy) {
+function kommunikationsRegel(mitHandy, webSearchHeute = false) {
   const basis = 'WICHTIG: Du kannst mit keinem Menschen sprechen – niemand hoert dich. '
     + 'Deine einzige Stimme nach aussen sind geschriebene Zettel: lege mit leave_note einen Zettel an einem Ort ab '
     + '(z. B. eine Bewerbung als Spuelhilfe im Otzentreff).';
   if (mitHandy) {
+    if (webSearchHeute) {
+      return basis + ' Du hast ein Handy: damit darfst du send_sms und send_email schreiben (web_search heute schon genutzt, erst morgen wieder).';
+    }
     return basis + ' Du hast ein Handy: damit darfst du auch send_sms und send_email schreiben sowie per web_search etwas nachschlagen.';
   }
   return basis + ' SMS, E-Mail und Websuche gehen erst, wenn du irgendwo ein Handy findest oder kaufst – bis dahin nur Zettel.';
@@ -248,7 +270,9 @@ function buildPrompt(db, ch, ctx) {
   });
   const handy = hatHandy(db, ch.id);
   const daheim = ch.inside_poi === 'apartment';
-  const wl = whitelistFuer(db, ch.id, c.orte, ch);
+  const jetztMs = c.jetztMs || Date.now();
+  const { webSearchHeute, lexikonHeute } = tagesLimitsFuer(db, ch.id, jetztMs);
+  const wl = whitelistFuer(db, ch.id, c.orte, ch, jetztMs);
   const wo = c.woText || `Du bist ${c.woName || 'unterwegs'}.`;
   const zeit = c.zeitText || 'Es ist Tag in Hamburg.';
   const wetter = c.wetterText || '';
@@ -260,6 +284,8 @@ function buildPrompt(db, ch, ctx) {
   if (Number(ch.hunger) < 55 && Number(ch.erschoepfung) < 50) {
     regelnExtra.push('Du bist fit: geh raus, erkunde neue Ecken (explore_street) oder unternimm an einem Ort etwas Konkretes (do_activity, z. B. passend zur Ortsbeschreibung).');
   }
+  if (lexikonHeute) regelnExtra.push('Das Stadtlexikon hast du heute schon gelesen – erst morgen wieder.');
+  if (webSearchHeute) regelnExtra.push('Du hast heute schon einmal gegoogelt (web_search) – erst morgen wieder.');
   const letzteGedanken = Array.isArray(c.recentThoughts) && c.recentThoughts.length > 0
     ? ['Letzte Gedanken (NICHT wiederholen, denk an neue Handlungen/Ziele):', ...c.recentThoughts.map((t) => `- ${t}`), '']
     : [];
@@ -291,7 +317,7 @@ function buildPrompt(db, ch, ctx) {
     loopsText(db, ch.id),
     '',
     inventarText(db, ch.id),
-    buecherText(db, daheim),
+    buecherText(db, daheim, lexikonHeute),
     '',
     'ORT & ZEIT:',
     wo,
@@ -302,7 +328,7 @@ function buildPrompt(db, ch, ctx) {
     '',
     orteText(wl.orte, db),
     '',
-    kommunikationsRegel(handy),
+    kommunikationsRegel(handy, webSearchHeute),
     'Keine Beträge oder Prozentwerte nennen – die rechnet die Welt.',
     ...regelnExtra,
     '',

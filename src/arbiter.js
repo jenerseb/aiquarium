@@ -355,6 +355,25 @@ function markiereKonsolidiert(db, datumStr) {
   db.prepare('INSERT INTO world_state (id, last_nightly_date) VALUES (1, ?) ON CONFLICT(id) DO UPDATE SET last_nightly_date = excluded.last_nightly_date').run(datumStr);
 }
 
+function hatTagesLimit(db, characterId, key, jetztMs) {
+  try {
+    const datum = berlinDatum(jetztMs);
+    const row = db.prepare('SELECT payload_json FROM events WHERE character_id = ? AND type = ? ORDER BY id DESC LIMIT 1')
+      .get(characterId, 'daily_limit_' + key);
+    if (!row) return false;
+    const p = JSON.parse(row.payload_json || '{}');
+    return p.datum === datum;
+  } catch { return false; }
+}
+
+function markiereTagesLimit(db, characterId, key, jetztMs) {
+  try {
+    const datum = berlinDatum(jetztMs);
+    db.prepare('INSERT INTO events (character_id, tick, type, payload_json, in_feed) VALUES (?, 0, ?, ?, 0)')
+      .run(characterId, 'daily_limit_' + key, JSON.stringify({ datum }));
+  } catch { /* egal */ }
+}
+
 
 async function runNightlyConsolidation(db, brain, characterId, tagesLog, jetztMs) {
   const datum = berlinDatum(jetztMs);
@@ -524,6 +543,7 @@ module.exports = {
   aktiverJob, nimmJobAn, gebeStrike, kuendige, pruefeInaktivitaet, rechneSchichtAb,
   bewerteBewerbungen,
   berlinDatum, schonKonsolidiert, markiereKonsolidiert, runNightlyConsolidation,
+  hatTagesLimit, markiereTagesLimit,
 };
 
 

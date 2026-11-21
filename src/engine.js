@@ -292,16 +292,14 @@ function waehleExploreZiel(db, karte, ch) {
 // Route starten: A* über die unsichtbaren Hauseingangspunkte auf der nächsten Strasse.
 // So verlässt/betritt die Figur Gebäude immer über den nächsten Straßenpunkt,
 // folgt allen Gehwegen/Ecken und läuft niemals diagonal durch Häuserblöcke.
-function zufallsPunktImPark(parks, x, z) {
-  const park = pf.parkFuerPunkt(parks, x, z);
-  const poly = park && park.polygon;
+function zufallsPunktImPolygon(poly, x, z, faktor = 0.66) {
   if (!Array.isArray(poly) || poly.length < 3) return { x, z };
   let sx = 0, sz = 0;
   for (const [px, pz] of poly) { sx += px; sz += pz; }
   const cx = sx / poly.length;
   const cz = sz / poly.length;
-  // Auf innere 66 % um den Schwerpunkt schrumpfen → sicher weg von Rand, Straßen & Gebäuden
-  const inner = poly.map(([px, pz]) => [cx + (px - cx) * 0.66, cz + (pz - cz) * 0.66]);
+  // Auf innere 66 % um den Schwerpunkt schrumpfen → sicher weg von Rand, Wänden & Straßen
+  const inner = poly.map(([px, pz]) => [cx + (px - cx) * faktor, cz + (pz - cz) * faktor]);
   let minX = Infinity, maxX = -Infinity, minZ = Infinity, maxZ = -Infinity;
   for (const [px, pz] of inner) {
     if (px < minX) minX = px; if (px > maxX) maxX = px;
@@ -310,7 +308,9 @@ function zufallsPunktImPark(parks, x, z) {
   for (let i = 0; i < 12; i += 1) {
     const rx = minX + Math.random() * (maxX - minX);
     const rz = minZ + Math.random() * (maxZ - minZ);
-    if (pf.punktInPolygon(rx, rz, inner)) return { x: Math.round(rx * 10) / 10, z: Math.round(rz * 10) / 10 };
+    if (pf.punktInPolygon(rx, rz, inner) && pf.punktInPolygon(rx, rz, poly)) {
+      return { x: Math.round(rx * 10) / 10, z: Math.round(rz * 10) / 10 };
+    }
   }
   if (pf.punktInPolygon(cx, cz, poly)) return { x: Math.round(cx * 10) / 10, z: Math.round(cz * 10) / 10 };
   return { x, z };
@@ -325,13 +325,20 @@ function starteRoute(db, karte, ch, zielX, zielZ, zielPoi, erzwingeZielPunkt = f
   if (navGraph && zielPoi) {
     const ziel = db.prepare('SELECT id, category, pos_x, pos_z FROM pois WHERE id = ?').get(zielPoi);
     if (ziel) {
+      const zx = Number(ziel.pos_x);
+      const zz = Number(ziel.pos_z);
       if (ziel.category === 'park') {
-        const pt = zufallsPunktImPark(parks, Number(ziel.pos_x), Number(ziel.pos_z));
+        const park = pf.parkFuerPunkt(parks, zx, zz);
+        const pt = zufallsPunktImPolygon(park && park.polygon, zx, zz);
         tx = pt.x;
         tz = pt.z;
       } else {
-        tx = Number(ziel.pos_x);
-        tz = Number(ziel.pos_z);
+        const geb = (karte.buildings || []).find(
+          (b) => Array.isArray(b.footprint) && b.footprint.length >= 3 && pf.punktInPolygon(zx, zz, b.footprint)
+        );
+        const pt = zufallsPunktImPolygon(geb && geb.footprint, zx, zz);
+        tx = pt.x;
+        tz = pt.z;
       }
       mitZielPunkt = true;
     }
@@ -439,7 +446,7 @@ async function fuehreSchrittAus(db, deps, characterId, schritt, jetztMs) {
       else notizen.length = 0;
       return { ok: true, notizen, charakter: ch, unterwegs: true, restM: schritt.restM };
     } else {
-      const ende = ziel.category === 'park' && meta && Array.isArray(meta.route) && meta.route.length > 0
+      const ende = meta && Array.isArray(meta.route) && meta.route.length > 0
         ? meta.route[meta.route.length - 1]
         : null;
       ch.pos_x = ende ? Number(ende.x) : Number(ziel.pos_x);
@@ -670,7 +677,7 @@ async function fuehreSchrittAusTeil2(db, deps, characterId, schritt) {
 
 // --- Buecher/Projekt/SMS + Dispatcher ------------------------------------------------
 
-async function fuehreSchrittAusTeil3(db, deps, characterId, schritt) {
+async function fuehreSchrittAusTeil3(db, deps, characterId, schritt, jetztMs) {
   let ch = ladeCharakter(db, characterId);
   const notizen = [];
   const action = schritt.action;
@@ -693,11 +700,15 @@ async function fuehreSchrittAusTeil3(db, deps, characterId, schritt) {
       try { eintraege = JSON.parse(buch.entries_json); } catch { eintraege = []; }
       let e;
       if (buch.id === 'stadtlexikon') {
+        if (arbiter.hatTagesLimit(db, characterId, 'stadtlexikon', jetztMs)) {
+          return { ok: false, grund: 'lexikon_heute_schon_gelesen', notizen: ['Das Stadtlexikon hast du heute schon gelesen – erst morgen wieder.'] };
+        }
         e = await arbiter.fragLexikon(db, deps.brain, detail);
         const liste = Array.isArray(eintraege) ? eintraege : [];
         liste.push(e);
         if (liste.length > 20) liste.splice(0, liste.length - 20);
         db.prepare("UPDATE books SET entries_json = ? WHERE id = 'stadtlexikon'").run(JSON.stringify(liste));
+        arbiter.markiereTagesLimit(db, characterId, 'stadtlexikon', jetztMs);
       } else {
         e = eintraege.find((x) =>
           (x.topic && dLow.includes(String(x.topic).toLowerCase())) ||
@@ -775,6 +786,9 @@ async function fuehreSchrittAusTeil3(db, deps, characterId, schritt) {
     notizen.push('Du hast dir am Späti ein gebrauchtes Smartphone für 50 Euro gekauft! Jetzt kannst du SMS und E-Mails schreiben.');
     lasseZeitVergehen(ch, dauerFuer(schritt));
   } else if (action === 'send_sms' || action === 'send_email' || action === 'web_search' || action === 'quit_job') {
+    if (action === 'web_search' && arbiter.hatTagesLimit(db, characterId, 'web_search', jetztMs)) {
+      return { ok: false, grund: 'web_search_heute_schon_genutzt', notizen: ['Du hast heute schon einmal im Web gesucht – erst morgen wieder.'] };
+    }
     if ((action === 'send_sms' || action === 'send_email' || action === 'web_search') && deps.telegram && typeof deps.telegram.sendeNachricht === 'function') {
       try { await deps.telegram.sendeNachricht(db, { character_id: characterId, channel: action, content: detail }); } catch { /* loggen, nicht crashen */ }
     }
@@ -785,6 +799,7 @@ async function fuehreSchrittAusTeil3(db, deps, characterId, schritt) {
         notizen.push(`Du hast als ${job.role_title} gekuendigt.`);
       } else notizen.push('Du hast gerade keinen Job zum Kuendigen.');
     } else {
+      if (action === 'web_search') arbiter.markiereTagesLimit(db, characterId, 'web_search', jetztMs);
       notizen.push(action === 'web_search' ? 'Du hast etwas nachgeschlagen.' : 'Nachricht abgeschickt – Antwort kommt vielleicht per Telegram.');
     }
     lasseZeitVergehen(ch, dauerFuer(schritt));
@@ -806,7 +821,7 @@ async function schrittAusfuehren(db, deps, characterId, schritt, jetztMs) {
   }
   const r2 = await fuehreSchrittAusTeil2(db, deps, characterId, schritt);
   if (r2.ok || r2.grund !== 'unbekannt_teil2') return r2;
-  return fuehreSchrittAusTeil3(db, deps, characterId, schritt);
+  return fuehreSchrittAusTeil3(db, deps, characterId, schritt, jetztMs);
 }
 
 
@@ -866,6 +881,7 @@ async function holeNeuenPlanMitMeta(db, deps, characterId, jetztMs) {
   }
   const ctx = {
     orte,
+    jetztMs,
     woName: ch.inside_poi ? (db.prepare('SELECT name FROM pois WHERE id = ?').get(ch.inside_poi) || {}).name || ch.inside_poi : 'draussen unterwegs',
     woText: ch.inside_poi ? `Du bist bei ${ch.inside_poi}.` : 'Du bist draussen unterwegs.',
     zeitText: tageszeitText(jetztMs),
@@ -1082,11 +1098,14 @@ function speichereLaufendeAktion(db, ch, timer) {
     .run(ch.action_meta_json, ch.action_duration_s, ch.current_action, ch.id);
 }
 
-function kannAktionStarten(db, ch, schritt) {
+function kannAktionStarten(db, ch, schritt, jetztMs = Date.now()) {
   const a = schritt.action;
   if (a === 'consume' && Number(ch.hunger) < 20) return false;
   if (a === 'sleep' && (ch.inside_poi !== 'apartment' || Number(ch.erschoepfung) < 50)) return false;
   if ((a === 'read_book' || a === 'write_notebook') && ch.inside_poi !== 'apartment') return false;
+  if (a === 'web_search' && arbiter.hatTagesLimit(db, ch.id, 'web_search', jetztMs)) return false;
+  if (a === 'read_book' && arbiter.hatTagesLimit(db, ch.id, 'stadtlexikon', jetztMs)
+    && !String(schritt.detail || '').toLowerCase().includes('notizbuch')) return false;
   if ((a === 'buy_item' || a === 'return_deposit') && ch.inside_poi !== 'spaeti') return false;
   if (a === 'buy_item' && Number(ch.geld) < 50) return false;
   if (a === 'visit_doctor' && Number(ch.geld) < ECONOMY.arztKosten) return false;
@@ -1209,7 +1228,7 @@ async function tick(db, deps, characterId, jetztMs) {
     schritt = queue.shift();
     if (!schritt) return { ok: false, grund: 'leerer_plan', notizen: [] };
     speichereQueue(db, ch, queue, snapshot);
-    if (deps.echtzeit && schritt.action !== 'walk_to' && schritt.action !== 'explore_street' && kannAktionStarten(db, ch, schritt)) {
+    if (deps.echtzeit && schritt.action !== 'walk_to' && schritt.action !== 'explore_street' && kannAktionStarten(db, ch, schritt, jetztMs)) {
       const durationS = echtzeitDauerFuer(db, ch, schritt);
       if (durationS > 0) {
         const poiId = schritt.target || ch.inside_poi || null;
