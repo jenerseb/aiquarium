@@ -1508,6 +1508,12 @@ function baueFigur() {
   g.userData.handy = handy;
   g.userData.handyLicht = handyLicht;
   g.add(handy, handyLicht);
+  // Blauer 3D-Pfeil über dem Charakter (nur im Fern/Kiez-View, auf gleicher Höhe wie POI-Pins, ohne Linie/Text)
+  const figPfeil = pinMesh(0x4da6ff, 1.0);
+  figPfeil.position.y = 15;
+  figPfeil.visible = false;
+  g.userData.figPfeil = figPfeil;
+  g.add(figPfeil);
   // Dev-Marker: markante, dicke senkrechte 55-m-Säule an den Füßen — hängt als Child an
   // der Charakter-Gruppe und bewegt sich damit automatisch mit (auch indoor).
   const devLineGeo = new THREE.CylinderGeometry(0.30, 0.30, 55, 8);
@@ -1730,6 +1736,14 @@ function pinsSchweben(nowMs) {
       pin.position.y = baseY + Math.sin(nowMs * 0.0032 + phase) * 1.1;
     } else {
       pin.position.y = baseY + Math.sin(nowMs * 0.0022 + phase) * 0.6;
+    }
+  }
+  if (Z.figur && Z.figur.userData.figPfeil) {
+    const pfeil = Z.figur.userData.figPfeil;
+    pfeil.visible = Z.modus === 'overview';
+    if (pfeil.visible) {
+      const h = gebaeudeHoeheBei(Z.figur.position.x, Z.figur.position.z) + 4.5;
+      pfeil.position.y = h + Math.sin(nowMs * 0.0028) * 0.8;
     }
   }
 }
@@ -2291,6 +2305,13 @@ function blasePositionieren() {
 let gehirnTab = 'kopf';
 
 function bindeGehirn() {
+  if ($('btnNord')) {
+    $('btnNord').addEventListener('click', () => {
+      const cam = Z.modus === 'pilot' ? Z.pilot : Z.over;
+      const norm = Math.atan2(Math.sin(cam.theta), Math.cos(cam.theta));
+      nordAnim = { startTheta: cam.theta, zielTheta: cam.theta - norm, t: 0, modus: Z.modus };
+    });
+  }
   $('btnGehirn').addEventListener('click', async () => {
     $('gehirn').hidden = false;
     await gehirnLaden();
