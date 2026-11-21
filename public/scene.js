@@ -1404,7 +1404,7 @@ function hudAktualisieren() {
   balken('bHunger', 'nHunger', Number(ch.hunger) || 0, 100);
   balken('bMued', 'nMued', Number(ch.erschoepfung) || 0, 100);
   $('bGeld').style.width = `${Math.max(2, Math.min(100, (Number(ch.geld) || 0) / 1.2))}%`;
-  $('nGeld').textContent = `${(Number(ch.geld) || 0).toFixed(2)} €`;
+  $('nGeld').textContent = `${Math.round(Number(ch.geld) || 0)} €`;
   // Chunk-Markierung (20 %): senkrechte Striche auf der Gesund-Schiene
   const schiene = $('sGesund');
   if (!schiene.dataset.chunks) {

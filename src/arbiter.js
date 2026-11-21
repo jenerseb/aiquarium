@@ -13,12 +13,12 @@ function klammere(wert, min, max) {
 }
 
 function runde2(x) {
-  return Math.round(Number(x) * 100) / 100;
+  return Math.round(Number(x) || 0);
 }
 
 function preisGrenzenFuer(kategorie) {
   if (ECONOMY.priceBounds[kategorie]) return ECONOMY.priceBounds[kategorie];
-  return [1.0, 12.0];
+  return [1, 12];
 }
 
 // --- Angebote lesen / schreiben --------------------------------------------------
@@ -89,7 +89,7 @@ async function arbiterLLM(brain, poi, kind, wunschText, db, characterId) {
     'Du bist der nuechterne Welt-Arbiter eines Kiez-Spiels in Hamburg-St. Pauli.',
     `Ort: ${poi ? `${poi.name} (${poi.category})` : 'unbekannt'}: ${poi ? poi.public_desc : ''}`,
     `Spielerwunsch (${kind}): „${wunschText}“`,
-    `Preisrahmen fuer diese Kategorie: ${pMin.toFixed(2)} bis ${pMax.toFixed(2)} Euro.`,
+    `Preisrahmen fuer diese Kategorie: ${pMin} bis ${pMax} Euro (nur ganze Euro-Betraege).`,
     'Antworte NUR als JSON: { "plausibel": true/false, "label": "kurzer Name", "price": zahl,',
     ' "hunger_delta": -50..-5 (nur consume, sonst 0), "erschoepfung_delta": 2..15 bei Aktivitaet,',
     ' "froh_delta": -8..16, "narrative": "ein Satz" }. Unplausibles -> plausibel:false.',
@@ -212,81 +212,23 @@ function rechneSchichtAb(db, characterId, job, ch) {
   const krank = Number(ch.gesund) < 20 || Number(ch.erschoepfung) > 90;
   const lohn = Number(job.wage_per_shift) || 10;
   if (krank) {
-    const halber = runde2(lohn / 2);
+    const halber = Math.max(1, runde2(lohn / 2));
     db.prepare('UPDATE character SET geld = geld + ? WHERE id = ?').run(halber, characterId);
     const j = gebeStrike(db, job.id, 'krank_oder_erschoepft');
     db.prepare('UPDATE jobs SET shifts_completed = shifts_completed + 1, last_worked_at = datetime(\'now\') WHERE id = ?').run(job.id);
     if (Number(j.strikes) >= 2) {
       kuendige(db, job.id, 'strikes');
-      db.prepare("INSERT INTO memories (character_id, tier, kind, text, initial_weight, worth) VALUES (?, 'short', 'moment', ?, 5.0, 5.0)")
-        .run(characterId, `Gekuendigt bei ${job.poi_id}: zu oft krank oder erschoepft zur Schicht erschienen. Das sitzt.`);
+      require('./memory').speichereMemory(db, characterId, {
+        tier: 'short', kind: 'moment',
+        text: `Gekuendigt bei ${job.poi_id}: zu oft krank oder erschoepft zur Schicht erschienen. Das sitzt.`,
+        initial_weight: 5.0,
+      });
       return { abgebrochen: true, lohn: halber, strikes: Number(j.strikes), gekuendigt: true };
     }
     return { abgebrochen: true, lohn: halber, strikes: Number(j.strikes), gekuendigt: false };
   }
   db.prepare('UPDATE character SET geld = geld + ? WHERE id = ?').run(runde2(lohn), characterId);
   db.prepare('UPDATE jobs SET shifts_completed = shifts_completed + 1, last_worked_at = datetime(\'now\') WHERE id = ?').run(job.id);
-  return { abgebrochen: false, lohn: runde2(lohn), strikes: Number(job.strikes) || 0, gekuendigt: false };
-}
-
-
-// --- Jobs ----------------------------------------------------------------------
-
-function aktiverJob(db, characterId) {
-  return db.prepare("SELECT * FROM jobs WHERE character_id = ? AND status = 'active' ORDER BY id DESC LIMIT 1").get(characterId) || null;
-}
-
-function nimmJobAn(db, characterId, poiId, rolle, lohn) {
-  const lohnGeklammert = runde2(klammere(Number(lohn) || 10, ECONOMY.wageBounds[0], ECONOMY.wageBounds[1]));
-  const alt = aktiverJob(db, characterId);
-  if (alt) return { ok: false, grund: 'bereits_beschaeftigt', job: alt };
-  const r = db.prepare(
-    "INSERT INTO jobs (character_id, poi_id, role_title, wage_per_shift, strikes, shifts_completed, status) VALUES (?, ?, ?, ?, 0, 0, 'active')"
-  ).run(characterId, poiId, rolle, lohnGeklammert);
-  return { ok: true, job: db.prepare('SELECT * FROM jobs WHERE id = ?').get(Number(r.lastInsertRowid)) };
-}
-
-function gebeStrike(db, jobId) {
-  db.prepare('UPDATE jobs SET strikes = strikes + 1 WHERE id = ?').run(jobId);
-  return db.prepare('SELECT * FROM jobs WHERE id = ?').get(jobId);
-}
-
-function kuendige(db, jobId) {
-  db.prepare("UPDATE jobs SET status = 'fired' WHERE id = ?").run(jobId);
-  return db.prepare('SELECT * FROM jobs WHERE id = ?').get(jobId);
-}
-
-function pruefeInaktivitaet(db, characterId, jetztMs) {
-  const job = aktiverJob(db, characterId);
-  if (!job || !job.last_worked_at) return { job, gekuendigt: false };
-  const letzte = Date.parse(String(job.last_worked_at).replace(' ', 'T') + 'Z');
-  if (!Number.isFinite(letzte)) return { job, gekuendigt: false };
-  const tage = ((jetztMs || Date.now()) - letzte) / 86400000;
-  if (tage > 3) {
-    const j = kuendige(db, job.id);
-    return { job: j, gekuendigt: true, grund: 'inaktiv_seit_' + Math.floor(tage) + '_tagen' };
-  }
-  return { job, gekuendigt: false };
-}
-
-function rechneSchichtAb(db, characterId, job, ch) {
-  const krank = Number(ch.gesund) < 20 || Number(ch.erschoepfung) > 90;
-  const lohn = Number(job.wage_per_shift) || 10;
-  if (krank) {
-    const halber = runde2(lohn / 2);
-    db.prepare('UPDATE character SET geld = geld + ? WHERE id = ?').run(halber, characterId);
-    const j = gebeStrike(db, job.id);
-    db.prepare("UPDATE jobs SET shifts_completed = shifts_completed + 1, last_worked_at = datetime('now') WHERE id = ?").run(job.id);
-    if (Number(j.strikes) >= 2) {
-      kuendige(db, job.id);
-      db.prepare("INSERT INTO memories (character_id, tier, kind, text, initial_weight, worth) VALUES (?, 'short', 'moment', ?, 5.0, 5.0)")
-        .run(characterId, 'Gekuendigt: zu oft krank oder erschoepft zur Schicht erschienen. Das sitzt.');
-      return { abgebrochen: true, lohn: halber, strikes: Number(j.strikes), gekuendigt: true };
-    }
-    return { abgebrochen: true, lohn: halber, strikes: Number(j.strikes), gekuendigt: false };
-  }
-  db.prepare('UPDATE character SET geld = geld + ? WHERE id = ?').run(runde2(lohn), characterId);
-  db.prepare("UPDATE jobs SET shifts_completed = shifts_completed + 1, last_worked_at = datetime('now') WHERE id = ?").run(job.id);
   return { abgebrochen: false, lohn: runde2(lohn), strikes: Number(job.strikes) || 0, gekuendigt: false };
 }
 
@@ -312,8 +254,11 @@ function bewerteBewerbungen(db, telegram) {
         db.prepare("UPDATE messages_outbox SET status = 'resolved' WHERE id = ?").run(z.id);
         db.prepare("INSERT INTO events (character_id, tick, type, payload_json, in_feed) VALUES (?, 0, 'job_offer', ?, 1)")
           .run(z.character_id, JSON.stringify({ poi_id: poi.id, rolle, lohn }));
-        db.prepare("INSERT INTO memories (character_id, tier, kind, text, initial_weight, worth) VALUES (?, 'short', 'moment', ?, 5.0, 5.0)")
-          .run(z.character_id, 'Zusage als ' + rolle + ' bei ' + poi.name + '. Der Zettel hat gewirkt.');
+        require('./memory').speichereMemory(db, z.character_id, {
+          tier: 'short', kind: 'moment',
+          text: 'Zusage als ' + rolle + ' bei ' + poi.name + '. Der Zettel hat gewirkt.',
+          initial_weight: 5.0,
+        });
         ergebnisse.push({ zettelId: z.id, angenommen: true, rolle, lohn });
       } else {
         db.prepare("UPDATE messages_outbox SET status = 'resolved' WHERE id = ?").run(z.id);

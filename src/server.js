@@ -226,6 +226,7 @@ function erstelleServer() {
   return http.createServer(async (req, res) => {
     try {
       const url = new URL(req.url, 'http://localhost');
+      if (url.pathname === '/api/health' && req.method === 'GET') return json(res, 200, { ok: true, service: 'aiquarium' });
       if (url.pathname === '/api/state' && req.method === 'GET') return json(res, 200, apiState());
       if (url.pathname === '/api/brain' && req.method === 'GET') return json(res, 200, apiBrain());
       if ((url.pathname === '/api/map' || url.pathname === '/kiez-map.json' || url.pathname === '/kiez_map.json') && req.method === 'GET') return json(res, 200, apiMap());

@@ -44,13 +44,13 @@ function erschoepfungGefuehl(wert) {
 }
 
 function geldGefuehl(geld) {
-  const g = Number(geld);
-  if (g >= 50) return `Du hast ${g.toFixed(2)} Euro dabei – das reicht für eine entspannte Mahlzeit und noch etwas obendrauf.`;
-  if (g >= 25) return `Du hast ${g.toFixed(2)} Euro dabei – das reicht für eine ordentliche warme Mahlzeit oder zwei kleine Einkäufe.`;
-  if (g >= 12) return `Du hast ${g.toFixed(2)} Euro dabei – das reicht für eine einfache Mahlzeit beim Imbiss oder ein Getränk in der Kneipe, aber nicht für viel mehr.`;
-  if (g >= 5) return `Du hast ${g.toFixed(2)} Euro dabei – das reicht höchstens für einen Kaffee oder einen kleinen Snack am Kiosk.`;
-  if (g >= 1) return `Du hast ${g.toFixed(2)} Euro dabei – das reicht kaum für das Nötigste. Jede Ausgabe zählt doppelt.`;
-  return 'Du hast praktisch kein Geld mehr. Du musst sparsam über jeden Cent nachdenken oder erst etwas verdienen bzw. Pfand abgeben.';
+  const g = Math.round(Number(geld) || 0);
+  if (g >= 50) return `Du hast ${g} Euro dabei – das reicht für eine entspannte Mahlzeit und noch etwas obendrauf.`;
+  if (g >= 25) return `Du hast ${g} Euro dabei – das reicht für eine ordentliche warme Mahlzeit oder zwei kleine Einkäufe.`;
+  if (g >= 12) return `Du hast ${g} Euro dabei – das reicht für eine einfache Mahlzeit beim Imbiss oder ein Getränk in der Kneipe, aber nicht für viel mehr.`;
+  if (g >= 5) return `Du hast ${g} Euro dabei – das reicht höchstens für einen Kaffee oder einen kleinen Snack am Kiosk.`;
+  if (g >= 1) return `Du hast ${g} Euro dabei – das reicht kaum für das Nötigste. Jede Ausgabe zählt doppelt.`;
+  return 'Du hast praktisch kein Geld mehr. Du musst sparsam über jeden Euro nachdenken oder erst etwas verdienen bzw. Pfand abgeben.';
 }
 
 function koerperSaetze(ch) {
@@ -122,9 +122,11 @@ function buecherText(db) {
   if (buecher.length === 0) return 'In deinem Regal daheim: gerade nichts – das Regal ist leer.';
   const a = ['In deinem Regal daheim stehen (nur hier in der Wohnung kannst du darin lesen):'];
   for (const b of buecher) {
-    let n = 0;
-    try { n = JSON.parse(b.entries_json).length; } catch { n = 0; }
-    a.push(`- „${b.title}“ (${b.kind}, ${n} Eintraege)`);
+    let eintraege = [];
+    try { eintraege = JSON.parse(b.entries_json); } catch { eintraege = []; }
+    const themen = eintraege.map((e) => e.topic || e.title).filter(Boolean).slice(0, 8);
+    const themenTxt = themen.length > 0 ? `: ${themen.join(', ')}` : '';
+    a.push(`- „${b.title}“ (id: ${b.id}, ${b.kind}, ${eintraege.length} Eintraege${themenTxt})`);
   }
   return a.join('\n');
 }
@@ -134,7 +136,7 @@ function buecherText(db) {
 const OFFENE_INTENTS = [
   'walk_to', 'explore_street', 'consume', 'do_activity', 'leave_note',
   'send_sms', 'send_email', 'web_search', 'collect_deposit', 'return_deposit', 'buy_item',
-  'look_for_work', 'take_job', 'work_shift', 'quit_job', 'rest', 'sleep',
+  'work_shift', 'quit_job', 'rest', 'sleep',
   'visit_doctor', 'read_book', 'write_notebook', 'work_on_project',
 ];
 
@@ -225,6 +227,7 @@ function buildPrompt(db, ch, ctx) {
     '',
     'ANTWORTE AUSSCHLIESSLICH ALS JSON (kein anderer Text):',
     '{ "thought": "ein Satz, was dir gerade durch den Kopf geht (max. 20 Wörter)",',
+    '  "why_here": "kurzer Grund für diesen Plan (was du gerade vorhast)",',
     '  "retrospective": "ein kurzer Rückblick auf deinen letzten Plan (was geklappt hat, was nicht)",',
     '  "plan": [ {"action": "intent", "target": "poi_id oder null", "detail": "freier Wunschtext"} x 2 bis 4 Schritte ] }',
     'Erlaubte intents: ' + wl.intents.join(', ') + '.',

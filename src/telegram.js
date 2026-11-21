@@ -44,8 +44,9 @@ async function sendeNachricht(db, nachricht) {
   const res = await sendeAnTelegram(text);
   if (res.ok && res.message_id) {
     try {
+      const neuStatus = nachricht.channel === 'leave_note' ? (nachricht.status || 'pending') : 'sent';
       db.prepare('UPDATE messages_outbox SET telegram_msg_id = ?, status = ? WHERE id = ?')
-        .run(res.message_id, 'sent', nachricht.id);
+        .run(res.message_id, neuStatus, nachricht.id);
     } catch { /* outbox-eintrag evtl. nur virtuell */ }
   }
   return res;
@@ -116,7 +117,9 @@ function hatAntwortFuer(db, zettelId) {
   try {
     const z = db.prepare('SELECT * FROM messages_outbox WHERE id = ?').get(zettelId);
     if (!z || !z.telegram_msg_id) return false;
-    const treffer = db.prepare("SELECT id FROM events WHERE type = 'telegram_msg' AND id > ? LIMIT 1").get(z.id);
+    const treffer = db.prepare(
+      "SELECT id FROM events WHERE character_id = ? AND type = 'telegram_msg' AND created_at >= ? LIMIT 1"
+    ).get(z.character_id, z.created_at);
     return Boolean(treffer);
   } catch {
     return false;

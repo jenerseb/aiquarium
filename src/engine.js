@@ -53,7 +53,7 @@ function klammereCharakter(ch) {
   ch.froh = Math.max(-100, Math.min(100, Number(ch.froh) || 0));
   ch.hunger = Math.max(0, Math.min(100, Number(ch.hunger) || 0));
   ch.erschoepfung = Math.max(0, Math.min(100, Number(ch.erschoepfung) || 0));
-  ch.geld = Math.max(0, Math.round((Number(ch.geld) || 0) * 100) / 100);
+  ch.geld = Math.max(0, Math.round(Number(ch.geld) || 0));
   return ch;
 }
 
@@ -82,9 +82,9 @@ function entdeckeUmgebung(db, ch) {
   return neu;
 }
 
-function ereignisSeit(db, characterId, seitTick) {
-  return db.prepare('SELECT type, payload_json, created_at FROM events WHERE character_id = ? AND id > ? ORDER BY id DESC LIMIT 5')
-    .all(characterId, seitTick || 0);
+function ereignisSeit(db, characterId, seitTick, limit = 5) {
+  return db.prepare('SELECT type, payload_json, created_at FROM events WHERE character_id = ? AND id > ? ORDER BY id DESC LIMIT ?')
+    .all(characterId, seitTick || 0, limit);
 }
 
 
@@ -128,14 +128,18 @@ function lasseZeitVergehen(ch, sekunden) {
   if (ch.hunger >= GESUND.hungerSchwelle || ch.erschoepfung >= GESUND.erschoepfungSchwelle) {
     ch.gesund = Math.max(0, ch.gesund - stunden * 4);
   }
+  const aktuellerCap = chunkCapFuer(Number(ch.gesund));
+  if (aktuellerCap < (Number(ch.gesund_chunk_cap) || 100)) {
+    ch.gesund_chunk_cap = aktuellerCap;
+  }
   return ch;
 }
 
 function heileDurchSchlaf(ch) {
-  const cap = chunkCapFuer(Number(ch.gesund));
-  ch.gesund = Math.min(cap, Number(ch.gesund) + 30);
+  const cap = Math.min(Number(ch.gesund_chunk_cap) || 100, chunkCapFuer(Number(ch.gesund)));
   ch.gesund_chunk_cap = cap;
-  ch.erschoepfung = Math.max(0, Number(ch.erschoepfung) - 70);
+  ch.gesund = cap;
+  ch.erschoepfung = 0;
   ch.hunger = Math.min(100, Number(ch.hunger) + 12);
   return ch;
 }
@@ -420,7 +424,7 @@ async function fuehreSchrittAus(db, deps, characterId, schritt, jetztMs) {
     if (action === 'consume' && Number(ch.geld) < Number(angebot.price)) {
       return { ok: false, grund: 'geld_reicht_nicht', notizen, angebot };
     }
-    ch.geld = Math.max(0, Math.round((Number(ch.geld) - Number(angebot.price)) * 100) / 100);
+    ch.geld = Math.max(0, Math.round(Number(ch.geld) - Math.round(Number(angebot.price))));
     ch.hunger = Math.max(0, Math.min(100, Number(ch.hunger) + Number(angebot.hunger_delta)));
     ch.erschoepfung = Math.max(0, Math.min(100, Number(ch.erschoepfung) + Number(angebot.erschoepfung_delta)));
     ch.froh = Math.max(-100, Math.min(100, Number(ch.froh) + Number(angebot.froh_delta)));
@@ -436,8 +440,18 @@ async function fuehreSchrittAus(db, deps, characterId, schritt, jetztMs) {
     }
   } else if (action === 'leave_note') {
     const ortId = zielId || ch.inside_poi;
-    db.prepare("INSERT INTO messages_outbox (character_id, channel, target_poi, content, status, resolve_after_at) VALUES (?, 'leave_note', ?, ?, 'pending', datetime('now', '+2 hours'))")
-      .run(characterId, ortId, detail || 'Hallo! Ich suche Arbeit als Spuelhilfe. Ich bin zuverlaessig.');
+    const zettelText = detail || 'Hallo! Ich suche Arbeit als Spuelhilfe. Ich bin zuverlaessig.';
+    const ins = db.prepare("INSERT INTO messages_outbox (character_id, channel, target_poi, content, status, resolve_after_at) VALUES (?, 'leave_note', ?, ?, 'pending', datetime('now', '+2 hours'))")
+      .run(characterId, ortId, zettelText);
+    db.prepare("INSERT INTO open_loops (character_id, kind, text, urgency, related_poi, status) VALUES (?, 'question', ?, 0.6, ?, 'open')")
+      .run(characterId, `Antwort auf Zettel bei ${ortId || 'unterwegs'}: ${zettelText.slice(0, 120)}`, ortId || null);
+    if (deps.telegram && typeof deps.telegram.sendeNachricht === 'function') {
+      try {
+        await deps.telegram.sendeNachricht(db, {
+          id: Number(ins.lastInsertRowid), character_id: characterId, channel: 'leave_note', content: zettelText, status: 'pending',
+        });
+      } catch { /* loggen, nicht crashen */ }
+    }
     lasseZeitVergehen(ch, dauerFuer(schritt));
     notizen.push('Du hast einen handgeschriebenen Zettel hinterlassen.');
     ch.current_action = 'idle';
@@ -477,29 +491,20 @@ async function fuehreSchrittAusTeil2(db, deps, characterId, schritt) {
     const hat = db.prepare("SELECT count FROM inventory WHERE character_id = ? AND item_key = 'pfand'").get(characterId);
     const n = hat ? Number(hat.count) : 0;
     if (n > 0) {
-      const wert = Math.round(n * ECONOMY.pfandWert * 100) / 100;
-      ch.geld = Math.round((Number(ch.geld) + wert) * 100) / 100;
+      const wert = Math.max(1, Math.round(n * ECONOMY.pfandWert));
+      ch.geld = Math.round(Number(ch.geld) + wert);
       db.prepare("DELETE FROM inventory WHERE character_id = ? AND item_key = 'pfand'").run(characterId);
-      notizen.push(`Du hast ${n} Flaschen am Kiosk abgegeben und ${wert.toFixed(2)} Euro bekommen.`);
+      notizen.push(`Du hast ${n} Flaschen am Kiosk abgegeben und ${wert} Euro bekommen.`);
     } else {
       notizen.push('Du hattest keine Pfandflaschen dabei.');
     }
     lasseZeitVergehen(ch, dauerFuer(schritt));
   } else if (action === 'look_for_work' || action === 'take_job') {
-    const poi = schritt.target ? db.prepare('SELECT * FROM pois WHERE id = ?').get(schritt.target) : db.prepare('SELECT * FROM pois WHERE id = ?').get(ch.inside_poi);
     const job = arbiter.aktiverJob(db, characterId);
     if (job) {
-      // Musterbremse (known-issues.md "Hungerschleife"): mit aktivem Job ist
-      // weiteres Arbeitssuchen sinnlos – klar auf work_shift lenken.
       notizen.push(`Du hast schon Arbeit als ${job.role_title} bei ${job.poi_id}. Such nicht weiter – plane stattdessen work_shift bei ${job.poi_id}, wenn du Geld brauchst.`);
-    } else if (!poi) {
-      return { ok: false, grund: 'ort_unbekannt', notizen };
     } else {
-      const [lo, hi] = ECONOMY.wageBounds;
-      const lohn = Math.round((lo + Math.random() * (hi - lo)) * 100) / 100;
-      const res = arbiter.nimmJobAn(db, characterId, poi.id, 'Spülhilfe', lohn);
-      if (res.ok) notizen.push(`Zusage! Du arbeitest als ${res.job.role_title} bei ${poi.name} (${res.job.wage_per_shift.toFixed(2)} Euro/Schicht).`);
-      else notizen.push('Daraus wurde nichts: ' + res.grund);
+      notizen.push('Du kannst nicht einfach so einen Job annehmen – hinterlasse mit leave_note einen Zettel bei einem Laden und warte auf Antwort.');
     }
     lasseZeitVergehen(ch, dauerFuer(schritt));
   } else if (action === 'work_shift') {
@@ -510,23 +515,24 @@ async function fuehreSchrittAusTeil2(db, deps, characterId, schritt) {
     ch.erschoepfung = Math.min(100, Number(ch.erschoepfung) + SEKUNDAER.erschoepfung.proSchicht);
     ch.hunger = Math.min(100, Number(ch.hunger) + SEKUNDAER.hunger.proSchicht);
     lasseZeitVergehen(ch, dauerFuer(schritt));
-    if (abrech.abgebrochen) notizen.push(`Schicht abgebrochen: halber Lohn ${abrech.lohn.toFixed(2)} Euro, Strike ${abrech.strikes}.`);
-    else notizen.push(`Schicht geschafft: ${abrech.lohn.toFixed(2)} Euro verdient.`);
+    if (abrech.abgebrochen) notizen.push(`Schicht abgebrochen: halber Lohn ${Math.round(abrech.lohn)} Euro, Strike ${abrech.strikes}.`);
+    else notizen.push(`Schicht geschafft: ${Math.round(abrech.lohn)} Euro verdient.`);
     if (abrech.gekuendigt) notizen.push('Gekuendigt nach dem 2. Strike.');
   } else if (action === 'rest' || action === 'sleep') {
     ch.current_action = action;
     lasseZeitVergehen(ch, dauerFuer(schritt));
     if (action === 'sleep') {
       heileDurchSchlaf(ch);
-      notizen.push('Du hast tief geschlafen und bist etwas erholt aufgewacht.');
+      notizen.push('Du hast tief geschlafen und bist erholt aufgewacht.');
     } else {
       notizen.push('Du hast dich ausgeruht.');
     }
   } else if (action === 'visit_doctor') {
     if (Number(ch.geld) < ECONOMY.arztKosten) return { ok: false, grund: 'geld_reicht_nicht', notizen };
-    ch.geld = Math.round((Number(ch.geld) - ECONOMY.arztKosten) * 100) / 100;
-    ch.gesund = Math.min(100, Number(ch.gesund) + 25);
-    ch.gesund_chunk_cap = chunkCapFuer(Number(ch.gesund));
+    ch.geld = Math.max(0, Math.round(Number(ch.geld) - ECONOMY.arztKosten));
+    const neuesCap = Math.min(100, (Number(ch.gesund_chunk_cap) || chunkCapFuer(Number(ch.gesund))) + 20);
+    ch.gesund_chunk_cap = neuesCap;
+    ch.gesund = neuesCap;
     lasseZeitVergehen(ch, dauerFuer(schritt));
     notizen.push('Der Arzt hat dich behandelt. Du fuehlst dich deutlich besser.');
   } else {
@@ -551,11 +557,22 @@ async function fuehreSchrittAusTeil3(db, deps, characterId, schritt) {
   if (action === 'read_book') {
     if (ch.inside_poi !== 'apartment') return { ok: false, grund: 'nur_daheim', notizen };
     const buecher = db.prepare('SELECT * FROM books').all();
-    const buch = buecher.find((b) => detail.toLowerCase().includes(b.id)) || buecher[0];
+    const dLow = detail.toLowerCase();
+    const buch = buecher.find((b) => dLow.includes(b.id.toLowerCase()) || dLow.includes(String(b.title || '').toLowerCase()))
+      || buecher.find((b) => {
+        try {
+          const es = JSON.parse(b.entries_json || '[]');
+          return es.some((x) => (x.topic && dLow.includes(String(x.topic).toLowerCase())) || (x.title && dLow.includes(String(x.title).toLowerCase())));
+        } catch { return false; }
+      })
+      || buecher[0];
     if (buch) {
       let eintraege = [];
       try { eintraege = JSON.parse(buch.entries_json); } catch { eintraege = []; }
-      const e = eintraege[0] || { title: 'Eintrag', content: '...' };
+      const e = eintraege.find((x) =>
+        (x.topic && dLow.includes(String(x.topic).toLowerCase())) ||
+        (x.title && dLow.includes(String(x.title).toLowerCase()))
+      ) || eintraege[0] || { title: 'Eintrag', content: '...' };
       const { speichereMemory } = require('./memory');
       speichereMemory(db, characterId, { tier: 'short', kind: 'read', text: `Gelesen: ${e.title} – ${String(e.content).slice(0, 120)}`, initial_weight: 3.5 });
       notizen.push(`Du hast gelesen: ${e.title}.`);
@@ -715,7 +732,7 @@ async function holeNeuenPlanMitMeta(db, deps, characterId, jetztMs) {
   // keine doppelten thought_leer/plan_fehlend-Paare mehr, keine verworfenen Google-Debugs.
   // Nur wenn Brain KEIN Plan-Ergebnis lieferte (altes Mock/Arbiter-Format), einmalig nachprüfen.
   let geprueft = antwort && antwort.plan && Array.isArray(antwort.plan)
-    ? { ok: !antwort.stale, failures: antwort.failures || [], fehlerDetails: [], thought: antwort.thought || '', retrospective: antwort.retrospective || '', plan: antwort.plan }
+    ? { ok: !antwort.stale, failures: antwort.failures || [], fehlerDetails: [], thought: antwort.thought || '', why_here: antwort.why_here || '', retrospective: antwort.retrospective || '', plan: antwort.plan }
     : null;
   if (!geprueft) {
     let obj = null;
@@ -768,7 +785,7 @@ async function holeNeuenPlanMitMeta(db, deps, characterId, jetztMs) {
         .run(characterId, JSON.stringify({ quelle, fehler: [], prompt: gebaut.prompt }));
     } catch { /* Gehirn-Log darf nie crashen */ }
   }
-  return { thought: geprueft.thought, retrospective: geprueft.retrospective, plan: geprueft.plan, fallback: false, roh: antwort, quelle };
+  return { thought: geprueft.thought, why_here: geprueft.why_here || '', retrospective: geprueft.retrospective, plan: geprueft.plan, fallback: false, roh: antwort, quelle };
 }
 
 // Interrupt-Gründe: neuer Chunk unterschritten, Geld reicht nicht, Telegram neu, POI neu.
@@ -812,6 +829,23 @@ function pruefeTod(db, characterId) {
 }
 
 
+function zaehleStat24h(db, feld, jetztMs) {
+  try {
+    const datum = arbiter.berlinDatum(jetztMs);
+    const r = db.prepare('SELECT stats_24h_json FROM world_state WHERE id = 1').get();
+    const s = r ? JSON.parse(r.stats_24h_json || '{}') : {};
+    if (s.date !== datum) {
+      s.date = datum;
+      s.big_model = 0;
+      s.small_model = 0;
+      s.queued = 0;
+      s.autopilot = 0;
+    }
+    s[feld] = (Number(s[feld]) || 0) + 1;
+    db.prepare('UPDATE world_state SET stats_24h_json = ? WHERE id = 1').run(JSON.stringify(s));
+  } catch { /* stats duerfen nie crashen */ }
+}
+
 // --- Tick: EIN Plan-Schritt pro Aufruf --------------------------------------------------
 
 async function tick(db, deps, characterId, jetztMs) {
@@ -846,7 +880,9 @@ async function tick(db, deps, characterId, jetztMs) {
   }
   let gedanke = '';
   let planQuelle = null; // KI-Nachweis für den Feed (Punkt 7)
-  if (queue.length === 0) {
+  if (queue.length > 0) {
+    zaehleStat24h(db, 'queued', jetztMs);
+  } else {
     // Laufende Route? Dann KEIN neuer Plan – Schritt wiederholt sich, bis angekommen.
     const laufendeRoute = (ch.current_action === 'walk_to' || ch.current_action === 'explore_street') ? ladeRoute(ch) : null;
     if (laufendeRoute) {
@@ -856,11 +892,24 @@ async function tick(db, deps, characterId, jetztMs) {
       queue = [fort];
       planQuelle = { source: 'queue', model: '', tokens: 0 };
       gedanke = 'Weiter geht\u2019s – ein Fuß vor den anderen.';
+      zaehleStat24h(db, 'queued', jetztMs);
     } else {
       const neu = await holeNeuenPlanMitMeta(db, deps, characterId, jetztMs);
       gedanke = neu.thought;
       planQuelle = neu.quelle || null;
       queue = neu.plan || [];
+      zaehleStat24h(db, planQuelle && planQuelle.source === 'llm' ? 'small_model' : 'autopilot', jetztMs);
+      if (neu.why_here || neu.thought) {
+        const grund = String(neu.why_here || neu.thought).slice(0, 200);
+        ch.why_here = grund;
+        db.prepare('UPDATE character SET why_here = ? WHERE id = ?').run(grund, characterId);
+      }
+      if (neu.retrospective && String(neu.retrospective).trim()) {
+        try {
+          db.prepare('UPDATE memories SET retrospective = ? WHERE id = (SELECT id FROM memories WHERE character_id = ? ORDER BY id DESC LIMIT 1)')
+            .run(String(neu.retrospective).trim().slice(0, 280), characterId);
+        } catch { /* egal */ }
+      }
       // Plan-Event mit KI-Quelle in den Feed (Dev-Badges)
       try {
         db.prepare("INSERT INTO events (character_id, tick, type, payload_json, in_feed) VALUES (?, 0, 'plan', ?, 1)").run(
@@ -877,7 +926,8 @@ async function tick(db, deps, characterId, jetztMs) {
   speichereQueue(db, ch, queue, snapshot);
   if (schritt.action === 'consume') {
     const frisch = ladeCharakter(db, characterId);
-    const poi = schritt.target ? db.prepare('SELECT * FROM pois WHERE id = ?').get(schritt.target) : null;
+    const ortId = schritt.target || frisch.inside_poi;
+    const poi = ortId ? db.prepare('SELECT * FROM pois WHERE id = ?').get(ortId) : null;
     const kat = (poi && poi.category) || 'imbiss';
     const grenzen = require('./config').ECONOMY.priceBounds[kat] || [3.5, 10.0];
     if (Number(frisch.geld) < Number(grenzen[0])) {
@@ -909,9 +959,12 @@ async function tick(db, deps, characterId, jetztMs) {
   let nightlyNotiz = null;
   if (ergebnis && ergebnis.ok && schritt.action === 'sleep' && ch.inside_poi === 'apartment' && deps.nightly !== false) {
     try {
-      const log = ereignisSeit(db, characterId, 0).map((e) => `${e.type}: ${e.payload_json}`).join('\n').slice(0, 3000);
+      const log = ereignisSeit(db, characterId, 0, 80).map((e) => `${e.type}: ${e.payload_json}`).join('\n').slice(0, 3500);
       const res = await arbiter.runNightlyConsolidation(db, deps.brain, characterId, log, jetztMs);
-      if (res && res.ok) nightlyNotiz = 'Nachtsortierung: ' + res.headline;
+      if (res && res.ok) {
+        nightlyNotiz = 'Nachtsortierung: ' + res.headline;
+        if (res.quelle && res.quelle.source === 'llm') zaehleStat24h(db, 'big_model', jetztMs);
+      }
     } catch { /* nightly darf nie crashen */ }
   }
   const tod = pruefeTod(db, characterId);

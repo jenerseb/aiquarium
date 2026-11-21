@@ -1,35 +1,36 @@
-# Straßen und Wege
-Straßen und Wege überlagern sich doof und flackern. Strapßen sollen Wege püberdecken! außerdem wege schmaler machen.
+# Bekannte Probleme, offene Bugs & TODOs
 
+Abgleich zwischen [masterplan_aiquarium_hamburg_mvp.md](./masterplan_aiquarium_hamburg_mvp.md) und dem aktuellen Stand in `aiquarium-app/`.
+*(Stand: 21.11.2026 — behobene Punkte wie Ganzzahl-Euro-Wirtschaft, `read_book`-Themenwahl, `look_for_work`/`take_job`-Absicherung, `why_here`/`retrospective`/`stats_24h_json` und Health-Chunk-/Schlaf-/Arzt-Heilung wurden entfernt.)*
 
+---
 
-# Job-Zusage erreicht den Prompt nicht → Hungerschleife statt Schichtarbeit
+## 1. Offene Bugs & fehlende Mechaniken (Ist vs. Masterplan)
 
-**Beobachtet:** 16.11.2026, Live-DB (`~/.local/share/aiquarium/world.sqlite`)
+- **`work_on_project` nutzt `work_pieces` nicht (`src/engine.js`):**
+  Speichert aktuell nur eine Kurzzeit-Erinnerung. Es wird kein Eintrag in `work_pieces` angelegt/aktualisiert (`fragments_json`, `progress +15 %`, `status = 'completed'` ab `100 %`), es gibt keinen `+6 froh`-Bonus und keine Ortsprüfung (`apartment` / Park). Im Gehirn-Overlay bleibt „Werkstücke“ deshalb immer leer.
 
-## Symptom
-- 17:59: Kiezling hinterlässt Zettel bei `kleine_pause` („Hilfe beim Abwaschen oder Aufräumen“) → `messages_outbox`, Status `pending`, `resolve_after_at = 19:59`.
-- 20:17: Autonomer Ladenbesitzer-Arbiter (`bewerteBewerbungen()` in `src/arbiter.js`, Z. 289–321) sagt zu: Job `Küchenhilfe`, 8,24 €/Schicht, liegt korrekt in `jobs` (`status: 'active'`). Feed-Event `job_offer` + Memory *„Zusage als Küchenhilfe bei Kleine Pause (Wohlwillstrasse). Der Zettel hat gewirkt.“* wurden angelegt.
-- Danach: **Hungerschleife.** Er läuft zur Kleinen Pause, versucht `consume` (Pommes), bricht am Interrupt `geld_reicht_nicht` ab (Kontostand 0 €), läuft heim, wieder raus, wiederholt das Ganze. `shifts_completed: 0`, `geld: 0`, `hunger: 100`, `gesund: 59.8` (fällt durch die 60er-Chunk-Schwelle).
-- Ironie: Er hungert **am Ort seines Arbeitgebers** und macht trotzdem nie `work_shift`.
+- **`buy_item` (Smartphone-Freischaltung) ist nur ein Dummy (`src/engine.js`):**
+  Fällt aktuell in denselben `else if`-Zweig wie `send_sms`, zieht kein Geld ab und legt kein Item ins `inventory`. Da `hatHandy()` (`src/prompt.js`) auf `item_key = 'handy'` prüft, kann der Charakter im Spielverlauf aktuell niemals ein Handy kaufen (`50 €` am `spaeti`), um `send_sms`, `send_email` und `web_search` freizuschalten.
 
-## Ursache
-- `work_shift` ist in `OFFENE_INTENTS` (`src/prompt.js` Z. 137) und in der Engine implementiert (`src/engine.js` Z. 503) – das Modell könnte es also nutzen.
-- Aber: **`buildPrompt()` enthält nirgends die Information, dass ein aktiver Job existiert.** Die `job_offer`-Zusage schreibt nur Event + Memory; im Prompt taucht der Job weder als Faktenblock (Ort, Rolle, „kannst dort work_shift machen“) noch in `WO DU BIST` auf. Das Modell kennt nur die Zusage-Erinnerung als flüchtigen Text und kann daraus keine Handlung ableiten.
-- Folge: Bei `hunger 100` priorisiert das Modell konsequent `consume`, das ohne Geld immer am `geld_reicht_nicht`-Interrupt scheitert – ein Loop, den nur der Prompt aufbrechen kann.
+- **`practised` (Übungs-Tracking) wird nirgends verwendet (`src/db.js`, `src/engine.js`):**
+  Die Tabelle existiert, wird aber bei `work_shift`, `work_on_project` oder `collect_deposit` nie hochgezählt, reduziert nicht die Schicht-Erschöpfung (bis `-30 %` laut §7.1) und fehlt in `/api/brain` sowie im Gehirn-Overlay.
 
-## Fix-Ideen
-1. **`src/prompt.js`:** Neuer Block „DEIN JOB“ in `buildPrompt()`, wenn `arbiter.aktiverJob(db, ch.id)` existiert, z. B.:
-   > *„Du hast einen aktiven Job als Küchenhilfe bei kleine_pause (Kleine Pause). Du kannst dort als Schicht arbeiten (work_shift) und verdienst damit dein Geld – die Schicht dauert eine Weile und macht hungrig und müde, aber danach hast du Geld in der Tasche.“*
-   Ohne Zahlen (Lohn-Wert nicht nennen, Welt-Regel: Engine rechnet, Modell spürt).
-2. **`src/engine.js`:** Zusätzlich könnte der `geld_reicht_nicht`-Interrupt bei aktivem Job eine Hint-Notiz liefern („Du könntest stattdessen als Küchenhilfe eine Schicht arbeiten“), damit der nächste Plan reagiert.
-3. Optional: Aktiven Job auch im `Gehirn`-Overlay (Character-Sheet-Tab) sichtbar machen.
+- **Fehlende `arbiter.initPoi()` & Telegram-`/fire`-Logik (`src/arbiter.js`, `src/telegram.js`):**
+  - `world_meta_json` in `pois` enthält aktuell nur `{ alkis_id, distanz_m }`, aber keine POI-spezifischen Lohn-/Rollen-/Nachfrage-Metadaten für `bewerteBewerbungen()`.
+  - `bewerteBewerbungen()` akzeptiert als Job-POIs nur `['kneipe', 'imbiss', 'club', 'kino', 'spaeti']` (neuere Gastro-POIs wie `restaurant`, `cafe`, `markt` fehlen in der Liste).
+  - Der Telegram-Befehl `/fire <poi_id>` zum Beenden aktiver Jobs fehlt in `telegram.verarbeiteAntwort()`.
+  - `resolve_after_at` bei `leave_note` steht in `src/engine.js` auf `+2 hours` statt `+30 minutes` (§8.3).
+  - `send_sms` und `send_email` in `src/engine.js` senden zwar per Telegram, schreiben aber nichts in `messages_outbox`.
+  - `day_summaries.moves_count` bleibt immer `0`.
 
+---
 
------
------
------
+## 2. Struktur- & Aufräum-TODOs
 
-
-# Randnotiz (kleiner zweiter Befund)
-- `src/arbiter.js` (Z. 214, 275, 308) und `src/db.js` (Z. 457) insertieren Memories **direkt per SQL** statt über `speichereMemory()` aus `src/memory.js` – dabei umgehen sie Kapazitätscheck und „First-to-go“-Ersetzung der 25-Slot-Regel. Bei wenigen Events harmlos, sollte aber vereinheitlicht werden.
+- **Redundante Tabelle `books` vs. `home_library` (`src/db.js`):**
+  Im Schema existieren beide Tabellen mit identischem Inhalt; `engine.js`, `prompt.js` und `server.js` lesen/schreiben nur `books`, während der Masterplan `home_library` vorsieht. Sollte auf eine Tabelle vereinheitlicht werden.
+- **Park & Bäume (`public/scene.js` Z. 11):**
+  `const ZEIGE_GRUEN = false;` — Grünflächen und Straßenbäume sind bewusst testweise deaktiviert und sollen vorerst aus bleiben.
+- **Konfiguration & Dateien:**
+  `.env.example` fehlt im Projekt-Root (im Masterplan §3 vorgesehen).

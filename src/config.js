@@ -84,20 +84,18 @@ const ECONOMY = {
   shiftDurationS: 20 * 60,
   wageBounds: [8.0, 18.0], // € pro 20-Min-Schicht
   priceBounds: {
-    // 2026-11-17 Balance-Fix: Preise gesenkt (Lohn bleibt [8,18] = ~14 € Ø).
-    // Eine Schicht soll 2–3 Mahlzeiten + Puffer decken, sonst Hunger-Loop.
-    spaeti: [1.0, 5.0],
-    imbiss: [2.5, 7.0],
-    kneipe: [2.0, 9.0],
-    club: [3.0, 12.0],
-    kino: [6.0, 11.0],
-    // NW/S-Erweiterung 2026-11-17: Stadion + Gastro am Kiez-Rand
-    restaurant: [3.0, 10.0],
-    cafe: [1.5, 6.0],
-    stadion: [4.0, 12.0],
-    park: [0.0, 3.0],
-    markt: [1.0, 9.0],
-    denkmal: [0.0, 6.0],
+    // 2026-11-21 Ganzzahl-Wirtschaft: nur ganze Euro-Beträge (keine Cents).
+    spaeti: [1, 5],
+    imbiss: [3, 7],
+    kneipe: [2, 9],
+    club: [3, 12],
+    kino: [6, 11],
+    restaurant: [3, 10],
+    cafe: [2, 6],
+    stadion: [4, 12],
+    park: [0, 3],
+    markt: [1, 9],
+    denkmal: [0, 6],
   },
   deltaBounds: {
     consumeHunger: [-50, -5],
@@ -105,8 +103,8 @@ const ECONOMY = {
     activityFroh: [-8, 16],
     activityErschoepfung: [2, 15], // freie Aktivitäten geben NIEMALS Geld
   },
-  arztKosten: 15.0,
-  pfandWert: 0.5,
+  arztKosten: 15,
+  pfandWert: 1,
 };
 
 // ---- Gedächtnis-Limits ----

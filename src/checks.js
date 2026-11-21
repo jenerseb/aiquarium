@@ -269,6 +269,7 @@ function validatePlan(obj, intents) {
     return { ok: false, failures, fehlerDetails, plan: [] };
   }
   const thought = typeof obj.thought === 'string' ? obj.thought.trim() : '';
+  const whyHere = typeof obj.why_here === 'string' ? obj.why_here.trim().slice(0, 200) : '';
   const retrospective = typeof obj.retrospective === 'string' ? obj.retrospective.trim() : '';
   const plan = Array.isArray(obj.plan) ? obj.plan : null;
   if (!thought) notiere('thought_leer');
@@ -302,7 +303,7 @@ function validatePlan(obj, intents) {
     detail: typeof s.detail === 'string' ? s.detail.trim().slice(0, 280) : '',
   }));
   if (rawText) fehlerDetails.forEach((d) => { if (!d.rawResponse) d.rawResponse = rawText; });
-  return { ok: failures.length === 0, failures, fehlerDetails, thought, retrospective, plan: sauber };
+  return { ok: failures.length === 0, failures, fehlerDetails, thought, why_here: whyHere, retrospective, plan: sauber };
 }
 
 module.exports = {
