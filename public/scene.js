@@ -1625,12 +1625,14 @@ function baueFigur() {
   handy.position.set(0, 1.48, 0.56);
   handy.rotation.x = 0.55; // Bildschirm nach oben Richtung Gesicht gekippt
   handy.visible = false;
-  const handyLicht = new THREE.PointLight(0x9bd4ff, 2.4, 4.5, 1.8);
-  handyLicht.position.set(0, 1.56, 0.62);
+  // Gerichtetes SpotLight vom Display Richtung Gesicht/Oberkörper (kein Licht nach hinten auf die Hand)
+  const handyLicht = new THREE.SpotLight(0x9bd4ff, 3.8, 4.5, Math.PI * 0.42, 0.7, 1.5);
+  handyLicht.position.set(0, 1.50, 0.54);
+  handyLicht.target.position.set(0, 1.95, 0.05);
   handyLicht.visible = false;
   g.userData.handy = handy;
   g.userData.handyLicht = handyLicht;
-  g.add(handy, handyLicht);
+  g.add(handy, handyLicht, handyLicht.target);
   // Blauer 3D-Pfeil über dem Charakter (nur im Fern/Kiez-View, auf gleicher Höhe wie POI-Pins, ohne Linie/Text)
   const figPfeil = pinMesh(0x4da6ff, 1.0);
   figPfeil.position.y = 15;
