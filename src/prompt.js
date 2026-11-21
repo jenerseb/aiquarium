@@ -204,6 +204,35 @@ function hatAktivenJob(db, characterId) {
   } catch { return false; }
 }
 
+function notizbuchErlaubt(db, characterId, jetztMs) {
+  try {
+    const arbiter = require('./arbiter');
+    const datum = arbiter.berlinDatum(jetztMs);
+    const heuteRows = db.prepare("SELECT created_at FROM events WHERE character_id = ? AND type = 'aktion_write_notebook' ORDER BY id DESC LIMIT 10").all(characterId);
+    let heuteN = 0;
+    for (const r of heuteRows) {
+      const ms = Date.parse(String(r.created_at || '').replace(' ', 'T') + 'Z');
+      if (Number.isFinite(ms) && arbiter.berlinDatum(ms) === datum) heuteN += 1;
+    }
+    if (heuteN >= 2) return false;
+    const letzte = db.prepare("SELECT type FROM events WHERE character_id = ? AND type LIKE 'aktion_%' ORDER BY id DESC LIMIT 8").all(characterId);
+    const aussen = new Set(['walk_to', 'explore_street', 'jog', 'consume', 'do_activity', 'work_shift', 'collect_deposit', 'return_deposit', 'buy_item', 'visit_doctor']);
+    for (const ev of letzte) {
+      const a = String(ev.type || '').replace(/^aktion_/, '');
+      if (a === 'write_notebook') return false;
+      if (aussen.has(a)) return true;
+    }
+    return true;
+  } catch { return true; }
+}
+
+function letzteAktionWar(db, characterId, aktionName) {
+  try {
+    const r = db.prepare("SELECT type FROM events WHERE character_id = ? AND type LIKE 'aktion_%' ORDER BY id DESC LIMIT 1").get(characterId);
+    return Boolean(r && r.type === 'aktion_' + aktionName);
+  } catch { return false; }
+}
+
 function whitelistFuer(db, characterId, orte, ch = null, jetztMs = Date.now()) {
   const { webSearchHeute, lexikonHeute } = tagesLimitsFuer(db, characterId, jetztMs);
   let liste = OFFENE_INTENTS.filter((a) => !['send_sms', 'send_email', 'web_search'].includes(a));
@@ -212,6 +241,8 @@ function whitelistFuer(db, characterId, orte, ch = null, jetztMs = Date.now()) {
     if (!webSearchHeute) liste.push('web_search');
   }
   if (lexikonHeute) liste = liste.filter((a) => a !== 'read_book');
+  if (!notizbuchErlaubt(db, characterId, jetztMs)) liste = liste.filter((a) => a !== 'write_notebook');
+  if (letzteAktionWar(db, characterId, 'work_on_project')) liste = liste.filter((a) => a !== 'work_on_project');
   if (ch) {
     const hatJob = hatAktivenJob(db, characterId);
     const pfand = hatPfand(db, characterId);
@@ -306,8 +337,18 @@ function buildPrompt(db, ch, ctx) {
   }
   if (lexikonHeute) regelnExtra.push('Das Stadtlexikon hast du heute schon gelesen – erst morgen wieder.');
   if (webSearchHeute) regelnExtra.push('Du hast heute schon einmal gegoogelt (web_search) – erst morgen wieder.');
+  if (daheim && !wl.intents.includes('write_notebook')) {
+    regelnExtra.push('Notizbuch vorerst geschlossen – geh erst wieder raus und erlebe etwas Neues.');
+  }
+  if (Array.isArray(c.recentActions) && c.recentActions.length > 0) {
+    regelnExtra.push(`Zuletzt gemacht: ${c.recentActions.join(' → ')} (wiederhole nicht dieselbe Zimmer-Aktion, sondern unternimm etwas Neues oder geh raus).`);
+  }
   const stundeJetzt = berlinStunde(jetztMs);
-  if (stundeJetzt >= 20 || stundeJetzt < 3) {
+  if (daheim && Number(ch.erschoepfung) < 40 && (stundeJetzt >= 20 || stundeJetzt < 1)) {
+    regelnExtra.push('Du bist noch hellwach – sitz nicht daheim rum: geh in eine Kneipe oder einen Club, oder dreh noch eine Abendrunde (jog / explore_street).');
+  } else if ((stundeJetzt >= 23 || stundeJetzt < 4) && Number(ch.erschoepfung) >= 20) {
+    regelnExtra.push('Es ist tief in der Nacht – wenn du daheim bist oder heimgehst, bietet sich Schlaf (sleep) an.');
+  } else if (stundeJetzt >= 20 || stundeJetzt < 3) {
     regelnExtra.push('Es ist später Abend/Nacht: wenn du müde bist oder daheim ankommst, bietet sich ein langer Nachtschlaf (sleep) an.');
   }
   const letzteGedanken = Array.isArray(c.recentThoughts) && c.recentThoughts.length > 0

@@ -130,10 +130,12 @@ function addFroh(ch, delta) {
   return ch.froh;
 }
 
-function lasseZeitVergehen(ch, sekunden) {
+function lasseZeitVergehen(ch, sekunden, jetztMs = Date.now()) {
   const stunden = sekunden / 3600;
   ch.hunger = Math.min(100, ch.hunger + stunden * SEKUNDAER.hunger.proStunde);
   const muedFaktor = Number(ch.froh) < 0 ? 1.25 : 1.0;
+  const h = hamburgStunde(jetztMs);
+  const nachtSchlafDruck = (h >= 21 || h < 4) ? 2.2 : 1.0;
   if (ch.current_action === 'sleep') {
     ch.erschoepfung = Math.max(0, ch.erschoepfung - stunden * 60);
   } else if (ch.current_action === 'rest') {
@@ -141,9 +143,9 @@ function lasseZeitVergehen(ch, sekunden) {
   } else if (ch.current_action === 'jog') {
     ch.erschoepfung = Math.min(100, ch.erschoepfung + stunden * 18 * muedFaktor);
   } else if (ch.current_action === 'walk_to' || ch.current_action === 'explore_street') {
-    ch.erschoepfung = Math.min(100, ch.erschoepfung + stunden * SEKUNDAER.erschoepfung.proStunde * 1.5 * muedFaktor);
+    ch.erschoepfung = Math.min(100, ch.erschoepfung + stunden * SEKUNDAER.erschoepfung.proStunde * 1.5 * muedFaktor * nachtSchlafDruck);
   } else {
-    ch.erschoepfung = Math.min(100, ch.erschoepfung + stunden * SEKUNDAER.erschoepfung.proStunde * muedFaktor);
+    ch.erschoepfung = Math.min(100, ch.erschoepfung + stunden * SEKUNDAER.erschoepfung.proStunde * muedFaktor * nachtSchlafDruck);
   }
   const frohRate = Number(ch.froh) > FROH.euphorieSchwelle ? FROH.euphorieProStunde : FROH.proStunde;
   ch.froh = Math.max(FROH.min, Math.min(FROH.max, Number(ch.froh) + stunden * frohRate));
@@ -858,11 +860,12 @@ async function fuehreSchrittAusTeil3(db, deps, characterId, schritt, jetztMs) {
         .run(prog, JSON.stringify(frags), st, wp.id);
       wp = db.prepare('SELECT * FROM work_pieces WHERE id = ?').get(wp.id);
     }
-    addFroh(ch, 6);
+    addFroh(ch, 5);
+    ch.erschoepfung = Math.min(100, Number(ch.erschoepfung) + 5);
     const { speichereMemory } = require('./memory');
     speichereMemory(db, characterId, { tier: 'short', kind: 'work', text: `Projekt „${wp.title}“ (${wp.progress} %): ${fragment.slice(0, 100)}`, initial_weight: 3.5 });
     notizen.push(`Du hast an „${wp.title}“ weitergearbeitet (${wp.progress} %).`);
-    lasseZeitVergehen(ch, dauerFuer(schritt));
+    lasseZeitVergehen(ch, dauerFuer(schritt), jetztMs);
   } else if (action === 'buy_item') {
     if (ch.inside_poi !== 'spaeti') {
       return { ok: false, grund: 'nur_am_spaeti', notizen: ['Gebraucht-Elektronik bekommst du nur am Späti (spaeti).'] };
@@ -974,6 +977,11 @@ async function holeNeuenPlanMitMeta(db, deps, characterId, jetztMs) {
     } catch { /* egal */ }
     if (letzteNotizen.length >= 4) break;
   }
+  const recentActions = [];
+  try {
+    const aRows = db.prepare("SELECT type FROM events WHERE character_id = ? AND type LIKE 'aktion_%' ORDER BY id DESC LIMIT 4").all(characterId);
+    for (const r of aRows) recentActions.push(String(r.type).replace(/^aktion_/, ''));
+  } catch { /* egal */ }
   const ctx = {
     orte,
     jetztMs,
@@ -983,6 +991,7 @@ async function holeNeuenPlanMitMeta(db, deps, characterId, jetztMs) {
     letztesEreignis: letzteNotizen[0] || null,
     letzteNotizen,
     recentThoughts,
+    recentActions,
   };
   const gebaut = promptMod.buildPrompt(db, ch, ctx);
   // LLM-Input-Log (Debug): was die KI bei diesem Call als INPUT bekommt –
