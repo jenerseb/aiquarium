@@ -2834,6 +2834,7 @@ function aktPillUpdaten() {
   if (!pill) return;
   const akt = Z.staat && Z.staat.aktivitaet;
   const ch = Z.staat && Z.staat.charakter;
+  const svg = pill.querySelector('svg');
   const ring = $('aktKreis');
   const txt = $('aktText');
   const restEl = $('aktRest');
@@ -2846,8 +2847,10 @@ function aktPillUpdaten() {
     const sRest = sec % 60;
     const base = AKT_LABELS[akt.action] || akt.action;
     const info = akt.detail ? `: ${akt.detail}` : (akt.poiName ? ` @ ${akt.poiName}` : '');
+    if (svg) svg.style.display = '';
     txt.textContent = `${base}${info}`;
     restEl.textContent = `${min}:${String(sRest).padStart(2, '0')}`;
+    restEl.style.display = '';
     ring.style.strokeDashoffset = String(UMFANG * (1 - frac));
     pill.hidden = false;
     return;
@@ -2855,13 +2858,19 @@ function aktPillUpdaten() {
   if (ch && (ch.current_action === 'walk_to' || ch.current_action === 'explore_street')) {
     const ziel = ch.action_target_poi ? ` → ${ch.action_target_poi}` : '';
     const rm = Z.staat && Z.staat.route && Number.isFinite(Z.staat.route.restM) ? `${Math.round(Z.staat.route.restM)} m` : 'unterwegs';
+    if (svg) svg.style.display = '';
     txt.textContent = `${AKT_LABELS[ch.current_action] || ch.current_action}${ziel}`;
     restEl.textContent = rm;
+    restEl.style.display = '';
     ring.style.strokeDashoffset = String(UMFANG * 0.25);
     pill.hidden = false;
     return;
   }
-  pill.hidden = true;
+  if (svg) svg.style.display = 'none';
+  txt.textContent = '… denkt …';
+  restEl.textContent = '';
+  restEl.style.display = 'none';
+  pill.hidden = false;
 }
 
 window.addEventListener('resize', () => {

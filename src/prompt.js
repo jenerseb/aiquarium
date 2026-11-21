@@ -34,12 +34,31 @@ function hungerGefuehl(hunger) {
   return 'Ausgehungert – sofort etwas essen!';
 }
 
-function erschoepfungGefuehl(wert) {
+function berlinStunde(jetztMs = Date.now()) {
+  const fmt = new Intl.DateTimeFormat('en-GB', { timeZone: 'Europe/Berlin', hour: '2-digit', hour12: false });
+  return Number(fmt.format(new Date(jetztMs || Date.now()))) % 24;
+}
+
+function erschoepfungGefuehl(wert, jetztMs = Date.now()) {
   const e = Number(wert);
-  if (e < 30) return 'Hellwach und voller Tatendrang.';
-  if (e < 50) return 'Wach und fit, noch nicht müde.';
-  if (e < 75) return 'Leichte Müdigkeit in den Knochen.';
-  if (e < 90) return 'Richtig müde – bald daheim schlafen.';
+  const h = berlinStunde(jetztMs);
+  const abendNacht = h >= 20 || h < 5;
+  if (e < 20) return 'Hellwach und voller Tatendrang.';
+  if (e < 50) {
+    return abendNacht
+      ? 'Wach, aber es wird spät – langsam an Heimweg und Nachtschlaf denken.'
+      : 'Wach und fit, noch nicht müde.';
+  }
+  if (e < 75) {
+    return abendNacht
+      ? 'Abendmüdigkeit in den Knochen – gute Zeit, daheim schlafen zu gehen.'
+      : 'Leichte Müdigkeit in den Knochen – kurz ausruhen (rest) hilft ein wenig.';
+  }
+  if (e < 90) {
+    return abendNacht
+      ? 'Richtig müde – bald daheim schlafen.'
+      : 'Ziemlich erschöpft – kurz ausruhen (rest) oder bis zum Abend durchhalten.';
+  }
   return 'Völlig übermüdet – sofort heim und schlafen!';
 }
 
@@ -52,13 +71,13 @@ function geldGefuehl(geld) {
   return 'Praktisch kein Geld mehr – erst verdienen oder Pfand abgeben.';
 }
 
-function koerperSaetze(ch) {
+function koerperSaetze(ch, jetztMs = Date.now()) {
   const cap = chunkCapFuer(Number(ch.gesund));
   return [
     `${gesundGefuehl(ch.gesund)} (Belastungsgrenze: ${cap})`,
     frohGefuehl(ch.froh),
     hungerGefuehl(ch.hunger),
-    erschoepfungGefuehl(ch.erschoepfung),
+    erschoepfungGefuehl(ch.erschoepfung, jetztMs),
     geldGefuehl(ch.geld),
   ];
 }
@@ -286,6 +305,10 @@ function buildPrompt(db, ch, ctx) {
   }
   if (lexikonHeute) regelnExtra.push('Das Stadtlexikon hast du heute schon gelesen – erst morgen wieder.');
   if (webSearchHeute) regelnExtra.push('Du hast heute schon einmal gegoogelt (web_search) – erst morgen wieder.');
+  const stundeJetzt = berlinStunde(jetztMs);
+  if (stundeJetzt >= 20 || stundeJetzt < 3) {
+    regelnExtra.push('Es ist später Abend/Nacht: wenn du müde bist oder daheim ankommst, bietet sich ein langer Nachtschlaf (sleep) an.');
+  }
   const letzteGedanken = Array.isArray(c.recentThoughts) && c.recentThoughts.length > 0
     ? ['Letzte Gedanken (NICHT wiederholen, denk an neue Handlungen/Ziele):', ...c.recentThoughts.map((t) => `- ${t}`), '']
     : [];
@@ -306,7 +329,7 @@ function buildPrompt(db, ch, ctx) {
     'Du bist ein junger Stadterkunder in St. Pauli (Ich-Form, heute, hier).',
     '',
     'KÖRPER & GEFÜHL:',
-    ...koerperSaetze(ch),
+    ...koerperSaetze(ch, jetztMs),
     '',
     ...(jobLine ? [jobLine, ''] : []),
     sheetText(db, ch.id),

@@ -13,8 +13,8 @@ function berlinJetzt(jetztMs) {
 }
 
 function hamburgStunde(jetztMs) {
-  const fmt = new Intl.DateTimeFormat('de-DE', { timeZone: 'Europe/Berlin', hour: 'numeric', hour12: false });
-  return Number(fmt.format(berlinJetzt(jetztMs)));
+  const fmt = new Intl.DateTimeFormat('en-GB', { timeZone: 'Europe/Berlin', hour: '2-digit', hour12: false });
+  return Number(fmt.format(berlinJetzt(jetztMs))) % 24;
 }
 
 function istNacht(jetztMs) {
@@ -136,7 +136,7 @@ function lasseZeitVergehen(ch, sekunden) {
   if (ch.current_action === 'sleep') {
     ch.erschoepfung = Math.max(0, ch.erschoepfung - stunden * 60);
   } else if (ch.current_action === 'rest') {
-    ch.erschoepfung = Math.max(0, ch.erschoepfung - stunden * 90);
+    ch.erschoepfung = Math.max(0, ch.erschoepfung - stunden * 24);
   } else {
     ch.erschoepfung = Math.min(100, ch.erschoepfung + stunden * SEKUNDAER.erschoepfung.proStunde * muedFaktor);
   }
@@ -572,7 +572,7 @@ async function fuehreSchrittAus(db, deps, characterId, schritt, jetztMs) {
 
 // --- Restliche Schritte: Pfand, Jobs, Ruhe, Arzt, Buecher --------------------------
 
-async function fuehreSchrittAusTeil2(db, deps, characterId, schritt) {
+async function fuehreSchrittAusTeil2(db, deps, characterId, schritt, jetztMs) {
   let ch = ladeCharakter(db, characterId);
   const notizen = [];
   const action = schritt.action;
@@ -644,7 +644,9 @@ async function fuehreSchrittAusTeil2(db, deps, characterId, schritt) {
       if (ch.inside_poi !== 'apartment') {
         return { ok: false, grund: 'nur_daheim', notizen: ['Zum Schlafen musst du heim in deine Wohnung.'] };
       }
-      if (Number(ch.erschoepfung) < 50) {
+      const h = hamburgStunde(jetztMs);
+      const minMuede = (h >= 20 || h < 5) ? 20 : 50;
+      if (Number(ch.erschoepfung) < minMuede) {
         return { ok: false, grund: 'nicht_muede', notizen: ['Du bist noch viel zu wach zum Schlafen und stehst wieder vom Bett auf.'] };
       }
     }
@@ -819,7 +821,7 @@ async function schrittAusfuehren(db, deps, characterId, schritt, jetztMs) {
   if (['walk_to', 'explore_street', 'consume', 'do_activity', 'leave_note'].includes(a)) {
     return fuehreSchrittAus(db, deps, characterId, schritt, jetztMs);
   }
-  const r2 = await fuehreSchrittAusTeil2(db, deps, characterId, schritt);
+  const r2 = await fuehreSchrittAusTeil2(db, deps, characterId, schritt, jetztMs);
   if (r2.ok || r2.grund !== 'unbekannt_teil2') return r2;
   return fuehreSchrittAusTeil3(db, deps, characterId, schritt, jetztMs);
 }
@@ -1061,8 +1063,37 @@ function zaehleStat24h(db, feld, jetztMs) {
   } catch { /* stats duerfen nie crashen */ }
 }
 
-function echtzeitDauerFuer(db, ch, schritt) {
+function berlinHms(jetztMs) {
+  const parts = new Intl.DateTimeFormat('en-GB', {
+    timeZone: 'Europe/Berlin',
+    hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false,
+  }).formatToParts(new Date(jetztMs || Date.now()));
+  const get = (t) => Number((parts.find((p) => p.type === t) || {}).value || 0);
+  return { h: get('hour') % 24, m: get('minute'), s: get('second') };
+}
+
+function berechneSchlafDauerS(erschoepfung, jetztMs = Date.now()) {
+  const minS = ECHTZEIT_DAUER.sleepMin || (2 * 3600);
+  const maxS = ECHTZEIT_DAUER.sleepMax || (10 * 3600);
+  const e = Math.max(0, Math.min(100, Number(erschoepfung) || 0));
+  const wunschS = Math.round(minS + (e / 100) * (maxS - minS));
+  const { h, m, s } = berlinHms(jetztMs);
+  const sekSeitMitternacht = h * 3600 + m * 60 + s;
+  let wStartS = 6 * 3600 - sekSeitMitternacht;
+  let wEndS = 11 * 3600 - sekSeitMitternacht;
+  if (wEndS < minS) {
+    wStartS += 24 * 3600;
+    wEndS += 24 * 3600;
+  }
+  const lo = Math.max(minS, wStartS);
+  const hi = Math.min(maxS, wEndS);
+  if (lo <= hi) return Math.round(Math.max(lo, Math.min(hi, wunschS)));
+  return wunschS;
+}
+
+function echtzeitDauerFuer(db, ch, schritt, jetztMs = Date.now()) {
   const action = schritt.action;
+  if (action === 'sleep') return berechneSchlafDauerS(ch ? ch.erschoepfung : 70, jetztMs);
   if (action === 'work_shift') return ECHTZEIT_DAUER.work_shift;
   const ortId = schritt.target || (ch && ch.inside_poi) || null;
   const poi = ortId ? db.prepare('SELECT category FROM pois WHERE id = ?').get(ortId) : null;
@@ -1101,7 +1132,11 @@ function speichereLaufendeAktion(db, ch, timer) {
 function kannAktionStarten(db, ch, schritt, jetztMs = Date.now()) {
   const a = schritt.action;
   if (a === 'consume' && Number(ch.hunger) < 20) return false;
-  if (a === 'sleep' && (ch.inside_poi !== 'apartment' || Number(ch.erschoepfung) < 50)) return false;
+  if (a === 'sleep') {
+    const h = hamburgStunde(jetztMs);
+    const minMuede = (h >= 20 || h < 5) ? 20 : 50;
+    if (ch.inside_poi !== 'apartment' || Number(ch.erschoepfung) < minMuede) return false;
+  }
   if ((a === 'read_book' || a === 'write_notebook') && ch.inside_poi !== 'apartment') return false;
   if (a === 'web_search' && arbiter.hatTagesLimit(db, ch.id, 'web_search', jetztMs)) return false;
   if (a === 'read_book' && arbiter.hatTagesLimit(db, ch.id, 'stadtlexikon', jetztMs)
@@ -1229,7 +1264,7 @@ async function tick(db, deps, characterId, jetztMs) {
     if (!schritt) return { ok: false, grund: 'leerer_plan', notizen: [] };
     speichereQueue(db, ch, queue, snapshot);
     if (deps.echtzeit && schritt.action !== 'walk_to' && schritt.action !== 'explore_street' && kannAktionStarten(db, ch, schritt, jetztMs)) {
-      const durationS = echtzeitDauerFuer(db, ch, schritt);
+      const durationS = echtzeitDauerFuer(db, ch, schritt, jetztMs);
       if (durationS > 0) {
         const poiId = schritt.target || ch.inside_poi || null;
         const poiRow = poiId ? db.prepare('SELECT name FROM pois WHERE id = ?').get(poiId) : null;
@@ -1328,7 +1363,7 @@ module.exports = {
   berlinJetzt, hamburgStunde, istNacht, tageszeitText,
   ladeCharakter, speichereCharakter, klammereCharakter,
   bekannteOrte, entdeckeUmgebung, ereignisSeit,
-  dauerFuer, lasseZeitVergehen, heileDurchSchlaf,
+  dauerFuer, lasseZeitVergehen, heileDurchSchlaf, berechneSchlafDauerS, echtzeitDauerFuer,
   SCHRITT_M, ANKUNFT_M, ladeRoute, speichereRoute, restDistanz,
   waehleExploreZiel, starteRoute, geheSchritt,
   fuehreSchrittAus, fuehreSchrittAusTeil2, fuehreSchrittAusTeil3, schrittAusfuehren,

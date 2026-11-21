@@ -86,11 +86,13 @@ const AKTION = {
 // Steuert, wie lange Aktionen im Live-Betrieb (20s-Tick) in Echtzeit dauern.
 const ECHTZEIT_DAUER = {
   work_shift: 15 * 60, // 15 Min Arbeitsschicht (einfach hier anpassbar)
-  sleep: 10 * 60,
+  sleep: 6 * 3600,
+  sleepMin: 2 * 3600,
+  sleepMax: 10 * 3600,
   visit_doctor: 8 * 60,
   work_on_project: 6 * 60,
   collect_deposit: 4 * 60,
-  rest: 4 * 60,
+  rest: 15 * 60,
   read_book: 4 * 60,
   write_notebook: 3 * 60,
   leave_note: 2 * 60,
