@@ -212,16 +212,39 @@ function waehleExploreZiel(db, karte, ch) {
     if (best) richtung = { x: Number(best.pos_x) - Number(ch.pos_x), z: Number(best.pos_z) - Number(ch.pos_z) };
   }
   const kands = [];
-  for (const k of knoten) {
-    const d = Math.hypot(Number(k.x) - Number(ch.pos_x), Number(k.z) - Number(ch.pos_z));
-    if (d < 40 || d > 130) continue;
+  const punktWert = (px, pz, d) => {
     let bonus = 0;
     if (richtung) {
       const len = Math.hypot(richtung.x, richtung.z) || 1;
-      const skalar = ((Number(k.x) - Number(ch.pos_x)) * richtung.x + (Number(k.z) - Number(ch.pos_z)) * richtung.z) / (len * (d || 1));
-      bonus = skalar;
+      bonus = ((px - Number(ch.pos_x)) * richtung.x + (pz - Number(ch.pos_z)) * richtung.z) / (len * (d || 1));
     }
-    kands.push({ k, d, wertung: d * 0.01 - bonus * 25 + Math.random() * 8 });
+    return d * 0.01 - bonus * 25 + Math.random() * 8;
+  };
+  for (const k of knoten) {
+    const d = Math.hypot(Number(k.x) - Number(ch.pos_x), Number(k.z) - Number(ch.pos_z));
+    if (d < 40 || d > 130) continue;
+    kands.push({ k, d, wertung: punktWert(Number(k.x), Number(k.z), d) });
+  }
+  // Parkflächen komplett begehbar machen: auch Punkte in Park-Polygonen als Explore-Ziele zulassen
+  for (const p of (karte.parks || [])) {
+    const poly = p && p.polygon;
+    if (!Array.isArray(poly) || poly.length < 3) continue;
+    let minX = Infinity, maxX = -Infinity, minZ = Infinity, maxZ = -Infinity, sx = 0, sz = 0;
+    for (const [px, pz] of poly) {
+      if (px < minX) minX = px; if (px > maxX) maxX = px;
+      if (pz < minZ) minZ = pz; if (pz > maxZ) maxZ = pz;
+      sx += px; sz += pz;
+    }
+    const proben = [[sx / poly.length, sz / poly.length]];
+    for (let t = 0; t < 2; t += 1) {
+      proben.push([minX + Math.random() * (maxX - minX), minZ + Math.random() * (maxZ - minZ)]);
+    }
+    for (const [px, pz] of proben) {
+      if (!pf.punktInPolygon(px, pz, poly)) continue;
+      const d = Math.hypot(px - Number(ch.pos_x), pz - Number(ch.pos_z));
+      if (d < 20 || d > 130) continue;
+      kands.push({ k: { x: Math.round(px * 10) / 10, z: Math.round(pz * 10) / 10 }, d, wertung: punktWert(px, pz, d) });
+    }
   }
   if (kands.length === 0) {
     let best = null;
@@ -252,9 +275,12 @@ function starteRoute(db, karte, ch, zielX, zielZ, zielPoi) {
       mitZielPunkt = true;
     }
   }
+  const parks = karte.parks || [];
+  const imStartPark = Boolean(pf.parkFuerPunkt(parks, Number(ch.pos_x), Number(ch.pos_z)));
+  const imZielPark = Boolean(pf.parkFuerPunkt(parks, tx, tz));
   const start = pf.findeRouteZwischenPunkten(
     navGraph, Number(ch.pos_x), Number(ch.pos_z), tx, tz,
-    { mitStartPunkt: Boolean(ch.inside_poi), mitZielPunkt }
+    { mitStartPunkt: Boolean(ch.inside_poi) || imStartPark, mitZielPunkt: mitZielPunkt || imZielPark, parks }
   );
   const weg = (start && start.weg && !start.keineRoute) ? start.weg : [];
   if (weg.length < 2) return null;

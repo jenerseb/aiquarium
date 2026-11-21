@@ -6,6 +6,27 @@ function dist(a, b) {
   return Math.hypot(a.x - b.x, a.z - b.z);
 }
 
+function punktInPolygon(x, z, poly) {
+  if (!Array.isArray(poly) || poly.length < 3) return false;
+  let inside = false;
+  for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+    const xi = poly[i][0], zi = poly[i][1];
+    const xj = poly[j][0], zj = poly[j][1];
+    if (((zi > z) !== (zj > z)) && (x < (xj - xi) * (z - zi) / ((zj - zi) || 1e-9) + xi)) {
+      inside = !inside;
+    }
+  }
+  return inside;
+}
+
+function parkFuerPunkt(parks, x, z) {
+  if (!Array.isArray(parks) || parks.length === 0) return null;
+  for (const p of parks) {
+    if (p && Array.isArray(p.polygon) && punktInPolygon(x, z, p.polygon)) return p;
+  }
+  return null;
+}
+
 function baueAdjazenz(navGraph) {
   const knoten = new Map();
   for (const n of navGraph.nodes) knoten.set(String(n.id), { id: String(n.id), x: n.x, z: n.z });
@@ -121,6 +142,24 @@ function findeRoute(navGraph, startId, zielId) {
 // A* zwischen beliebigen Koordinaten über ihre Strassen-Projektionen (Hauseingangspunkte).
 // Kein diagonales Querfeldein-Laufen durch Haeuserbloecke!
 function findeRouteZwischenPunkten(navGraph, startX, startZ, zielX, zielZ, opts = {}) {
+  const parks = opts.parks || (navGraph && navGraph.parks) || null;
+  if (parks) {
+    const startPark = parkFuerPunkt(parks, startX, startZ);
+    const zielPark = parkFuerPunkt(parks, zielX, zielZ);
+    if (startPark && zielPark && startPark.id === zielPark.id) {
+      const sx = Math.round(startX * 10) / 10;
+      const sz = Math.round(startZ * 10) / 10;
+      const zx = Math.round(zielX * 10) / 10;
+      const zz = Math.round(zielZ * 10) / 10;
+      return {
+        startKnoten: { knoten: { x: sx, z: sz }, distanzM: 0 },
+        zielKnoten: { knoten: { x: zx, z: zz }, distanzM: 0 },
+        pfad: ['__park_start', '__park_ziel'],
+        weg: [{ x: sx, z: sz }, { x: zx, z: zz }],
+        distanzM: Math.round(Math.hypot(zx - sx, zz - sz) * 10) / 10,
+      };
+    }
+  }
   const { knoten, adj } = baueAdjazenz(navGraph);
   const sEnt = naechsterStrassenPunkt(navGraph, startX, startZ);
   const zEnt = naechsterStrassenPunkt(navGraph, zielX, zielZ);
@@ -237,4 +276,4 @@ function findePoiRoute(navGraph, pois, startPoiId, zielPoiId) {
   });
 }
 
-module.exports = { dist, baueAdjazenz, naechsterKnoten, naechsterStrassenPunkt, findeRoute, findeRouteZwischenPunkten, findeWegFuerKoordinaten, findePoiRoute, snappePois };
+module.exports = { dist, baueAdjazenz, naechsterKnoten, naechsterStrassenPunkt, findeRoute, findeRouteZwischenPunkten, findeWegFuerKoordinaten, findePoiRoute, snappePois, punktInPolygon, parkFuerPunkt };
