@@ -50,7 +50,7 @@ function main() {
   assert.strictEqual(ch.erschoepfung, 15.0);
   assert.strictEqual(ch.inside_poi, 'apartment');
   const sheetN = db.prepare('SELECT COUNT(*) AS n FROM character_sheet WHERE character_id = ?').get(characterId).n;
-  assert.ok(sheetN >= 10, 'sheet-zeilen erwartet, gefunden: ' + sheetN);
+  assert.ok(sheetN >= 5, 'sheet-zeilen erwartet, gefunden: ' + sheetN);
   const inv = db.prepare('SELECT item_key FROM inventory WHERE character_id = ?').all(characterId).map((r) => r.item_key);
   assert.ok(inv.includes('notizblock'), 'notizblock im inventar erwartet');
   const books = db.prepare('SELECT id FROM books').all().map((r) => r.id);

@@ -9,59 +9,58 @@ const { GESUND, FROH, SEKUNDAER, chunkCapFuer, AKTION } = require('./config');
 
 function gesundGefuehl(gesund) {
   const g = Number(gesund);
-  if (g >= 80) return 'Dein Körper fühlt sich kräftig und verlässlich an. Du kannst Treppen nehmen, ohne nachzudenken.';
-  if (g >= 60) return 'Dein Körper ist weitgehend in Ordnung, nur gelegentlich zwickt etwas.';
-  if (g >= 40) return 'Du fühlst dich angeschlagen: schnell außer Atem, alles strengt mehr an als sonst.';
-  if (g >= 20) return 'Dir geht es sichtlich schlecht: schwindelig, fahrig, jeder Weg ist weit. Du solltest dich schonen und bald zum Arzt.';
-  return 'Dir geht es sehr schlecht: kaum noch auf den Beinen. Geh zum Arzt oder ruh dich sofort aus.';
+  if (g >= 80) return 'Körper kräftig und verlässlich.';
+  if (g >= 60) return 'Körper okay, nur leichtes Zwicken.';
+  if (g >= 40) return 'Angeschlagen und schneller außer Atem.';
+  if (g >= 20) return 'Schwindelig und fahrig – bald zum Arzt oder ausruhen.';
+  return 'Sehr schwach – sofort zum Arzt oder ausruhen!';
 }
 
 function frohGefuehl(froh) {
   const f = Number(froh);
-  if (f >= 60) return 'Dir ist leicht und hell zumute. Du lächelst fremde Leute fast automatisch an.';
-  if (f >= 20) return 'Deine Stimmung ist ruhig und einigermaßen zuversichtlich.';
-  if (f >= -20) return 'Deine Stimmung ist grau und gedrückt. Kleinigkeiten nerven dich.';
-  if (f >= -60) return 'Du fühlst dich niedergeschlagen und einsam. Alles wirkt anstrengend und fern.';
-  return 'Du bist tief unten: traurig, mutlos, am liebsten würdest du dich verkriechen.';
+  if (f >= 60) return 'Stimmung leicht und hell.';
+  if (f >= 20) return 'Stimmung ruhig und zuversichtlich.';
+  if (f >= -20) return 'Stimmung grau und leicht gereizt.';
+  if (f >= -60) return 'Niedergeschlagen und einsam.';
+  return 'Tief unten, traurig und mutlos.';
 }
 
 function hungerGefuehl(hunger) {
   const h = Number(hunger);
-  if (h < 20) return 'Du bist pappsatt. Allein der Gedanke an Essen oder Trinken widerstrebt dir – du bekommst gerade keinen Bissen herunter. Nutze die Zeit zum Erkunden, Lesen, Schreiben oder Arbeiten.';
-  if (h < 45) return 'Du bist satt und brauchst kein Essen. Dein Kopf ist frei für den Kiez, deine Projekte oder Erledigungen.';
-  if (h < 70) return 'Langsam bekommst du Appetit – bei Gelegenheit wäre ein Imbiss oder Snack nett, aber es eilt noch nicht.';
-  if (h < 85) return 'Du hast deutlich Hunger: der Magen knurrt, lange solltest du das Essen nicht mehr aufschieben.';
-  return 'Du bist ausgehungert: dir ist flau und schwindelig vor Hunger. Iss sofort etwas!';
+  if (h < 20) return 'Pappsatt – kein Essen nötig.';
+  if (h < 45) return 'Satt, Kopf frei.';
+  if (h < 70) return 'Leichter Appetit, eilt aber nicht.';
+  if (h < 85) return 'Deutlicher Hunger – bald etwas essen.';
+  return 'Ausgehungert – sofort etwas essen!';
 }
 
 function erschoepfungGefuehl(wert) {
   const e = Number(wert);
-  if (e < 30) return 'Du bist hellwach und voller Tatendrang. Ans Schlafen oder Ausruhen ist überhaupt nicht zu denken.';
-  if (e < 50) return 'Du bist wach und aufnahmefähig. Fürs Bett bist du noch viel zu fit – du könntest jetzt unmöglich einschlafen.';
-  if (e < 75) return 'Du merkst langsam die Anstrengung in den Knochen. Du hältst noch gut durch, könntest dich aber auch schon ausruhen oder schlafen legen.';
-  if (e < 90) return 'Du bist richtig müde: schwere Lider, das Denken wird zäh. Geh bald heim in deine Wohnung zum Schlafen.';
-  return 'Du bist völlig übermüdet und hältst dich kaum noch auf den Beinen. Geh sofort in deine Wohnung und schlaf!';
+  if (e < 30) return 'Hellwach und voller Tatendrang.';
+  if (e < 50) return 'Wach und fit, noch nicht müde.';
+  if (e < 75) return 'Leichte Müdigkeit in den Knochen.';
+  if (e < 90) return 'Richtig müde – bald daheim schlafen.';
+  return 'Völlig übermüdet – sofort heim und schlafen!';
 }
 
 function geldGefuehl(geld) {
   const g = Math.round(Number(geld) || 0);
-  if (g >= 50) return `Du hast ${g} Euro in der Tasche – ein solides Polster (damit könntest du dir am Späti sogar ein gebrauchtes Handy kaufen).`;
-  if (g >= 25) return `Du hast ${g} Euro in der Tasche – ein ordentliches Polster für den Kiez, mit dem du gut haushalten kannst.`;
-  if (g >= 10) return `Du hast ${g} Euro in der Tasche – ein kleines Polster für den Kiez, mit dem du aber haushalten musst.`;
-  if (g >= 1) return `Du hast nur noch ${g} Euro in der Tasche – das ist knapp, jede Ausgabe zählt doppelt.`;
-  return 'Du hast praktisch kein Geld mehr. Du musst erst etwas verdienen oder Pfand abgeben.';
+  if (g >= 50) return `${g} Euro dabei (solides Polster, reicht sogar für ein gebrauchtes Handy am Späti).`;
+  if (g >= 25) return `${g} Euro dabei (ordentliches Polster).`;
+  if (g >= 10) return `${g} Euro dabei (kleines Polster, haushalten).`;
+  if (g >= 1) return `Nur noch ${g} Euro dabei – knapp, jede Ausgabe zählt.`;
+  return 'Praktisch kein Geld mehr – erst verdienen oder Pfand abgeben.';
 }
 
 function koerperSaetze(ch) {
   const cap = chunkCapFuer(Number(ch.gesund));
-  const saetze = [
-    gesundGefuehl(ch.gesund) + ` (Dein Körper erholt sich derzeit höchstens bis zu dieser Belastungsgrenze von ${cap}.)`,
+  return [
+    `${gesundGefuehl(ch.gesund)} (Belastungsgrenze: ${cap})`,
     frohGefuehl(ch.froh),
     hungerGefuehl(ch.hunger),
     erschoepfungGefuehl(ch.erschoepfung),
     geldGefuehl(ch.geld),
   ];
-  return saetze;
 }
 
 
@@ -69,15 +68,15 @@ function koerperSaetze(ch) {
 
 function sheetText(db, characterId) {
   const zeilen = db.prepare(
-    "SELECT category, text, written_by, source_reason FROM character_sheet WHERE character_id = ? AND active = 1 ORDER BY category, id"
+    "SELECT category, text, written_by FROM character_sheet WHERE character_id = ? AND active = 1 ORDER BY category, id"
   ).all(characterId);
   const fest = zeilen.filter((z) => z.written_by === 'creator');
   const gelernt = zeilen.filter((z) => z.written_by === 'self');
-  const fmt = (z) => `- [${z.category}] ${z.text}${z.source_reason ? ` (Ausloeser: ${z.source_reason})` : ''}`;
-  const a = ['Dein unveraenderliches Wesen (das bleibt, wer du bist):'];
+  const fmt = (z) => `- [${z.category}] ${z.text}`;
+  const a = ['Dein Wesen:'];
   for (const z of fest) a.push(fmt(z));
   if (gelernt.length > 0) {
-    a.push('Was du ueber dich selbst gelernt hast (darfst du hinterfragen, aber nicht loeschen):');
+    a.push('Über dich gelernt:');
     for (const z of gelernt) a.push(fmt(z));
   }
   return a.join('\n');
@@ -86,26 +85,39 @@ function sheetText(db, characterId) {
 // --- Gedaechtnis, Loops, Inventar, Buecher ------------------------------------
 
 function memoriesText(topMems) {
-  if (!topMems || topMems.length === 0) return 'An besondere Momente erinnerst du dich gerade kaum – der Kopf ist leer.';
-  const a = ['Was dir gerade im Kopf herumgeht (das Wichtigste zuerst):'];
-  for (const m of topMems) a.push(`- (${m.tier}, ${m.kind}) ${m.text}`);
+  if (!topMems || topMems.length === 0) return 'Gedächtnis: gerade leer.';
+  const gezählt = [];
+  const idxMap = new Map();
+  for (const m of topMems) {
+    const key = String(m.text || '').trim();
+    if (idxMap.has(key)) {
+      gezählt[idxMap.get(key)].n += 1;
+    } else {
+      idxMap.set(key, gezählt.length);
+      gezählt.push({ m, n: 1 });
+    }
+  }
+  const a = ['Was dir im Kopf herumgeht:'];
+  for (const { m, n } of gezählt) {
+    a.push(`- (${m.tier}, ${m.kind}) ${m.text}${n > 1 ? ` (×${n})` : ''}`);
+  }
   return a.join('\n');
 }
 
 function loopsText(db, characterId) {
   const loops = db.prepare(
-    "SELECT kind, text, urgency, related_poi FROM open_loops WHERE character_id = ? AND status = 'open' ORDER BY urgency DESC LIMIT 8"
+    "SELECT kind, text, urgency, related_poi FROM open_loops WHERE character_id = ? AND status = 'open' ORDER BY urgency DESC LIMIT 6"
   ).all(characterId);
-  if (loops.length === 0) return 'Offene Fragen und Vorhaben: gerade keine – du bist frei fuer Neues.';
-  const a = ['Offene Fragen und Vorhaben (Fragen an die Welt, Wuensche an dich, angefangene Arbeit):'];
+  if (loops.length === 0) return 'Offene Vorhaben: keine.';
+  const a = ['Offene Fragen und Vorhaben:'];
   for (const l of loops) a.push(`- [${l.kind}] ${l.text}${l.related_poi ? ` (bei ${l.related_poi})` : ''}`);
   return a.join('\n');
 }
 
 function inventarText(db, characterId) {
   const items = db.prepare('SELECT item_key, label, count FROM inventory WHERE character_id = ?').all(characterId);
-  if (items.length === 0) return 'In deinen Taschen: nichts ausser Kruemeln.';
-  return 'In deinen Taschen: ' + items.map((i) => `${i.label} (${i.count}x)`).join(', ') + '.';
+  if (items.length === 0) return 'Taschen: leer.';
+  return 'Taschen: ' + items.map((i) => `${i.label} (${i.count}x)`).join(', ') + '.';
 }
 
 function hatHandy(db, characterId) {
@@ -113,19 +125,23 @@ function hatHandy(db, characterId) {
   return r && Number(r.count) > 0;
 }
 
-function buecherText(db) {
+function buecherText(db, daheim = true) {
   let buecher = [];
   try {
     buecher = db.prepare('SELECT id, title, kind, entries_json FROM books').all();
   } catch { buecher = []; }
-  if (buecher.length === 0) return 'In deinem Regal daheim: gerade nichts – das Regal ist leer.';
-  const a = ['In deinem Regal daheim stehen (nur hier in der Wohnung kannst du darin lesen):'];
+  if (buecher.length === 0) return 'Regal daheim: leer.';
+  if (!daheim) return `Regal daheim: ${buecher.length} Bücher (nur in apartment lesbar).`;
+  const a = ['Regal daheim (nur in apartment):'];
   for (const b of buecher) {
     let eintraege = [];
     try { eintraege = JSON.parse(b.entries_json); } catch { eintraege = []; }
-    const themen = eintraege.map((e) => e.topic || e.title).filter(Boolean).slice(0, 8);
+    const themen = eintraege
+      .map((e) => (e.topic && !/^notiz_\d+$/.test(e.topic) ? e.topic : e.title))
+      .filter(Boolean)
+      .slice(-4);
     const themenTxt = themen.length > 0 ? `: ${themen.join(', ')}` : '';
-    a.push(`- „${b.title}“ (id: ${b.id}, ${b.kind}, ${eintraege.length} Eintraege${themenTxt})`);
+    a.push(`- „${b.title}“ (${b.id}, ${eintraege.length} Eintr.${themenTxt})`);
   }
   return a.join('\n');
 }
@@ -139,9 +155,30 @@ const OFFENE_INTENTS = [
   'visit_doctor', 'read_book', 'write_notebook', 'work_on_project',
 ];
 
-function whitelistFuer(db, characterId, orte) {
-  const liste = OFFENE_INTENTS.filter((a) => !['send_sms', 'send_email', 'web_search'].includes(a));
+function hatPfand(db, characterId) {
+  const r = db.prepare("SELECT count FROM inventory WHERE character_id = ? AND item_key = 'pfand'").get(characterId);
+  return r && Number(r.count) > 0;
+}
+
+function hatAktivenJob(db, characterId) {
+  try {
+    const arbiter = require('./arbiter');
+    return Boolean(arbiter.aktiverJob(db, characterId));
+  } catch { return false; }
+}
+
+function whitelistFuer(db, characterId, orte, ch = null) {
+  let liste = OFFENE_INTENTS.filter((a) => !['send_sms', 'send_email', 'web_search'].includes(a));
   if (hatHandy(db, characterId)) liste.push('send_sms', 'send_email', 'web_search');
+  if (ch) {
+    const hatJob = hatAktivenJob(db, characterId);
+    const pfand = hatPfand(db, characterId);
+    liste = liste.filter((a) => {
+      if (a === 'return_deposit') return pfand;
+      if (a === 'work_shift' || a === 'quit_job') return hatJob;
+      return true;
+    });
+  }
   return { intents: liste, orte: orte || [] };
 }
 
@@ -177,11 +214,8 @@ function jobText(db, characterId) {
     const poiRow = db.prepare('SELECT name FROM pois WHERE id = ?').get(job.poi_id);
     const ort = poiRow ? poiRow.name : job.poi_id;
     const n = Number(job.shifts_completed) || 0;
-    const schichten = n === 1 ? 'Du hast dort schon eine Schicht geschafft.' : (n > 1 ? `Du hast dort schon ${n} Schichten geschafft.` : '');
-    return 'DEIN JOB: Du hast eine Zusage als ' + job.role_title + ' bei ' + ort + '. ' + schichten
-      + ' Eine Schicht dort macht hungrig und müde, aber danach hast du wieder Geld in der Tasche. '
-      + 'Du musst NICHT mehr nach Arbeit suchen – look_for_work und take_job sind jetzt sinnlos. '
-      + 'Wenn du Geld brauchst, plane stattdessen work_shift bei ' + ort + '.';
+    const schichten = n > 0 ? ` (${n} Schichten)` : '';
+    return `DEIN JOB: ${job.role_title} bei ${ort}${schichten} – für Geld plane work_shift.`;
   } catch { return null; }
 }
 
@@ -195,24 +229,25 @@ function buildPrompt(db, ch, ctx) {
     action: ch.current_action,
   });
   const handy = hatHandy(db, ch.id);
-  const wl = whitelistFuer(db, ch.id, c.orte);
+  const daheim = ch.inside_poi === 'apartment';
+  const wl = whitelistFuer(db, ch.id, c.orte, ch);
   const wo = c.woText || `Du bist ${c.woName || 'unterwegs'}.`;
   const zeit = c.zeitText || 'Es ist Tag in Hamburg.';
   const wetter = c.wetterText || '';
   const notizenListe = Array.isArray(c.letzteNotizen) && c.letzteNotizen.length > 0
-    ? ['Was zuletzt passiert ist:', ...c.letzteNotizen.map((n) => `- ${n}`)]
-    : [c.letztesEreignis ? `Zuletzt ist passiert: ${c.letztesEreignis}` : 'Zuletzt ist nichts Besonderes passiert.'];
+    ? ['Zuletzt:', ...c.letzteNotizen.map((n) => `- ${n}`)]
+    : [c.letztesEreignis ? `Zuletzt: ${c.letztesEreignis}` : 'Zuletzt: nichts Besonderes.'];
   const regelnExtra = [];
-  if (Number(ch.hunger) < 20) regelnExtra.push('Du bist noch völlig satt: plane consume NICHT als ersten Schritt (höchstens nach einer Arbeitsschicht).');
-  if (Number(ch.erschoepfung) < 50) regelnExtra.push('Du bist noch zu wach zum Schlafen: plane sleep NICHT (höchstens nach einer Arbeitsschicht), und geschlafen wird nur in apartment.');
+  if (Number(ch.hunger) < 20) regelnExtra.push('Noch völlig satt: consume nicht als ersten Schritt planen.');
 
+  const jobLine = jobText(db, ch.id);
   const linien = [
-    'Du bist ein junger Stadterkunder, frisch in St. Pauli angekommen. Du erlebst alles in der Ich-Form, heute, hier.',
+    'Du bist ein junger Stadterkunder in St. Pauli (Ich-Form, heute, hier).',
     '',
-    'SO FÜHLT SICH DEIN KÖRPER AN (keine Zahlen, nur Gefühl):',
+    'KÖRPER & GEFÜHL:',
     ...koerperSaetze(ch),
     '',
-    ...(jobText(db, ch.id) ? [jobText(db, ch.id), ''] : []),
+    ...(jobLine ? [jobLine, ''] : []),
     sheetText(db, ch.id),
     '',
     memoriesText(top),
@@ -220,28 +255,25 @@ function buildPrompt(db, ch, ctx) {
     loopsText(db, ch.id),
     '',
     inventarText(db, ch.id),
-    buecherText(db),
+    buecherText(db, daheim),
     '',
-    'WO DU BIST:',
+    'ORT & ZEIT:',
     wo,
     zeit,
-    wetter,
+    ...(wetter ? [wetter] : []),
     ...notizenListe,
     '',
     orteText(wl.orte),
     '',
     kommunikationsRegel(handy),
-    'Geld, Zeit und Gesundheit rechnet die Welt für dich – du beschreibst nur Wünsche und Gedanken, nie Beträge oder Prozentwerte.',
+    'Keine Beträge oder Prozentwerte nennen – die rechnet die Welt.',
     ...regelnExtra,
     '',
-    'ANTWORTE AUSSCHLIESSLICH ALS JSON (kein anderer Text):',
-    '{ "thought": "ein Satz, was dir gerade durch den Kopf geht (max. 20 Wörter)",',
-    '  "why_here": "kurzer Grund für diesen Plan (was du gerade vorhast)",',
-    '  "retrospective": "ein kurzer Rückblick auf deinen letzten Plan (was geklappt hat, was nicht)",',
-    '  "plan": [ {"action": "intent", "target": "poi_id oder null", "detail": "freier Wunschtext"} x 2 bis 4 Schritte ] }',
+    'ANTWORTE NUR ALS JSON:',
+    '{ "thought": "1 Satz (max. 20 Wörter)", "why_here": "kurzer Grund", "retrospective": "kurzer Rückblick",',
+    '  "plan": [ {"action": "intent", "target": "poi_id|null", "detail": "Wunschtext"} x 2..4 ] }',
     'Erlaubte intents: ' + wl.intents.join(', ') + '.',
-    'Schritte mit "walk_to" brauchen immer ein "target" (poi_id).',
-    'Lege höchstens einen "leave_note"-Schritt pro Plan ab.',
+    'walk_to braucht immer target (poi_id); max. 1 leave_note pro Plan.',
   ];
   return { prompt: linien.join('\n'), whitelist: wl.intents, orte: wl.orte, memories: top };
 }

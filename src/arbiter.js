@@ -156,6 +156,12 @@ async function resolveIntent(db, brain, poi, kind, wunschText, characterId) {
   const key = normalisiereKey(wunschText);
   const bekannt = findeAngebot(db, poi.id, kind, key);
   if (bekannt) return { angebot: bekannt, neu: false };
+  // Kostenlose Aktivitäten (do_activity) brauchen keinen Arbiter-LLM-Call (immer 0 €).
+  if (kind === 'do_activity') {
+    const angebot = klammereAngebot(poi, kind, key, deterministischesAngebot(poi, kind, wunschText));
+    const gespeichert = speichereAngebot(db, angebot);
+    return { angebot: gespeichert, neu: true, quelle: { source: 'lokal', model: '', tokens: 0 } };
+  }
   const llm = await arbiterLLM(brain, poi, kind, wunschText, db, characterId);
   const llmObj = llm && llm.obj ? llm.obj : null;
   let angebot;
@@ -240,9 +246,49 @@ function rechneSchichtAb(db, characterId, job, ch) {
 }
 
 
-// --- Bewerbungs-Evaluator (autonomer Ladenbesitzer) -------------------------------
+// --- Bewerbungs-Evaluator (autonomer Ladenbesitzer via Arbiter-LLM + Fallback) -------
 // Laeuft automatisch nach Timer-Ablauf, falls keine Telegram-Antwort kam.
-function bewerteBewerbungen(db, telegram) {
+async function arbiterBewerbungLLM(brain, poi, zettelText) {
+  if (!brain || typeof brain.callModel !== 'function') return null;
+  const apiKey = process.env.OPENROUTER_API_KEY;
+  if (!apiKey) return null;
+  const [lo, hi] = ECONOMY.wageBounds;
+  const prompt = [
+    'Du bist der Ladenbesitzer / Chef dieses Kiez-Orts in Hamburg-St. Pauli.',
+    `Ort: ${poi.name} (${poi.category}): ${poi.public_desc || ''}`,
+    `Hinterlassener Zettel: „${String(zettelText || '').slice(0, 300)}“`,
+    `Lohnrahmen pro 20-Min-Schicht: ${lo} bis ${hi} Euro (ganze Euro).`,
+    'Entscheide realistisch, ob das eine Jobbewerbung ist und ob du sie annimmst.',
+    'Antworte NUR als JSON: { "angenommen": true/false, "role_title": "kurze Rolle", "wage": zahl, "grund": "ein kurzer Satz" }.',
+  ].join('\n');
+  const pair = getRoleSlots('arbiter');
+  for (const [idx, slot] of [pair.primary, pair.fallback].entries()) {
+    if (!slot) continue;
+    try {
+      const r = await brain.callModel({
+        prompt, apiKey, model: slot.model, reasoningExclude: slot.reasoningExclude,
+        timeoutMs: 20000, temperature: 0.2, maxTokens: slot.maxTokens || 400,
+      });
+      const obj = JSON.parse(r.content);
+      if (!obj || typeof obj !== 'object' || typeof obj.angenommen !== 'boolean') continue;
+      const tokens = Number((r.usage && (r.usage.completion_tokens || r.usage.total_tokens)) || 0) || 0;
+      if (typeof brain.logLlmErfolg === 'function') {
+        brain.logLlmErfolg({
+          role: 'arbiter', versuch: idx === 0 ? 'primary' : 'fallback', provider: 'OpenRouter',
+          model: r.usedModel || slot.model, prompt, response: r.content, tokens, latencyMs: r.latencyMs || 0,
+        });
+      }
+      return obj;
+    } catch {
+      continue;
+    }
+  }
+  return null;
+}
+
+const JOB_KATEGORIEN = new Set(['kneipe', 'imbiss', 'club', 'kino', 'spaeti', 'restaurant', 'cafe', 'markt']);
+
+async function bewerteBewerbungen(db, telegram, brain = null) {
   const faellige = db.prepare(
     "SELECT * FROM messages_outbox WHERE channel = 'leave_note' AND status = 'pending' AND (resolve_after_at IS NULL OR resolve_after_at <= datetime('now'))"
   ).all();
@@ -250,12 +296,22 @@ function bewerteBewerbungen(db, telegram) {
   for (const z of faellige) {
     if (telegram && typeof telegram.hatAntwortFuer === 'function' && telegram.hatAntwortFuer(db, z.id)) continue;
     const text = String(z.content || '').toLowerCase();
-    const willJob = /spuel|kueche|kellner|theke|putz|hilfe|arbeit|job|aushelfen|schicht/.test(text);
     const poi = z.target_poi ? db.prepare('SELECT * FROM pois WHERE id = ?').get(z.target_poi) : null;
-    if (willJob && poi && ['kneipe', 'imbiss', 'club', 'kino', 'spaeti'].includes(poi.category)) {
+    const hatJobOrt = Boolean(poi && JOB_KATEGORIEN.has(poi.category));
+    const willJobRegex = /spuel|kueche|kellner|theke|putz|hilfe|arbeit|job|aushelfen|schicht|tresen|kasse/.test(text);
+
+    let entscheidung = null;
+    if (hatJobOrt && willJobRegex) {
+      entscheidung = await arbiterBewerbungLLM(brain, poi, z.content);
+    }
+
+    const angenommen = entscheidung ? entscheidung.angenommen : (hatJobOrt && willJobRegex);
+    if (angenommen && hatJobOrt) {
       const [lo, hi] = ECONOMY.wageBounds;
-      const lohn = runde2(lo + Math.random() * (hi - lo));
-      const rolle = /spuel/i.test(z.content) ? 'Spülhilfe' : 'Küchenhilfe';
+      const lohn = entscheidung && Number.isFinite(Number(entscheidung.wage))
+        ? Math.round(klammere(Number(entscheidung.wage), lo, hi))
+        : runde2(lo + Math.random() * (hi - lo));
+      const rolle = (entscheidung && entscheidung.role_title ? String(entscheidung.role_title) : (/spuel/i.test(z.content) ? 'Spülhilfe' : 'Aushilfe')).slice(0, 60);
       const res = nimmJobAn(db, z.character_id, poi.id, rolle, lohn);
       if (res.ok) {
         db.prepare("UPDATE messages_outbox SET status = 'resolved' WHERE id = ?").run(z.id);
@@ -273,7 +329,7 @@ function bewerteBewerbungen(db, telegram) {
       }
     } else {
       db.prepare("UPDATE messages_outbox SET status = 'noticed' WHERE id = ?").run(z.id);
-      ergebnisse.push({ zettelId: z.id, angenommen: false, grund: 'kein_job_wunsch' });
+      ergebnisse.push({ zettelId: z.id, angenommen: false, grund: entscheidung && entscheidung.grund ? entscheidung.grund : 'kein_job_wunsch' });
     }
   }
   return ergebnisse;

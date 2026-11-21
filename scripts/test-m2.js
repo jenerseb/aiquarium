@@ -122,7 +122,7 @@ async function main() {
   assert.ok(t4.ok, 'tick4 rest ok');
   // Evaluator: Timer sofort faellig machen, dann Job erwartet
   db.prepare("UPDATE messages_outbox SET resolve_after_at = datetime('now', '-1 minute') WHERE id = ?").run(zettel.id);
-  const bew = arbiter.bewerteBewerbungen(db, MOCK_TELEGRAM);
+  const bew = await arbiter.bewerteBewerbungen(db, MOCK_TELEGRAM);
   assert.ok(bew.length >= 1 && bew[0].angenommen, 'bewerbung angenommen: ' + JSON.stringify(bew));
   const job = arbiter.aktiverJob(db, characterId);
   assert.ok(job && job.status === 'active', 'aktiver job vorhanden');

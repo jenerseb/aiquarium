@@ -293,17 +293,11 @@ const SEED_POIS = [
 ];
 
 const SEED_SHEET = [
-  { category: 'like', text: 'sitzt gern auf der Bank im Gruenen und schaut den Leuten zu' },
-  { category: 'like', text: 'mag den Geruch von frischen Pommes und Regen auf warmem Asphalt' },
-  { category: 'like', text: 'hoert gern leise Musik aus fremden Fenstern' },
+  { category: 'like', text: 'mag Parks, Pommesgeruch und leise Musik aus Fenstern' },
+  { category: 'cares', text: 'haelt Wort und teilt seine wenigen Euro lieber als zu horten' },
   { category: 'cares', text: 'will in St. Pauli ankommen, ohne jemandem zur Last zu fallen' },
-  { category: 'cares', text: 'seine wenigen Euro teilt er lieber, als sie zu horten' },
-  { category: 'cares', text: 'haelt Wort, auch wenn es unbequem wird' },
-  { category: 'fears', text: 'hat Angst, nachts ohne Dach ueber dem Kopf dazustehen' },
-  { category: 'fears', text: 'fuerchtet sich davor, krank zu werden und niemanden rufen zu koennen' },
-  { category: 'small_things', text: 'sammelt seltsame Zettel und Kassenbons' },
-  { category: 'small_things', text: 'zaehlt beim Gehen manchmal die Schritte bis zur naechsten Ecke' },
-  { category: 'small_things', text: 'gruesst fremde Katzen mit Namen, die er sich ausdenkt' },
+  { category: 'fears', text: 'fuerchtet Obdachlosigkeit nachts und allein krank zu werden' },
+  { category: 'small_things', text: 'sammelt Zettel und gruesst fremde Katzen unterwegs' },
 ];
 
 const SEED_BOOKS = [

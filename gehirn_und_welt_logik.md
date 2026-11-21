@@ -96,23 +96,24 @@ stateDiagram-v2
 
 ## 3. Wirtschaft: Einkommen, Ausgaben & der Arbiter
 
-Der Charakter hat **zwei Einkommensquellen** und **zwei Ausgabenwege**:
+Der Charakter hat **zwei Einkommensquellen** und **zwei Ausgabenwege** (der **Arbiter-LLM** läuft gezielt nur für kostenpflichtiges `consume` bei Cache-Miss sowie für die autonome **Job-Annahme**, nicht für kostenlose `do_activity`-Aktionen; Arbiter-Calls loggen nur ins Dev-**LLM-Log**, nicht in den Live-Feed):
 
 ```mermaid
 flowchart LR
     subgraph Einkommen["💶 Einkommen"]
         direction TB
-        Pfand1["collect_deposit<br/>(8 min, überall/Park)<br/>Findet 1–3 Pfandflaschen"] --> Pfand2["return_deposit<br/>(2 min, überall möglich!)<br/>Gibt +1 € pro Flasche"]
+        Pfand1["collect_deposit<br/>(8 min, draußen / im Park)<br/>65 % Chance auf 1–2 Flaschen"] --> Pfand2["return_deposit<br/>(2 min, nur am spaeti)<br/>Gibt +1 € pro Flasche"]
         Note["leave_note<br/>(3 min, legt Zettel ab)"] --> Outbox["messages_outbox<br/>(status: pending)"]
         Outbox -- "Telegram-Antwort:<br/>JA Name Rolle Lohn" --> JobDB[("jobs-Tabelle<br/>(active, 8..18 €/Schicht)")]
-        Outbox -- "Nach 2h Echtzeit ohne<br/>Telegram: Arbiter prüft<br/>Keywords (spuel/hilfe/job...)" --> JobDB
+        Outbox -- "Nach Timer ohne Telegram<br/>(15 min / 3 min): Arbiter-LLM<br/>prüft Bewerbung, Rolle & Lohn<br/>(Fallback: Keyword-Regel)" --> JobDB
         JobDB --> Shift["work_shift (20 min)<br/>zahlt Lohn in €"]
     end
 
-    subgraph Ausgaben["🛒 Ausgaben"]
+    subgraph Ausgaben["🛒 Ausgaben & Aktivitäten"]
         direction TB
+        Act["do_activity(detail)<br/>(10 min am POI, immer 0 €)"] --> ActDet["Lokal deterministisch<br/>(kein Arbiter-LLM-Call)"]
         Consume["consume(detail)<br/>(6 min am POI)"] --> CacheCheck{"In poi_offers<br/>bekannt?"}
-        CacheCheck -- "Nein" --> ArbLLM["Arbiter-LLM prüft Wunsch<br/>& Preis in Kategorie-Grenzen"]
+        CacheCheck -- "Nein" --> ArbLLM["Arbiter-LLM prüft Wunsch<br/>& Preis in Kategorie-Grenzen<br/>(Log nur im Dev LLM-Log)"]
         ArbLLM --> SaveOffer[("poi_offers Cache")]
         CacheCheck -- "Ja" --> SaveOffer
         SaveOffer --> Pay["Geld abziehen,<br/>Hunger senken, Froh erhöhen"]

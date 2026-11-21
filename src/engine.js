@@ -439,13 +439,6 @@ async function fuehreSchrittAus(db, deps, characterId, schritt, jetztMs) {
       });
     }
     ch.current_action = 'idle';
-    // Arbiter-Quelle für den Dev-Feed (primary vs. fallback sichtbar machen)
-    if (res.quelle && (res.quelle.model || res.quelle.source !== 'fallback')) {
-      try {
-        db.prepare("INSERT INTO events (character_id, tick, type, payload_json, in_feed) VALUES (?, 0, 'arbiter', ?, 1)")
-          .run(characterId, JSON.stringify({ kind: action, label: angebot.label, quelle: res.quelle }));
-      } catch { /* feed darf nie crashen */ }
-    }
   } else if (action === 'leave_note') {
     const ortId = zielId || ch.inside_poi;
     const zettelText = detail || 'Hallo! Ich suche Arbeit als Spuelhilfe. Ich bin zuverlaessig.';
@@ -764,7 +757,7 @@ async function holeNeuenPlanMitMeta(db, deps, characterId, jetztMs) {
   const ctx = {
     orte,
     woName: ch.inside_poi ? (db.prepare('SELECT name FROM pois WHERE id = ?').get(ch.inside_poi) || {}).name || ch.inside_poi : 'draussen unterwegs',
-    woText: ch.inside_poi ? `Du bist bei ${ch.inside_poi}.` : `Du bist draussen bei (${Number(ch.pos_x).toFixed(0)}, ${Number(ch.pos_z).toFixed(0)}).`,
+    woText: ch.inside_poi ? `Du bist bei ${ch.inside_poi}.` : 'Du bist draussen unterwegs.',
     zeitText: tageszeitText(jetztMs),
     letztesEreignis: letzteNotizen[0] || null,
     letzteNotizen,
@@ -958,7 +951,7 @@ async function tick(db, deps, characterId, jetztMs) {
       telegramNeu = res && res.neu && res.neu.length > 0;
     } catch { telegramNeu = false; }
   }
-  try { arbiter.bewerteBewerbungen(db, telegram); } catch { /* nie crashen */ }
+  try { await arbiter.bewerteBewerbungen(db, telegram, deps.brain); } catch { /* nie crashen */ }
   try { arbiter.pruefeInaktivitaet(db, characterId, jetztMs); } catch { /* nie crashen */ }
 
   // Stimmung (froh): reagiert auf Mangel und pendelt sich sonst sanft Richtung +10 ein.
