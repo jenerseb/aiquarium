@@ -657,10 +657,19 @@ async function fuehreSchrittAusTeil3(db, deps, characterId, schritt) {
     if (buch) {
       let eintraege = [];
       try { eintraege = JSON.parse(buch.entries_json); } catch { eintraege = []; }
-      const e = eintraege.find((x) =>
-        (x.topic && dLow.includes(String(x.topic).toLowerCase())) ||
-        (x.title && dLow.includes(String(x.title).toLowerCase()))
-      ) || eintraege[0] || { title: 'Eintrag', content: '...' };
+      let e;
+      if (buch.id === 'stadtlexikon') {
+        e = await arbiter.fragLexikon(db, deps.brain, detail);
+        const liste = Array.isArray(eintraege) ? eintraege : [];
+        liste.push(e);
+        if (liste.length > 20) liste.splice(0, liste.length - 20);
+        db.prepare("UPDATE books SET entries_json = ? WHERE id = 'stadtlexikon'").run(JSON.stringify(liste));
+      } else {
+        e = eintraege.find((x) =>
+          (x.topic && dLow.includes(String(x.topic).toLowerCase())) ||
+          (x.title && dLow.includes(String(x.title).toLowerCase()))
+        ) || eintraege[0] || { title: 'Eintrag', content: '...' };
+      }
       const { speichereMemory } = require('./memory');
       speichereMemory(db, characterId, { tier: 'short', kind: 'read', text: `Gelesen: ${e.title} – ${String(e.content).slice(0, 120)}`, initial_weight: 3.5 });
       notizen.push(`Du hast gelesen: ${e.title}.`);

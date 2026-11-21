@@ -464,10 +464,63 @@ async function runNightlyConsolidation(db, brain, characterId, tagesLog, jetztMs
   return { ok: true, datum, headline, roh: out, quelle: nightlyQuelle };
 }
 
+async function fragLexikon(db, brain, wunschText = '') {
+  let pois = [];
+  try {
+    pois = db.prepare("SELECT id, name, category, public_desc FROM pois WHERE id != 'apartment' ORDER BY id").all();
+  } catch { pois = []; }
+  const zufallPoi = pois.length > 0 ? pois[Math.floor(Math.random() * pois.length)] : null;
+  const fallbackEintrag = zufallPoi
+    ? {
+      topic: normalisiereKey(zufallPoi.id),
+      title: zufallPoi.name,
+      content: zufallPoi.public_desc || `Ein interessanter Ort (${zufallPoi.category}) im Kiez.`,
+    }
+    : { topic: 'st_pauli', title: 'St. Pauli & Schanze', content: 'Zwischen Schulterblatt, Wohlwillstrasse und Neuer Kamp gibt es immer etwas zu entdecken.' };
+
+  const apiKey = process.env.OPENROUTER_API_KEY;
+  if (!brain || typeof brain.callModel !== 'function' || !apiKey) return fallbackEintrag;
+
+  const stichprobe = [...pois].sort(() => Math.random() - 0.5).slice(0, 8)
+    .map((p) => `- ${p.id} (${p.name}, ${p.category}): ${p.public_desc || ''}`).join('\n');
+  const prompt = [
+    'Du bist das Hamburger Stadt- & Hafenlexikon (St. Pauli / Schanzenviertel) in einem Lebens-Sim-Spiel.',
+    `Thema / Suchwunsch des Bewohners: „${String(wunschText || 'Was man heute im Kiez unternehmen kann').slice(0, 200)}“`,
+    stichprobe ? `Bekannte Orte in der Naehe:\n${stichprobe}` : '',
+    'Gib eine kurze, inspirierende Lexikon-Info (z. B. über einen konkreten Ort/POI oder eine Unternehmungs-Idee).',
+    'Antworte NUR als JSON: { "title": "kurzer Titel", "content": "1–2 prägnante Sätze mit konkretem Tipp" }.',
+  ].filter(Boolean).join('\n');
+
+  const pair = getRoleSlots('arbiter');
+  for (const [idx, slot] of [pair.primary, pair.fallback].entries()) {
+    if (!slot) continue;
+    try {
+      const r = await brain.callModel({
+        prompt, apiKey, model: slot.model, reasoningExclude: slot.reasoningExclude,
+        timeoutMs: 20000, temperature: 0.6, maxTokens: slot.maxTokens || 350,
+      });
+      const obj = JSON.parse(r.content);
+      if (!obj || typeof obj !== 'object' || !obj.content) continue;
+      const tokens = Number((r.usage && (r.usage.completion_tokens || r.usage.total_tokens)) || 0) || 0;
+      if (typeof brain.logLlmErfolg === 'function') {
+        brain.logLlmErfolg({
+          role: 'arbiter', versuch: idx === 0 ? 'primary' : 'fallback', provider: 'OpenRouter',
+          model: r.usedModel || slot.model, prompt, response: r.content, tokens, latencyMs: r.latencyMs || 0,
+        });
+      }
+      const title = String(obj.title || 'Kiez-Tipp').slice(0, 80);
+      return { topic: normalisiereKey(title), title, content: String(obj.content).slice(0, 280) };
+    } catch {
+      continue;
+    }
+  }
+  return fallbackEintrag;
+}
+
 module.exports = {
   klammere, runde2, preisGrenzenFuer,
   findeAngebot, speichereAngebot, normalisiereKey, deterministischesAngebot,
-  arbiterLLM, klammereAngebot, resolveIntent,
+  arbiterLLM, klammereAngebot, resolveIntent, fragLexikon,
   aktiverJob, nimmJobAn, gebeStrike, kuendige, pruefeInaktivitaet, rechneSchichtAb,
   bewerteBewerbungen,
   berlinDatum, schonKonsolidiert, markiereKonsolidiert, runNightlyConsolidation,

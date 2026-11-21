@@ -311,13 +311,7 @@ const SEED_SHEET = [
 
 const SEED_BOOKS = [
   { id: 'stadtlexikon', title: 'Kleines Hamburger Stadt- & Hafenlexikon', kind: 'book',
-    entries: [
-      { topic: 'st_pauli', title: 'St. Pauli', content: 'Kiez zwischen Hafen und Schanze. Enge Strassen, Eckkneipen, Musikclubs.' },
-      { topic: 'hafen_faehren', title: 'Hafen & Faehren', content: 'Von den Landungsbruecken fahren Faehren ueber die Elbe.' },
-      { topic: 'museen', title: 'Museen', content: 'Kleine Museen verstecken sich in Hinterhoefen.' },
-      { topic: 'wetter_flut', title: 'Wetter & Flut', content: 'Wetter dreht schnell: Regenjacke einpacken.' },
-      { topic: 'kiez_geschichte', title: 'Kiez-Geschichte', content: 'Frueher Hafenarbeiter, heute Mischung aus Altmietern, Musik und Nachtleben.' },
-    ] },
+    entries: [] },
   { id: 'notizbuch', title: 'Dein eigenes Notizbuch', kind: 'notebook',
     entries: [
       { topic: 'ankunft', title: 'Erste Nacht', content: 'In der Beckstrasse angekommen. 18 Euro in der Tasche.' },

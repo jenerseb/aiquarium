@@ -134,6 +134,10 @@ function buecherText(db, daheim = true) {
   if (!daheim) return `Regal daheim: ${buecher.length} Bücher (nur in apartment lesbar).`;
   const a = ['Regal daheim (nur in apartment):'];
   for (const b of buecher) {
+    if (b.id === 'stadtlexikon') {
+      a.push(`- „${b.title}“ (stadtlexikon – liefert bei read_book mit Thema/detail immer frische Infos zu Orten & Unternehmungen)`);
+      continue;
+    }
     let eintraege = [];
     try { eintraege = JSON.parse(b.entries_json); } catch { eintraege = []; }
     const themen = eintraege
