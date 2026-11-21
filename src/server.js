@@ -134,9 +134,10 @@ function apiBrain() {
   let buecher = [];
   try {
     buecher = db.prepare('SELECT id, title, kind, entries_json FROM books').all().map((b) => {
-      let n = 0;
-      try { n = JSON.parse(b.entries_json).length; } catch { n = 0; }
-      return { id: b.id, title: b.title, kind: b.kind, eintraege: n };
+      let entries = [];
+      try { entries = JSON.parse(b.entries_json || '[]'); } catch { entries = []; }
+      if (!Array.isArray(entries)) entries = [];
+      return { id: b.id, title: b.title, kind: b.kind, eintraege: entries.length, entries };
     });
   } catch { buecher = []; }
   // LLM-Fehlerdiagnose fürs Gehirn-Log: letzte llm_debug-Events (reason + rawResponse, ungekürzt)

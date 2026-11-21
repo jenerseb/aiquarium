@@ -2324,7 +2324,13 @@ function gehirnHtml(b, tab) {
     const lo = (b.memories && b.memories.long) || [];
     const fs = b.memories && b.memories.firstToGoShort;
     const fl = b.memories && b.memories.firstToGoLong;
-    const buecher = (b.buecher || []).map((x) => `<div class="karte">📖 ${esc(x.title)} <small>(${esc(x.kind)}, ${x.eintraege} Einträge)</small></div>`).join('');
+    const buecher = (b.buecher || []).map((x) => {
+      const liste = Array.isArray(x.entries) ? (x.kind === 'notebook' ? [...x.entries].reverse() : x.entries) : [];
+      const eintraegeHtml = liste.length > 0
+        ? liste.map((e) => `<div class="karte" style="margin:6px 0 0"><b>${esc(e.title || e.topic || 'Eintrag')}</b><br><small>${esc(e.content || '')}</small></div>`).join('')
+        : '<div style="margin-top:6px"><small>Noch keine Einträge.</small></div>';
+      return `<details class="karte"><summary style="cursor:pointer">📖 <b>${esc(x.title)}</b> <small>(${esc(x.kind)}, ${x.eintraege} Einträge)</small></summary>${eintraegeHtml}</details>`;
+    }).join('');
     return `<h3>Kurzzeit (${sh.length}/25)</h3><div class="raster">${sh.map((m) => slot(m, fs && m.id === fs.id)).join('') || '<p>–</p>'}</div>`
       + `<h3>Langzeit (${lo.length}/25)</h3><div class="raster">${lo.map((m) => slot(m, fl && m.id === fl.id)).join('') || '<p>–</p>'}</div>`
       + `<h3>Regal daheim</h3>${buecher || '<p>–</p>'}`;
