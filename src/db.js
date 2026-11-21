@@ -461,12 +461,17 @@ function seed(db, kiezMap) {
     const inv = db.prepare('INSERT INTO inventory (character_id, item_key, label, count) VALUES (?, ?, ?, ?)');
     inv.run(charId, 'notizblock', 'Notizblock', 1);
     inv.run(charId, 'schluessel', 'Wohnungsschluessel', 1);
-    // NUR ZU DEV-ZWECKEN: Smartphone standardmäßig im Start-Inventar (eigentlich erst am Späti kaufbar).
+    // AUF UNBESTIMMTE ZEIT DRIN LASSEN ZU DEV-ZWECKEN: Smartphone standardmäßig im Start-Inventar (eigentlich erst am Späti kaufbar).
     inv.run(charId, 'handy', 'Gebrauchtes Smartphone', 1);
     db.prepare("INSERT INTO memories (character_id, tier, kind, text, initial_weight, worth) VALUES (?, 'short', 'moment', ?, 4.0, 4.0)").run(
       charId, 'Ankunft in der Beckstrasse mit 18 Euro. Die Wohnung riecht nach frischer Farbe.');
   } else {
     charId = db.prepare('SELECT id FROM character ORDER BY id LIMIT 1').get().id;
+    // AUF UNBESTIMMTE ZEIT DRIN LASSEN ZU DEV-ZWECKEN: Smartphone auch in bestehende DB nachziehen, falls noch nicht im Inventar.
+    const hatHandy = db.prepare("SELECT id FROM inventory WHERE character_id = ? AND item_key = 'handy'").get(charId);
+    if (!hatHandy) {
+      db.prepare("INSERT INTO inventory (character_id, item_key, label, count) VALUES (?, 'handy', 'Gebrauchtes Smartphone', 1)").run(charId);
+    }
   }
   if (zaehle(db, 'books') === 0) {
     const ins = db.prepare('INSERT INTO books (id, title, kind, entries_json) VALUES (?, ?, ?, ?)');
