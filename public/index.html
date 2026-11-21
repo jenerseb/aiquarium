@@ -139,6 +139,9 @@
   .nordBtn:hover{border-color:var(--amber)}
   .nordBtn[hidden]{display:none}
   .nordBtn svg{width:22px;height:22px;display:block}
+  #stage.fx-warm canvas{filter:contrast(1.06) saturate(1.14) sepia(0.08)}
+  #stage.fx-warm::after{content:"";position:fixed;inset:0;pointer-events:none;z-index:2;
+    background:radial-gradient(circle at 50% 50%,transparent 58%,rgba(12,8,4,.36) 100%)}
   @media(max-width:820px){
     .feed{width:calc(100% - 32px);max-height:30%;top:auto;bottom:100px;left:16px;right:16px}
     .werte{width:170px;bottom:100px}

@@ -37,6 +37,129 @@ renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.5));
 renderer.setSize(window.innerWidth, window.innerHeight);
 stage.appendChild(renderer.domElement);
 
+// --- Stilisierungs-Filter (?fx=warm,pixel,sobel,paint,tilt,crt,noir – frei kombinierbar) ---
+const FX = new Set(
+  (new URLSearchParams(location.search).get('fx') || '')
+    .split(',').map((s) => s.trim().toLowerCase()).filter(Boolean)
+);
+if (FX.has('warm')) stage.classList.add('fx-warm');
+const FX_SHADER_AKTIV = ['pixel', 'sobel', 'paint', 'tilt', 'crt', 'noir'].some((k) => FX.has(k));
+let fxTarget = null;
+let fxScene = null;
+let fxCam = null;
+let fxMat = null;
+if (FX_SHADER_AKTIV) {
+  const pr = renderer.getPixelRatio();
+  const rw = Math.max(1, Math.floor(window.innerWidth * pr));
+  const rh = Math.max(1, Math.floor(window.innerHeight * pr));
+  fxTarget = new THREE.WebGLRenderTarget(rw, rh, { minFilter: THREE.LinearFilter, magFilter: THREE.LinearFilter });
+  fxTarget.texture.colorSpace = THREE.SRGBColorSpace;
+  fxScene = new THREE.Scene();
+  fxCam = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
+  fxMat = new THREE.ShaderMaterial({
+    uniforms: {
+      tDiffuse: { value: fxTarget.texture },
+      uRes: { value: new THREE.Vector2(rw, rh) },
+      uPixel: { value: FX.has('pixel') ? 1.0 : 0.0 },
+      uSobel: { value: FX.has('sobel') ? 1.0 : 0.0 },
+      uPaint: { value: FX.has('paint') ? 1.0 : 0.0 },
+      uTilt: { value: FX.has('tilt') ? 1.0 : 0.0 },
+      uCrt: { value: FX.has('crt') ? 1.0 : 0.0 },
+      uNoir: { value: FX.has('noir') ? 1.0 : 0.0 },
+    },
+    vertexShader: `varying vec2 vUv; void main(){ vUv = uv; gl_Position = vec4(position.xy, 0.0, 1.0); }`,
+    fragmentShader: `
+      precision highp float;
+      uniform sampler2D tDiffuse;
+      uniform vec2 uRes;
+      uniform float uPixel, uSobel, uPaint, uTilt, uCrt, uNoir;
+      varying vec2 vUv;
+
+      float lum(vec3 c){ return dot(c, vec3(0.299, 0.587, 0.114)); }
+
+      vec3 sampleBase(vec2 uv){
+        if (uPixel > 0.5) {
+          float ps = 4.0;
+          vec2 grid = uRes / ps;
+          uv = (floor(uv * grid) + 0.5) / grid;
+        }
+        return texture2D(tDiffuse, clamp(uv, 0.0, 1.0)).rgb;
+      }
+
+      vec3 kuwahara(vec2 uv, vec2 px){
+        vec3 m[4]; vec3 s[4];
+        for (int k = 0; k < 4; k++) { m[k] = vec3(0.0); s[k] = vec3(0.0); }
+        for (int dy = -2; dy <= 0; dy++) {
+          for (int dx = -2; dx <= 0; dx++) {
+            vec3 c0 = sampleBase(uv + vec2(float(dx), float(dy)) * px); m[0] += c0; s[0] += c0 * c0;
+            vec3 c1 = sampleBase(uv + vec2(float(-dx), float(dy)) * px); m[1] += c1; s[1] += c1 * c1;
+            vec3 c2 = sampleBase(uv + vec2(float(dx), float(-dy)) * px); m[2] += c2; s[2] += c2 * c2;
+            vec3 c3 = sampleBase(uv + vec2(float(-dx), float(-dy)) * px); m[3] += c3; s[3] += c3 * c3;
+          }
+        }
+        float minV = 1e9; vec3 outC = m[0];
+        for (int k = 0; k < 4; k++) {
+          m[k] /= 9.0;
+          vec3 v = abs(s[k] / 9.0 - m[k] * m[k]);
+          float vv = v.r + v.g + v.b;
+          if (vv < minV) { minV = vv; outC = m[k]; }
+        }
+        return outC;
+      }
+
+      void main(){
+        vec2 px = 1.0 / uRes;
+        vec2 uv = vUv;
+        vec3 col = (uPaint > 0.5) ? kuwahara(uv, px) : sampleBase(uv);
+
+        if (uTilt > 0.5) {
+          float distY = abs(uv.y - 0.5) * 2.0;
+          float blur = smoothstep(0.28, 0.95, distY) * 3.2;
+          if (blur > 0.05) {
+            vec3 b = (sampleBase(uv + vec2(blur, 0.0) * px) + sampleBase(uv - vec2(blur, 0.0) * px)
+                    + sampleBase(uv + vec2(0.0, blur) * px) + sampleBase(uv - vec2(0.0, blur) * px)) * 0.25;
+            col = mix(col, b, smoothstep(0.28, 0.95, distY) * 0.85);
+          }
+        }
+
+        if (uCrt > 0.5) {
+          vec2 off = (uv - 0.5) * 0.004;
+          col.r = mix(col.r, sampleBase(uv + off).r, 0.65);
+          col.b = mix(col.b, sampleBase(uv - off).b, 0.65);
+          float scan = 0.92 + 0.08 * sin(uv.y * uRes.y * 1.4);
+          col *= scan;
+        }
+
+        if (uSobel > 0.5) {
+          float tl = lum(sampleBase(uv + vec2(-1.0,  1.0) * px));
+          float l  = lum(sampleBase(uv + vec2(-1.0,  0.0) * px));
+          float bl = lum(sampleBase(uv + vec2(-1.0, -1.0) * px));
+          float t  = lum(sampleBase(uv + vec2( 0.0,  1.0) * px));
+          float b  = lum(sampleBase(uv + vec2( 0.0, -1.0) * px));
+          float tr = lum(sampleBase(uv + vec2( 1.0,  1.0) * px));
+          float r  = lum(sampleBase(uv + vec2( 1.0,  0.0) * px));
+          float br = lum(sampleBase(uv + vec2( 1.0, -1.0) * px));
+          float gx = -tl - 2.0*l - bl + tr + 2.0*r + br;
+          float gy = -tl - 2.0*t - tr + bl + 2.0*b + br;
+          float edge = smoothstep(0.16, 0.42, sqrt(gx*gx + gy*gy));
+          col = mix(col, vec3(0.08, 0.09, 0.11), edge * 0.72);
+        }
+
+        if (uNoir > 0.5) {
+          float g = lum(col);
+          g = smoothstep(0.06, 0.94, g);
+          col = vec3(g * 0.98, g * 0.99, g * 1.03);
+        }
+
+        gl_FragColor = vec4(col, 1.0);
+        #include <colorspace_fragment>
+      }
+    `,
+    depthTest: false, depthWrite: false,
+  });
+  fxScene.add(new THREE.Mesh(new THREE.PlaneGeometry(2, 2), fxMat));
+}
+
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x0a0e13);
 scene.fog = new THREE.FogExp2(0x141e38, 0.00055); // Subtiler Horizont-Dunst; Himmel selbst hat fog: false
@@ -2676,7 +2799,14 @@ function loop() {
   kameraUpdaten(dt, jetzt);
   aktPillUpdaten();
   blasePositionieren();
-  renderer.render(scene, camera);
+  if (FX_SHADER_AKTIV && fxTarget && fxScene && fxCam) {
+    renderer.setRenderTarget(fxTarget);
+    renderer.render(scene, camera);
+    renderer.setRenderTarget(null);
+    renderer.render(fxScene, fxCam);
+  } else {
+    renderer.render(scene, camera);
+  }
 }
 
 const AKT_LABELS = {
@@ -2736,6 +2866,13 @@ window.addEventListener('resize', () => {
   camera.aspect = window.innerWidth / window.innerHeight;
   camera.updateProjectionMatrix();
   renderer.setSize(window.innerWidth, window.innerHeight);
+  if (FX_SHADER_AKTIV && fxTarget && fxMat) {
+    const pr = renderer.getPixelRatio();
+    const rw = Math.max(1, Math.floor(window.innerWidth * pr));
+    const rh = Math.max(1, Math.floor(window.innerHeight * pr));
+    fxTarget.setSize(rw, rh);
+    fxMat.uniforms.uRes.value.set(rw, rh);
+  }
 });
 
 initialLaden().then(() => loop()).catch((err) => fehlerBanner(String(err.message || err)));
