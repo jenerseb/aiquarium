@@ -280,7 +280,7 @@ function validatePlan(obj, intents) {
   else if (wordCount(thought) > 20) notiere('thought_lang');
   if (!plan) notiere('plan_fehlend');
   else {
-    if (plan.length < 2 || plan.length > 4) notiere('plan_laenge');
+    if (plan.length < 1 || plan.length > 4) notiere('plan_laenge');
     const erlaubt = Array.isArray(intents) && intents.length > 0 ? intents : null;
     let leaveNoteN = 0;
     let hatteSchicht = false;
@@ -288,6 +288,9 @@ function validatePlan(obj, intents) {
       if (!s || typeof s !== 'object') { notiere('schritt_' + i + '_kein_objekt'); return; }
       const action = typeof s.action === 'string' ? s.action.trim() : '';
       if (!action) { notiere('schritt_' + i + '_ohne_action'); return; }
+      if (i > 0 && action === 'walk_to' && plan[i - 1] && String(plan[i - 1].action || '').trim() === 'walk_to') {
+        notiere('schritt_' + i + '_doppeltes_walk_to');
+      }
       if (action === 'work_shift') hatteSchicht = true;
       if (i === 0 && action === 'consume' && hunger !== null && hunger < 20) {
         notiere('schritt_0_zu_satt');

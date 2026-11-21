@@ -82,6 +82,32 @@ const AKTION = {
   visitDoctorS: 15 * 60,
 };
 
+// ---- Echtzeit-Aktionsdauern (Sekunden, zentral editierbar) ----
+// Steuert, wie lange Aktionen im Live-Betrieb (20s-Tick) in Echtzeit dauern.
+const ECHTZEIT_DAUER = {
+  work_shift: 15 * 60, // 15 Min Arbeitsschicht (einfach hier anpassbar)
+  sleep: 10 * 60,
+  visit_doctor: 8 * 60,
+  work_on_project: 6 * 60,
+  collect_deposit: 4 * 60,
+  rest: 4 * 60,
+  read_book: 4 * 60,
+  write_notebook: 3 * 60,
+  leave_note: 2 * 60,
+  buy_item: 2 * 60,
+  return_deposit: 2 * 60,
+  send_sms: 2 * 60,
+  send_email: 2 * 60,
+  web_search: 2 * 60,
+  quit_job: 2 * 60,
+  consumeDefault: 3 * 60,
+  consumeLokal: 5 * 60,
+  activityKino: 20 * 60,
+  activityKulturMin: 10 * 60, // Kneipe, Club, Konzert, Poetry Slam (10-20 Min)
+  activityKulturMax: 20 * 60,
+  activityBasis: 6 * 60,
+};
+
 // ---- Wirtschaft / Leitplanken (ENGINE klammert hart) ----
 const ECONOMY = {
   shiftDurationS: 20 * 60,
@@ -260,6 +286,7 @@ module.exports = {
   FROH,
   SEKUNDAER,
   AKTION,
+  ECHTZEIT_DAUER,
   ECONOMY,
   MEMORY,
   MODEL,

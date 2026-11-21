@@ -53,7 +53,12 @@ function apiState() {
   try { plan = JSON.parse(ch.plan_queue_json || '[]'); } catch { plan = []; }
   // Aktive Route fürs Frontend (Punkt 1): Waypoints + Fortschritt + Zielpos
   let route = null;
+  let aktivitaet = null;
   try {
+    const rawMeta = ch.action_meta_json ? JSON.parse(ch.action_meta_json) : null;
+    if (rawMeta && rawMeta.aktionTimer && rawMeta.aktionTimer.action) {
+      aktivitaet = rawMeta.aktionTimer;
+    }
     const meta = engine.ladeRoute(ch);
     if (meta && Array.isArray(meta.route) && meta.route.length > 0) {
       const idx = Math.min(meta.wegIndex || 0, Math.max(0, meta.route.length - 1));
@@ -66,7 +71,7 @@ function apiState() {
       };
     }
   } catch { route = null; }
-  return { charakter: ch, inventory, feed, world: ws, pois, plan, route, zeit: { berlin: new Date().toISOString(), nacht: istNacht(Date.now()) } };
+  return { charakter: ch, inventory, feed, world: ws, pois, plan, route, aktivitaet, zeit: { berlin: new Date().toISOString(), nacht: istNacht(Date.now()) } };
 }
 
 // GET /api/map: statische Kiez-Geometrie (buildings/lod2, trees, streets, parks, pois + meta).
@@ -195,7 +200,7 @@ async function loopTick() {
   try {
     const { db, characterId, karte } = ZUSTAND;
     const brain = require('./brain');
-    const res = await engine.tick(db, { karte, brain, telegram, nightly: true }, characterId, Date.now());
+    const res = await engine.tick(db, { karte, brain, telegram, nightly: true, echtzeit: true }, characterId, Date.now());
     if (res && res.ok) {
       sendeSSE({ typ: 'tick', schritt: res.schritt, notizen: res.notizen, gedanke: res.gedanke || '', quelle: res.quelle || null, route: res.route || null });
     }

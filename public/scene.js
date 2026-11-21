@@ -1825,8 +1825,32 @@ function starteBlende(nach, jetzt) {
 
 let _lookAt = new THREE.Vector3(0, 1.8, 0);
 function aktuellesLookAt() { return _lookAt.clone(); }
+let nordAnim = null;
+const NORD_SCHWELLE_RAD = (5 * Math.PI) / 180;
+
+function nordButtonSync() {
+  const btn = $('btnNord');
+  if (!btn) return;
+  const th = Z.modus === 'pilot' ? Z.pilot.theta : Z.over.theta;
+  const norm = Math.atan2(Math.sin(th), Math.cos(th));
+  const abw = Math.abs(norm);
+  btn.hidden = abw <= NORD_SCHWELLE_RAD && !nordAnim;
+  const svg = btn.querySelector('svg');
+  if (svg) svg.style.transform = `rotate(${((-norm * 180) / Math.PI).toFixed(1)}deg)`;
+}
 
 function kameraUpdaten(dt, jetzt) {
+  if (nordAnim) {
+    nordAnim.t += dt / 0.45;
+    const k = smootherstep(Math.min(1, nordAnim.t));
+    const ziel = nordAnim.modus === 'pilot' ? Z.pilot : Z.over;
+    ziel.theta = THREE.MathUtils.lerp(nordAnim.startTheta, nordAnim.zielTheta, k);
+    if (nordAnim.t >= 1) {
+      ziel.theta = nordAnim.zielTheta;
+      nordAnim = null;
+    }
+  }
+  nordButtonSync();
   if (Z.blende) {
     const B = Z.blende;
     B.t += dt / BLEND_DAUER;
@@ -2629,8 +2653,62 @@ function loop() {
   pinsSchweben(performance.now()); // Bojen-Schweben der POI-Pins (ms-Basis)
   highlightPulsen(performance.now()); // betretenes Haus pulst in Eigenfarbe
   kameraUpdaten(dt, jetzt);
+  aktPillUpdaten();
   blasePositionieren();
   renderer.render(scene, camera);
+}
+
+const AKT_LABELS = {
+  walk_to: 'Unterwegs',
+  explore_street: 'Kiez erkunden',
+  consume: 'Essen / Trinken',
+  do_activity: 'Aktivität',
+  work_shift: 'Arbeitsschicht',
+  sleep: 'Schlafen',
+  rest: 'Ausruhen',
+  read_book: 'Lesen',
+  write_notebook: 'Notizbuch schreiben',
+  work_on_project: 'Projekt-Arbeit',
+  collect_deposit: 'Pfand sammeln',
+  return_deposit: 'Pfand abgeben',
+  leave_note: 'Zettel schreiben',
+  visit_doctor: 'Arztbesuch',
+  buy_item: 'Einkaufen',
+};
+
+function aktPillUpdaten() {
+  const pill = $('aktPill');
+  if (!pill) return;
+  const akt = Z.staat && Z.staat.aktivitaet;
+  const ch = Z.staat && Z.staat.charakter;
+  const ring = $('aktKreis');
+  const txt = $('aktText');
+  const restEl = $('aktRest');
+  const UMFANG = 56.55;
+  if (akt && akt.endsAtMs && akt.durationS > 0) {
+    const restMs = Math.max(0, akt.endsAtMs - Date.now());
+    const frac = Math.max(0, Math.min(1, restMs / (akt.durationS * 1000)));
+    const sec = Math.ceil(restMs / 1000);
+    const min = Math.floor(sec / 60);
+    const sRest = sec % 60;
+    const base = AKT_LABELS[akt.action] || akt.action;
+    const info = akt.detail ? `: ${akt.detail}` : (akt.poiName ? ` @ ${akt.poiName}` : '');
+    txt.textContent = `${base}${info}`;
+    restEl.textContent = `${min}:${String(sRest).padStart(2, '0')}`;
+    ring.style.strokeDashoffset = String(UMFANG * (1 - frac));
+    pill.hidden = false;
+    return;
+  }
+  if (ch && (ch.current_action === 'walk_to' || ch.current_action === 'explore_street')) {
+    const ziel = ch.action_target_poi ? ` → ${ch.action_target_poi}` : '';
+    const rm = Z.staat && Z.staat.route && Number.isFinite(Z.staat.route.restM) ? `${Math.round(Z.staat.route.restM)} m` : 'unterwegs';
+    txt.textContent = `${AKT_LABELS[ch.current_action] || ch.current_action}${ziel}`;
+    restEl.textContent = rm;
+    ring.style.strokeDashoffset = String(UMFANG * 0.25);
+    pill.hidden = false;
+    return;
+  }
+  pill.hidden = true;
 }
 
 window.addEventListener('resize', () => {

@@ -264,6 +264,17 @@ function buildPrompt(db, ch, ctx) {
     ? ['Letzte Gedanken (NICHT wiederholen, denk an neue Handlungen/Ziele):', ...c.recentThoughts.map((t) => `- ${t}`), '']
     : [];
 
+  let ortDetail = '';
+  if (ch.inside_poi) {
+    try {
+      const pRow = db.prepare('SELECT name, category, public_desc FROM pois WHERE id = ?').get(ch.inside_poi);
+      if (pRow) {
+        const off = db.prepare('SELECT label FROM poi_offers WHERE poi_id = ? ORDER BY id DESC LIMIT 5').all(ch.inside_poi).map((r) => r.label);
+        ortDetail = `Vor Ort (${pRow.name}, ${pRow.category}): ${pRow.public_desc || ''}${off.length ? ` [bekannt: ${off.join(', ')}]` : ''}`;
+      }
+    } catch { /* egal */ }
+  }
+
   const jobLine = jobText(db, ch.id);
   const linien = [
     'Du bist ein junger Stadterkunder in St. Pauli (Ich-Form, heute, hier).',
@@ -284,6 +295,7 @@ function buildPrompt(db, ch, ctx) {
     '',
     'ORT & ZEIT:',
     wo,
+    ...(ortDetail ? [ortDetail] : []),
     zeit,
     ...(wetter ? [wetter] : []),
     ...notizenListe,
@@ -296,9 +308,10 @@ function buildPrompt(db, ch, ctx) {
     '',
     'ANTWORTE NUR ALS JSON:',
     '{ "thought": "1 aktiver, abwechslungsreicher Impuls oder Vorhaben (keine Zustandsbeschreibung wie \'hier ist es still\' oder \'ich bin satt\', max. 20 Wörter)", "why_here": "kurzer Handlungs-Grund", "retrospective": "kurzer Rückblick",',
-    '  "plan": [ {"action": "intent", "target": "poi_id|null", "detail": "konkreter Wunschtext"} x 2..4 ] }',
+    '  "plan": [ {"action": "intent", "target": "poi_id|null", "detail": "konkreter Wunschtext"} x 1..4 ] }',
     'Erlaubte intents: ' + wl.intents.join(', ') + '.',
-    'walk_to braucht immer target (poi_id); max. 1 leave_note pro Plan.',
+    'walk_to braucht immer target (poi_id); nie zwei walk_to direkt hintereinander. Du kannst auch nur [walk_to] planen, um dort erst zu schauen, was los ist – oder vor Ort 1–2 Aktionen dranhängen.',
+    'Max. 1 leave_note pro Plan.',
   ];
   return { prompt: linien.join('\n'), whitelist: wl.intents, orte: wl.orte, memories: top };
 }

@@ -3,7 +3,7 @@
 // Aktions-Ticks, Multi-Step-Plan-Queue, Interrupts, Health-Chunks, Tod/Respawn.
 // Die Engine rechnet – das Modell spürt nur Konsequenzen (natürliche Sätze).
 
-const { AKTION, SEKUNDAER, ECONOMY, GESUND, FROH, chunkCapFuer } = require('./config');
+const { AKTION, ECHTZEIT_DAUER, SEKUNDAER, ECONOMY, GESUND, FROH, chunkCapFuer } = require('./config');
 const pf = require('./pathfinding');
 const arbiter = require('./arbiter');
 const checks = require('./checks');
@@ -1011,6 +1011,63 @@ function zaehleStat24h(db, feld, jetztMs) {
   } catch { /* stats duerfen nie crashen */ }
 }
 
+function echtzeitDauerFuer(db, ch, schritt) {
+  const action = schritt.action;
+  if (action === 'work_shift') return ECHTZEIT_DAUER.work_shift;
+  const ortId = schritt.target || (ch && ch.inside_poi) || null;
+  const poi = ortId ? db.prepare('SELECT category FROM pois WHERE id = ?').get(ortId) : null;
+  const kat = poi ? poi.category : '';
+  if (action === 'consume') {
+    return (kat === 'restaurant' || kat === 'kneipe') ? ECHTZEIT_DAUER.consumeLokal : ECHTZEIT_DAUER.consumeDefault;
+  }
+  if (action === 'do_activity') {
+    const det = String(schritt.detail || '').toLowerCase();
+    if (kat === 'kino' || /\b(film|kino)\b/.test(det)) return ECHTZEIT_DAUER.activityKino;
+    if (['kneipe', 'club', 'stadion'].includes(kat) || /konzert|comedy|poetry|slam|lesung|buehne|musik|live|party/.test(det)) {
+      const span = Math.max(0, (ECHTZEIT_DAUER.activityKulturMax || 1200) - (ECHTZEIT_DAUER.activityKulturMin || 600));
+      const min = ECHTZEIT_DAUER.activityKulturMin || 600;
+      return min + Math.floor(Math.random() * (Math.floor(span / 60) + 1)) * 60;
+    }
+    return ECHTZEIT_DAUER.activityBasis;
+  }
+  return ECHTZEIT_DAUER[action] || 180;
+}
+
+function ladeLaufendeAktion(ch) {
+  try {
+    const m = JSON.parse(ch.action_meta_json || 'null');
+    return (m && m.aktionTimer && m.aktionTimer.action) ? m.aktionTimer : null;
+  } catch { return null; }
+}
+
+function speichereLaufendeAktion(db, ch, timer) {
+  ch.action_meta_json = timer ? JSON.stringify({ aktionTimer: timer }) : null;
+  ch.action_duration_s = timer ? timer.durationS : 0;
+  ch.current_action = timer ? timer.action : 'idle';
+  db.prepare('UPDATE character SET action_meta_json = ?, action_duration_s = ?, current_action = ? WHERE id = ?')
+    .run(ch.action_meta_json, ch.action_duration_s, ch.current_action, ch.id);
+}
+
+function kannAktionStarten(db, ch, schritt) {
+  const a = schritt.action;
+  if (a === 'consume' && Number(ch.hunger) < 20) return false;
+  if (a === 'sleep' && (ch.inside_poi !== 'apartment' || Number(ch.erschoepfung) < 50)) return false;
+  if ((a === 'read_book' || a === 'write_notebook') && ch.inside_poi !== 'apartment') return false;
+  if ((a === 'buy_item' || a === 'return_deposit') && ch.inside_poi !== 'spaeti') return false;
+  if (a === 'buy_item' && Number(ch.geld) < 50) return false;
+  if (a === 'visit_doctor' && Number(ch.geld) < ECONOMY.arztKosten) return false;
+  if (a === 'work_shift' && !arbiter.aktiverJob(db, ch.id)) return false;
+  if (a === 'work_on_project') {
+    const ort = ch.inside_poi ? db.prepare('SELECT id, category FROM pois WHERE id = ?').get(ch.inside_poi) : null;
+    if (!ort || (ort.id !== 'apartment' && ort.category !== 'park')) return false;
+  }
+  if (a === 'collect_deposit' && ch.inside_poi) {
+    const ort = db.prepare('SELECT category FROM pois WHERE id = ?').get(ch.inside_poi);
+    if (!ort || ort.category !== 'park') return false;
+  }
+  return true;
+}
+
 // --- Tick: EIN Plan-Schritt pro Aufruf --------------------------------------------------
 
 async function tick(db, deps, characterId, jetztMs) {
@@ -1041,64 +1098,102 @@ async function tick(db, deps, characterId, jetztMs) {
     db.prepare('UPDATE character SET froh = ? WHERE id = ?').run(ch.froh, characterId);
   }
 
+  let aktionTimer = deps.echtzeit ? ladeLaufendeAktion(ch) : null;
+  let schritt = null;
+  let gedanke = '';
+  let planQuelle = null; // KI-Nachweis für den Feed (Punkt 7)
+  if (aktionTimer) {
+    if (jetztMs < aktionTimer.endsAtMs) {
+      return {
+        ok: true,
+        schritt: { action: aktionTimer.action, target: aktionTimer.target, detail: aktionTimer.detail },
+        laufend: true,
+        restS: Math.max(1, Math.ceil((aktionTimer.endsAtMs - jetztMs) / 1000)),
+        notizen: [],
+        gedanke: '',
+      };
+    }
+    schritt = { action: aktionTimer.action, target: aktionTimer.target, detail: aktionTimer.detail };
+    speichereLaufendeAktion(db, ch, null);
+    ch = ladeCharakter(db, characterId);
+  }
+
   let queue = ladeQueue(ch);
   let snapshot = null;
   try { snapshot = JSON.parse(ch.plan_start_snapshot_json || 'null'); } catch { snapshot = null; }
-  if (queue.length > 0 && snapshot) {
-    const grund = interruptGrund(db, ch, snapshot, telegramNeu, []);
-    if (grund) {
-      queue = [];
-      speichereQueue(db, ch, queue, null);
-      db.prepare("INSERT INTO events (character_id, tick, type, payload_json, in_feed) VALUES (?, 0, 'interrupt', ?, 1)")
-        .run(characterId, JSON.stringify({ grund }));
+  if (!schritt) {
+    if (queue.length > 0 && snapshot) {
+      const grund = interruptGrund(db, ch, snapshot, telegramNeu, []);
+      if (grund) {
+        queue = [];
+        speichereQueue(db, ch, queue, null);
+        db.prepare("INSERT INTO events (character_id, tick, type, payload_json, in_feed) VALUES (?, 0, 'interrupt', ?, 1)")
+          .run(characterId, JSON.stringify({ grund }));
+      }
     }
-  }
-  let gedanke = '';
-  let planQuelle = null; // KI-Nachweis für den Feed (Punkt 7)
-  if (queue.length > 0) {
-    zaehleStat24h(db, 'queued', jetztMs);
-  } else {
-    // Laufende Route? Dann KEIN neuer Plan – Schritt wiederholt sich, bis angekommen.
-    const laufendeRoute = (ch.current_action === 'walk_to' || ch.current_action === 'explore_street') ? ladeRoute(ch) : null;
-    if (laufendeRoute) {
-      const fort = laufendeRoute.zielPoi
-        ? { action: 'walk_to', target: laufendeRoute.zielPoi, detail: '' }
-        : { action: 'explore_street', target: null, detail: '' };
-      queue = [fort];
-      planQuelle = { source: 'queue', model: '', tokens: 0 };
-      gedanke = 'Weiter geht\u2019s – ein Fuß vor den anderen.';
+    if (queue.length > 0) {
       zaehleStat24h(db, 'queued', jetztMs);
     } else {
-      const neu = await holeNeuenPlanMitMeta(db, deps, characterId, jetztMs);
-      gedanke = neu.thought;
-      planQuelle = neu.quelle || null;
-      queue = neu.plan || [];
-      zaehleStat24h(db, planQuelle && planQuelle.source === 'llm' ? 'small_model' : 'autopilot', jetztMs);
-      if (neu.why_here || neu.thought) {
-        const grund = String(neu.why_here || neu.thought).slice(0, 200);
-        ch.why_here = grund;
-        db.prepare('UPDATE character SET why_here = ? WHERE id = ?').run(grund, characterId);
-      }
-      if (neu.retrospective && String(neu.retrospective).trim()) {
+      // Laufende Route? Dann KEIN neuer Plan – Schritt wiederholt sich, bis angekommen.
+      const laufendeRoute = (ch.current_action === 'walk_to' || ch.current_action === 'explore_street') ? ladeRoute(ch) : null;
+      if (laufendeRoute) {
+        const fort = laufendeRoute.zielPoi
+          ? { action: 'walk_to', target: laufendeRoute.zielPoi, detail: '' }
+          : { action: 'explore_street', target: null, detail: '' };
+        queue = [fort];
+        planQuelle = { source: 'queue', model: '', tokens: 0 };
+        gedanke = 'Weiter geht\u2019s – ein Fuß vor den anderen.';
+        zaehleStat24h(db, 'queued', jetztMs);
+      } else {
+        const neu = await holeNeuenPlanMitMeta(db, deps, characterId, jetztMs);
+        gedanke = neu.thought;
+        planQuelle = neu.quelle || null;
+        queue = neu.plan || [];
+        zaehleStat24h(db, planQuelle && planQuelle.source === 'llm' ? 'small_model' : 'autopilot', jetztMs);
+        if (neu.why_here || neu.thought) {
+          const grund = String(neu.why_here || neu.thought).slice(0, 200);
+          ch.why_here = grund;
+          db.prepare('UPDATE character SET why_here = ? WHERE id = ?').run(grund, characterId);
+        }
+        if (neu.retrospective && String(neu.retrospective).trim()) {
+          try {
+            db.prepare('UPDATE memories SET retrospective = ? WHERE id = (SELECT id FROM memories WHERE character_id = ? ORDER BY id DESC LIMIT 1)')
+              .run(String(neu.retrospective).trim().slice(0, 280), characterId);
+          } catch { /* egal */ }
+        }
+        // Plan-Event mit KI-Quelle in den Feed (Dev-Badges)
         try {
-          db.prepare('UPDATE memories SET retrospective = ? WHERE id = (SELECT id FROM memories WHERE character_id = ? ORDER BY id DESC LIMIT 1)')
-            .run(String(neu.retrospective).trim().slice(0, 280), characterId);
-        } catch { /* egal */ }
+          db.prepare("INSERT INTO events (character_id, tick, type, payload_json, in_feed) VALUES (?, 0, 'plan', ?, 1)").run(
+            characterId,
+            JSON.stringify({ thought: neu.thought, retrospective: neu.retrospective, plan: queue, quelle: neu.quelle || null }));
+        } catch { /* feed darf nie crashen */ }
+        snapshot = { gesund: Number(ch.gesund), geld: Number(ch.geld), froh: Number(ch.froh), summary: neu.retrospective || '' };
+        speichereQueue(db, ch, queue, snapshot);
+        ch = ladeCharakter(db, characterId);
       }
-      // Plan-Event mit KI-Quelle in den Feed (Dev-Badges)
-      try {
-        db.prepare("INSERT INTO events (character_id, tick, type, payload_json, in_feed) VALUES (?, 0, 'plan', ?, 1)").run(
-          characterId,
-          JSON.stringify({ thought: neu.thought, retrospective: neu.retrospective, plan: queue, quelle: neu.quelle || null }));
-      } catch { /* feed darf nie crashen */ }
-      snapshot = { gesund: Number(ch.gesund), geld: Number(ch.geld), froh: Number(ch.froh), summary: neu.retrospective || '' };
-      speichereQueue(db, ch, queue, snapshot);
-      ch = ladeCharakter(db, characterId);
+    }
+    schritt = queue.shift();
+    if (!schritt) return { ok: false, grund: 'leerer_plan', notizen: [] };
+    speichereQueue(db, ch, queue, snapshot);
+    if (deps.echtzeit && schritt.action !== 'walk_to' && schritt.action !== 'explore_street' && kannAktionStarten(db, ch, schritt)) {
+      const durationS = echtzeitDauerFuer(db, ch, schritt);
+      if (durationS > 0) {
+        const poiId = schritt.target || ch.inside_poi || null;
+        const poiRow = poiId ? db.prepare('SELECT name FROM pois WHERE id = ?').get(poiId) : null;
+        const timer = {
+          action: schritt.action,
+          target: schritt.target || null,
+          detail: schritt.detail || '',
+          poiName: poiRow ? poiRow.name : (poiId || ''),
+          startedAtMs: jetztMs,
+          endsAtMs: jetztMs + durationS * 1000,
+          durationS,
+        };
+        speichereLaufendeAktion(db, ch, timer);
+        return { ok: true, schritt, laufend: true, gestartet: true, restS: durationS, notizen: [], gedanke };
+      }
     }
   }
-  const schritt = queue.shift();
-  if (!schritt) return { ok: false, grund: 'leerer_plan', notizen: [] };
-  speichereQueue(db, ch, queue, snapshot);
   if (schritt.action === 'consume') {
     const frisch = ladeCharakter(db, characterId);
     const ortId = schritt.target || frisch.inside_poi;
