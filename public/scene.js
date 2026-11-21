@@ -2019,7 +2019,8 @@ function hudAktualisieren() {
     $(num).textContent = suffix || String(Math.round(wert));
   };
   balken('bGesund', 'nGesund', Number(ch.gesund) || 0, 100);
-  balken('bFroh', 'nFroh', (Number(ch.froh) || 0) + 50, 100);
+  const frohWert = Number(ch.froh) || 0;
+  balken('bFroh', 'nFroh', frohWert + 50, 100, String(Math.round(frohWert)));
   balken('bHunger', 'nHunger', Number(ch.hunger) || 0, 100);
   balken('bMued', 'nMued', Number(ch.erschoepfung) || 0, 100);
   $('bGeld').style.width = `${Math.max(2, Math.min(100, (Number(ch.geld) || 0) / 1.2))}%`;
