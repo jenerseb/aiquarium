@@ -444,17 +444,13 @@ function baueStrassen(strassen) {
     const neben = s.kind === "footway" || s.kind === "path" || s.kind === "pedestrian" || s.kind === "living_street" || s.kind === "service";
     // 2026-11-17 BALANCE: Wege schmaler (frueher 3.4/5.5 + 1.6 Gehweg-Rand),
     // damit Gassen nicht wie Autobahnen wirken.
-    const breit = neben ? 2.4 : 4.2;
-    // 2026-11-17 FLACKERN-FIX: klare Y-Staffelung mit Abstand (frueher Gehweg
-    // 0.03 / Pflaster 0.05 / Asphalt 0.05 / Parks 0.03 -> Z-Fighting).
-    // Parks 0.02 < Gehweg 0.05 < Pflaster/Asphalt 0.08 < Fuge 0.11.
-    // 2026-11-19 WEGE-LOOK: Nebenwege = EIN schlichter Strich ohne Outlines;
-    // Hauptstrassen behalten Gehweg-Rand + Asphalt.
+    const breit = neben ? 1.2 : 4.2;
+    // Klare Y-Staffelung: Grüner Boden 0.0 < Parks 0.02 < Wege 0.05 < Gehweg-Rand 0.07 < Straßen-Asphalt 0.10.
     if (neben) {
-      scene.add(linienBand(pts, breit, 0x9a9186, 0.05)); // einfacher Pflaster-Strich
+      scene.add(linienBand(pts, breit, 0x9a9186, 0.05)); // einfacher Pflaster-Strich (halb so breit)
     } else {
-      scene.add(linienBand(pts, breit + 0.8, 0x8a7a63, 0.05)); // sandiger Gehweg-Rand
-      scene.add(linienBand(pts, breit, 0x3a3f45, 0.08));       // Asphalt
+      scene.add(linienBand(pts, breit + 0.8, 0x8a7a63, 0.07)); // sandiger Gehweg-Rand
+      scene.add(linienBand(pts, breit, 0x3a3f45, 0.10));       // Asphalt über Wegen
     }
   }
 }
@@ -2480,7 +2476,7 @@ async function ladeKarte() {
     sonne.shadow.camera.far = 1600;
     sonne.shadow.camera.updateProjectionMatrix();
     try { baueBoden(); } catch (err) { console.warn('[karte] boden:', err.message); }
-    if (DEV) { try { baueStrassen(karte.streets); } catch (err) { console.warn('[karte] strassen:', err.message); } }
+    if (DEV || CLAY) { try { baueStrassen(karte.streets); } catch (err) { console.warn('[karte] strassen:', err.message); } }
     if (ZEIGE_GRUEN) { try { baueParks(karte.parks); } catch (err) { console.warn('[karte] parks:', err.message); } }
     if (ZEIGE_GRUEN) { try { baueDioramaBaeume(karte.trees); } catch (err) { console.warn("[karte] baeume:", err.message); } } // DIORAMA_V1
     try { baueGebaeude(karte.buildings); } catch (err) { console.warn('[karte] gebaeude:', err.message); }
