@@ -1816,12 +1816,13 @@ function figurUpdaten(dt) {
   const dz = zz - f.position.z;
   const dist = Math.hypot(dx, dz);
   if (dist > 0.05) {
-    const schritt = Math.min(dist, 1.4 * dt); // 1,4 m/s wie Engine
+    const joggt = Boolean(Z.staat && Z.staat.charakter && Z.staat.charakter.current_action === 'jog');
+    const schritt = Math.min(dist, (joggt ? 1.4 * 1.75 : 1.4) * dt); // 1,4 m/s (Joggen +75 %)
     f.position.x += (dx / dist) * schritt;
     f.position.z += (dz / dist) * schritt;
     f.rotation.y = Math.atan2(dx, dz); // Blick sauber in Laufrichtung
-    // leichtes Wippen + Bein-Schwung beim Gehen
-    const takt = performance.now() / 160;
+    // leichtes Wippen + Bein-Schwung beim Gehen/Joggen
+    const takt = performance.now() / (joggt ? 105 : 160);
     f.position.y = Math.abs(Math.sin(takt)) * 0.05;
     if (f.userData.beinL && f.userData.beinR) {
       f.userData.beinL.rotation.x = Math.sin(takt) * 0.45;
@@ -2814,6 +2815,7 @@ function loop() {
 const AKT_LABELS = {
   walk_to: 'Unterwegs',
   explore_street: 'Kiez erkunden',
+  jog: 'Joggen',
   consume: 'Essen / Trinken',
   do_activity: 'Aktivität',
   work_shift: 'Arbeitsschicht',
@@ -2855,7 +2857,7 @@ function aktPillUpdaten() {
     pill.hidden = false;
     return;
   }
-  if (ch && (ch.current_action === 'walk_to' || ch.current_action === 'explore_street')) {
+  if (ch && (ch.current_action === 'walk_to' || ch.current_action === 'explore_street' || ch.current_action === 'jog')) {
     const ziel = ch.action_target_poi ? ` → ${ch.action_target_poi}` : '';
     const rm = Z.staat && Z.staat.route && Number.isFinite(Z.staat.route.restM) ? `${Math.round(Z.staat.route.restM)} m` : 'unterwegs';
     if (svg) svg.style.display = '';

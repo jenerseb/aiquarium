@@ -186,7 +186,7 @@ function buecherText(db, daheim = true, lexikonHeute = false) {
 // --- Whitelist, Orte, Plan-Format ----------------------------------------------
 
 const OFFENE_INTENTS = [
-  'walk_to', 'explore_street', 'consume', 'do_activity', 'leave_note',
+  'walk_to', 'explore_street', 'jog', 'consume', 'do_activity', 'leave_note',
   'send_sms', 'send_email', 'web_search', 'collect_deposit', 'return_deposit', 'buy_item',
   'work_shift', 'quit_job', 'rest', 'sleep',
   'visit_doctor', 'read_book', 'write_notebook', 'work_on_project',
@@ -218,6 +218,7 @@ function whitelistFuer(db, characterId, orte, ch = null, jetztMs = Date.now()) {
     liste = liste.filter((a) => {
       if (a === 'return_deposit') return pfand;
       if (a === 'work_shift' || a === 'quit_job') return hatJob;
+      if (a === 'jog') return Number(ch.erschoepfung) < 80;
       return true;
     });
   }
@@ -301,7 +302,7 @@ function buildPrompt(db, ch, ctx) {
   const regelnExtra = [];
   if (Number(ch.hunger) < 20) regelnExtra.push('Noch völlig satt: consume nicht als ersten Schritt planen.');
   if (Number(ch.hunger) < 55 && Number(ch.erschoepfung) < 50) {
-    regelnExtra.push('Du bist fit: geh raus, erkunde neue Ecken (explore_street) oder unternimm an einem Ort etwas Konkretes (do_activity, z. B. passend zur Ortsbeschreibung).');
+    regelnExtra.push('Du bist fit: geh raus, erkunde neue Ecken (explore_street), geh eine Runde joggen (jog) oder unternimm an einem Ort etwas Konkretes (do_activity, z. B. passend zur Ortsbeschreibung).');
   }
   if (lexikonHeute) regelnExtra.push('Das Stadtlexikon hast du heute schon gelesen – erst morgen wieder.');
   if (webSearchHeute) regelnExtra.push('Du hast heute schon einmal gegoogelt (web_search) – erst morgen wieder.');

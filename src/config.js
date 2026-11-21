@@ -67,6 +67,8 @@ const AKTION = {
   walkToSpeedMs: 1.3, // m/s für walk_to
   entdeckenRadiusM: 22,
   exploreStreetS: 3 * 60,
+  jogS: 10 * 60,
+  jogTempoFaktor: 1.75,
   consumeS: 6 * 60,
   doActivityS: 10 * 60,
   workOnProjectS: 15 * 60,

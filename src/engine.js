@@ -97,6 +97,7 @@ function dauerFuer(schritt, wegM) {
   switch (schritt.action) {
     case 'walk_to': return Math.max(30, Math.ceil((Number(wegM) || 50) / AKTION.walkToSpeedMs));
     case 'explore_street': return AKTION.exploreStreetS;
+    case 'jog': return AKTION.jogS;
     case 'consume': return AKTION.consumeS;
     case 'do_activity': return AKTION.doActivityS;
     case 'leave_note': return AKTION.leaveNoteS;
@@ -137,6 +138,10 @@ function lasseZeitVergehen(ch, sekunden) {
     ch.erschoepfung = Math.max(0, ch.erschoepfung - stunden * 60);
   } else if (ch.current_action === 'rest') {
     ch.erschoepfung = Math.max(0, ch.erschoepfung - stunden * 24);
+  } else if (ch.current_action === 'jog') {
+    ch.erschoepfung = Math.min(100, ch.erschoepfung + stunden * 18 * muedFaktor);
+  } else if (ch.current_action === 'walk_to' || ch.current_action === 'explore_street') {
+    ch.erschoepfung = Math.min(100, ch.erschoepfung + stunden * SEKUNDAER.erschoepfung.proStunde * 1.5 * muedFaktor);
   } else {
     ch.erschoepfung = Math.min(100, ch.erschoepfung + stunden * SEKUNDAER.erschoepfung.proStunde * muedFaktor);
   }
@@ -361,10 +366,64 @@ function starteRoute(db, karte, ch, zielX, zielZ, zielPoi, erzwingeZielPunkt = f
   return meta;
 }
 
-// Einen Schritt (SCHRITT_M) entlang der Route laufen.
-function geheSchritt(db, ch, meta) {
+// Rundlauf für jog: Start -> Zwischenpunkt A -> Zwischenpunkt B -> zurück zum Ausgangspunkt.
+function starteJoggingRundlauf(db, karte, ch) {
+  const navGraph = karte && karte.navGraph;
+  const knoten = (navGraph && navGraph.nodes) || [];
+  if (knoten.length < 3) return null;
+  const parks = (karte && karte.parks) || [];
+  const sx = Number(ch.pos_x);
+  const sz = Number(ch.pos_z);
+  const imStartPark = Boolean(pf.parkFuerPunkt(parks, sx, sz));
+  const mitStart = Boolean(ch.inside_poi) || imStartPark;
+
+  const kands = [];
+  for (const k of knoten) {
+    const d = Math.hypot(Number(k.x) - sx, Number(k.z) - sz);
+    if (d >= 80 && d <= 200) kands.push(k);
+  }
+  if (kands.length === 0) return null;
+  const a = kands[Math.floor(Math.random() * kands.length)];
+  const bKands = kands.filter((k) => {
+    const dAB = Math.hypot(Number(k.x) - Number(a.x), Number(k.z) - Number(a.z));
+    return dAB >= 70 && dAB <= 240;
+  });
+  const b = bKands.length > 0 ? bKands[Math.floor(Math.random() * bKands.length)] : null;
+
+  const s1 = pf.findeRouteZwischenPunkten(navGraph, sx, sz, Number(a.x), Number(a.z), { mitStartPunkt: mitStart, mitZielPunkt: false, parks });
+  if (!s1 || s1.keineRoute || !s1.weg || s1.weg.length < 2) return null;
+  let weg = [...s1.weg];
+  let gesamtM = s1.distanzM || 0;
+  let letzter = a;
+  if (b) {
+    const s2 = pf.findeRouteZwischenPunkten(navGraph, Number(a.x), Number(a.z), Number(b.x), Number(b.z), { mitStartPunkt: false, mitZielPunkt: false, parks });
+    if (s2 && !s2.keineRoute && s2.weg && s2.weg.length >= 2) {
+      weg = weg.concat(s2.weg.slice(1));
+      gesamtM += s2.distanzM || 0;
+      letzter = b;
+    }
+  }
+  const s3 = pf.findeRouteZwischenPunkten(navGraph, Number(letzter.x), Number(letzter.z), sx, sz, { mitStartPunkt: false, mitZielPunkt: mitStart, parks });
+  if (!s3 || s3.keineRoute || !s3.weg || s3.weg.length < 2) return null;
+  weg = weg.concat(s3.weg.slice(1));
+  gesamtM += s3.distanzM || 0;
+
+  const meta = {
+    route: weg.map((p) => ({ x: Math.round(Number(p.x) * 10) / 10, z: Math.round(Number(p.z) * 10) / 10 })),
+    wegIndex: 0,
+    zielPoi: null,
+    jog: true,
+    startPoi: ch.inside_poi || null,
+    restM: Math.round(gesamtM * 10) / 10,
+  };
+  speichereRoute(db, ch, meta);
+  return meta;
+}
+
+// Einen Schritt (SCHRITT_M * tempoFaktor) entlang der Route laufen.
+function geheSchritt(db, ch, meta, tempoFaktor = 1) {
   const route = meta.route;
-  let budget = SCHRITT_M;
+  let budget = SCHRITT_M * (Number(tempoFaktor) || 1);
   let i = meta.wegIndex || 0;
   while (budget > 0.001 && i < route.length) {
     const ziel = route[i];
@@ -500,6 +559,40 @@ async function fuehreSchrittAus(db, deps, characterId, schritt, jetztMs) {
       }
       if (ereignis) speichereFeed(db, characterId, 'aktion_' + action, { schritt, notizen });
       else {
+        klammereCharakter(ch);
+        speichereCharakter(db, ch);
+        return { ok: true, notizen, charakter: ch, unterwegs: true, restM: schritt2.restM };
+      }
+    }
+  } else if (action === 'jog') {
+    let meta = ch.current_action === 'jog' ? ladeRoute(ch) : null;
+    if (!meta) {
+      meta = starteJoggingRundlauf(db, karte, ch);
+      if (!meta) {
+        lasseZeitVergehen(ch, dauerFuer(schritt));
+        ch.erschoepfung = Math.min(100, Number(ch.erschoepfung) + 10);
+        addFroh(ch, 4);
+        notizen.push('Du bist eine kleine Runde gejoggt.');
+      } else {
+        notizen.push(`Du joggst los – Rundlauf (${Math.round(meta.restM)} m).`);
+      }
+    }
+    if (meta) {
+      ch.current_action = 'jog';
+      ch.inside_poi = null;
+      lasseZeitVergehen(ch, 20);
+      const schritt2 = geheSchritt(db, ch, meta, AKTION.jogTempoFaktor || 1.75);
+      const neu = entdeckeUmgebung(db, ch);
+      for (const n of neu) notizen.push(`Neu entdeckt: ${n.name}.`);
+      if (schritt2.angekommen) {
+        ch.inside_poi = meta.startPoi || null;
+        speichereRoute(db, ch, null);
+        ch.current_action = 'idle';
+        ch.erschoepfung = Math.min(100, Number(ch.erschoepfung) + 10);
+        addFroh(ch, 4);
+        notizen.push('Jogging-Runde beendet – angenehm erschöpft und guter Laune.');
+        speichereFeed(db, characterId, 'aktion_' + action, { schritt, notizen });
+      } else {
         klammereCharakter(ch);
         speichereCharakter(db, ch);
         return { ok: true, notizen, charakter: ch, unterwegs: true, restM: schritt2.restM };
@@ -818,7 +911,7 @@ async function fuehreSchrittAusTeil3(db, deps, characterId, schritt, jetztMs) {
 // Dispatcher: Teil 1 -> Teil 2 -> Teil 3 (sleep mit nightly läuft über Teil 2 + Engine-Tick)
 async function schrittAusfuehren(db, deps, characterId, schritt, jetztMs) {
   const a = schritt.action;
-  if (['walk_to', 'explore_street', 'consume', 'do_activity', 'leave_note'].includes(a)) {
+  if (['walk_to', 'explore_street', 'jog', 'consume', 'do_activity', 'leave_note'].includes(a)) {
     return fuehreSchrittAus(db, deps, characterId, schritt, jetztMs);
   }
   const r2 = await fuehreSchrittAusTeil2(db, deps, characterId, schritt, jetztMs);
@@ -1131,6 +1224,7 @@ function speichereLaufendeAktion(db, ch, timer) {
 
 function kannAktionStarten(db, ch, schritt, jetztMs = Date.now()) {
   const a = schritt.action;
+  if (a === 'jog' && Number(ch.erschoepfung) >= 80) return false;
   if (a === 'consume' && Number(ch.hunger) < 20) return false;
   if (a === 'sleep') {
     const h = hamburgStunde(jetztMs);
@@ -1223,11 +1317,11 @@ async function tick(db, deps, characterId, jetztMs) {
       zaehleStat24h(db, 'queued', jetztMs);
     } else {
       // Laufende Route? Dann KEIN neuer Plan – Schritt wiederholt sich, bis angekommen.
-      const laufendeRoute = (ch.current_action === 'walk_to' || ch.current_action === 'explore_street') ? ladeRoute(ch) : null;
+      const laufendeRoute = (ch.current_action === 'walk_to' || ch.current_action === 'explore_street' || ch.current_action === 'jog') ? ladeRoute(ch) : null;
       if (laufendeRoute) {
         const fort = laufendeRoute.zielPoi
           ? { action: 'walk_to', target: laufendeRoute.zielPoi, detail: '' }
-          : { action: 'explore_street', target: null, detail: '' };
+          : { action: ch.current_action === 'jog' ? 'jog' : 'explore_street', target: null, detail: '' };
         queue = [fort];
         planQuelle = { source: 'queue', model: '', tokens: 0 };
         gedanke = 'Weiter geht\u2019s – ein Fuß vor den anderen.';
@@ -1263,7 +1357,7 @@ async function tick(db, deps, characterId, jetztMs) {
     schritt = queue.shift();
     if (!schritt) return { ok: false, grund: 'leerer_plan', notizen: [] };
     speichereQueue(db, ch, queue, snapshot);
-    if (deps.echtzeit && schritt.action !== 'walk_to' && schritt.action !== 'explore_street' && kannAktionStarten(db, ch, schritt, jetztMs)) {
+    if (deps.echtzeit && schritt.action !== 'walk_to' && schritt.action !== 'explore_street' && schritt.action !== 'jog' && kannAktionStarten(db, ch, schritt, jetztMs)) {
       const durationS = echtzeitDauerFuer(db, ch, schritt, jetztMs);
       if (durationS > 0) {
         const poiId = schritt.target || ch.inside_poi || null;
@@ -1304,8 +1398,8 @@ async function tick(db, deps, characterId, jetztMs) {
   // Weiter unterwegs? Dann Schritt vorn wieder einreihen (Rest-Queue bleibt dahinter).
   // Geprüft wird NACH der Ausführung – sonst ginge z. B. „consume“ nach „walk_to“ verloren.
   try {
-    const nochUnterwegs = (ch.current_action === 'walk_to' || ch.current_action === 'explore_street') && ladeRoute(ch);
-    if (nochUnterwegs && (schritt.action === 'walk_to' || schritt.action === 'explore_street')) {
+    const nochUnterwegs = (ch.current_action === 'walk_to' || ch.current_action === 'explore_street' || ch.current_action === 'jog') && ladeRoute(ch);
+    if (nochUnterwegs && (schritt.action === 'walk_to' || schritt.action === 'explore_street' || schritt.action === 'jog')) {
       const q = ladeQueue(ch);
       q.unshift(schritt);
       let snap = null;
@@ -1352,7 +1446,7 @@ async function tick(db, deps, characterId, jetztMs) {
   // Einzige Ausnahme: echte Start-/Ankunftsnotizen (genau einmal pro Ereignis).
   if (ergebnis && ergebnis.unterwegs) {
     const startNotizen = (ergebnis.notizen || []).filter((n) =>
-      /auf den Weg|schlenderst los|Angekommen bei|durchatmest|Neu entdeckt/.test(String(n || '')));
+      /auf den Weg|schlenderst los|joggst los|Angekommen bei|durchatmest|Neu entdeckt/.test(String(n || '')));
     return { ok: true, schritt, ergebnis, notizen: startNotizen, gedanke: '', quelle: planQuelle, route: routeInfo,
       status: { currentStatus: 'walking', remainingMeters: Number(routeInfo ? routeInfo.restM || 0 : 0), targetPoi: String((routeInfo && routeInfo.zielPoi) || schritt.target || '') } };
   }

@@ -8,7 +8,7 @@ Dieses Dokument beschreibt den **aktuellen** Stand der Simulation und KI-Verscha
 
 Alle **20 Sekunden Echtzeit** läuft ein Server-Tick (`loopTick()` in [src/server.js](file:///workspaces/seb-dev/aiquarium/aiquarium-app/src/server.js)):
 
-- **Laufaktionen (`walk_to`, `explore_street`)**: Bewegen die Figur Schritt für Schritt über den A*-Gehweg-Graphen (ca. `28 m` / Tick) und lassen jeweils `20 s` Zeit vergehen.
+- **Laufaktionen (`walk_to`, `explore_street`, `jog`)**: Bewegen die Figur Schritt für Schritt über den A*-Gehweg-Graphen (ca. `26 m` / Tick bzw. `+75 %` Tempo beim `jog`-Rundlauf) und lassen jeweils `20 s` Zeit vergehen.
 - **Echtzeit-Aktionen (`consume`, `do_activity`, `work_shift`, `rest`, `sleep`, `read_book`, …)**: Starten im Echtzeit-Betrieb einen Timer (`echtzeitDauerFuer(...)` in `action_meta_json.aktionTimer`) und werden nach Ablauf im nächsten Tick abgeschlossen. Im HUD zeigt `#aktPill` oben mittig den Fortschrittsring + Restzeit bzw. `… denkt …`, solange keine Aktivität läuft.
 - **Plan-Umfang**: Das Alltags-LLM plant `1..4` Schritte (`plan[1..4]`).
 
@@ -52,8 +52,8 @@ Das LLM sieht **keine rohen Prozentwerte**, sondern Gefühlssätze aus [src/prom
 | Wert | Start | Bereich | Passiver Drift (`/ h`) | Aktive Effekte & Regeln |
 | :--- | :---: | :---: | :--- | :--- |
 | **`hunger`** | `20` | `0..100` | **`+2.5 / h`** | `work_shift`: `+12` · `sleep`: `+12` (+ Zeit) · `consume`: `-5..-50` |
-| **`erschoepfung`** | `15` | `0..100` | **`+3.0 / h`** (`×1.25` bei `froh < 0`) | `work_shift`: `+22` · `rest` (`15 Min` Echtzeit): nur leichte Erholung (`-24 / h` Aquarium-Zeit) · `sleep`: **`→ 0`** |
-| **`froh`** | `25` | **`-50..+50`** | **`-2.0 / h`** (`-4.0 / h` ab `> 30`) | `explore_street`: `+3` · `consume`: `-2..+14` · `do_activity`: `-8..+16` · `work_on_project`: `+6` |
+| **`erschoepfung`** | `15` | `0..100` | **`+3.0 / h`** (`×1.25` bei `froh < 0`, `×1.5` beim Gehen/Schlendern, `18 / h` beim `jog`) | `work_shift`: `+22` · `explore_street`: `+6` · `jog` (Rundlauf): `+10` (+ Zeit) · `rest` (`15 Min` Echtzeit): nur leichte Erholung (`-24 / h` Aquarium-Zeit) · `sleep`: **`→ 0`** |
+| **`froh`** | `25` | **`-50..+50`** | **`-2.0 / h`** (`-4.0 / h` ab `> 30`) | `explore_street`: `+3` · `jog`: `+4` · `consume`: `-2..+14` · `do_activity`: `-8..+16` · `work_on_project`: `+6` |
 | **`gesund`** | `100` | `0..100` | `0 / h` (**`-4.0 / h`** ab `hunger >= 85` oder `erschoepfung >= 90`) | `sleep`: heilt bis `gesund_chunk_cap` · `visit_doctor` (`15 €`): Cap `+20` |
 | **`gesund_chunk_cap`** | `100` | `20..100` | Sinkt mit `gesund` auf 20er-Stufen | Steigt nur durch `visit_doctor` (`praxis`) |
 | **`geld`** | `18 €` | `≥ 0 €` | `0 / h` | `work_shift`: `+8..18 €` · `return_deposit`: `+1 €`/Flasche · `buy_item` Handy: `-50 €` |
