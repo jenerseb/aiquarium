@@ -1479,6 +1479,29 @@ function baueFigur() {
   ring.rotation.x = Math.PI / 2;
   ring.position.y = 0.12;
   g.add(kopf, hut, rumpf, schal, beinL, beinR, ring);
+
+  // Smartphone + Bildschirm-Leuchten (nur nachts, wenn handy im Inventar)
+  const handy = new THREE.Group();
+  const handyBody = new THREE.Mesh(
+    new THREE.BoxGeometry(0.16, 0.28, 0.03),
+    new THREE.MeshLambertMaterial({ color: 0x161a20 })
+  );
+  const handyScreen = new THREE.Mesh(
+    new THREE.PlaneGeometry(0.13, 0.23),
+    new THREE.MeshBasicMaterial({ color: 0xbfe6ff })
+  );
+  handyScreen.rotation.y = Math.PI; // leuchtet Richtung Gesicht/Oberkörper (-Z)
+  handyScreen.position.z = -0.017;
+  handy.add(handyBody, handyScreen);
+  handy.position.set(0, 1.48, 0.56);
+  handy.rotation.x = -0.45;
+  handy.visible = false;
+  const handyLicht = new THREE.PointLight(0x9bd4ff, 2.4, 4.5, 1.8);
+  handyLicht.position.set(0, 1.56, 0.62);
+  handyLicht.visible = false;
+  g.userData.handy = handy;
+  g.userData.handyLicht = handyLicht;
+  g.add(handy, handyLicht);
   // Dev-Marker: markante, dicke senkrechte 55-m-Säule an den Füßen — hängt als Child an
   // der Charakter-Gruppe und bewegt sich damit automatisch mit (auch indoor).
   const devLineGeo = new THREE.CylinderGeometry(0.30, 0.30, 55, 8);
@@ -2038,6 +2061,13 @@ function hudAktualisieren() {
   $('tInv').textContent = inv.length > 0
     ? 'Taschen: ' + inv.map((i) => `${i.label || i.item_key} (${i.count}x)`).join(', ')
     : 'Taschen: leer';
+  if (Z.figur && Z.figur.userData.handy) {
+    const hatHandy = inv.some((i) => i.item_key === 'handy' && Number(i.count) > 0);
+    const nacht = Boolean(LICHT && (LICHT.nacht || LICHT.nightFactor > 0.35));
+    const handyAn = hatHandy && nacht;
+    Z.figur.userData.handy.visible = handyAn;
+    if (Z.figur.userData.handyLicht) Z.figur.userData.handyLicht.visible = handyAn;
+  }
   // Chunk-Markierung (20 %): senkrechte Striche auf der Gesund-Schiene
   const schiene = $('sGesund');
   if (!schiene.dataset.chunks) {

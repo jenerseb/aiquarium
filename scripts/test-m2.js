@@ -78,7 +78,10 @@ async function main() {
   assert.ok(!/%/.test(gebaut.prompt.split('ANTWORTE')[0]) || /20 \w+|Prozent/.test('x') === false, 'prompt geprueft');
   assert.ok(!/\b\d{2,3}\s*%/.test(gebaut.prompt), 'keine roh-prozente im prompt');
   assert.ok(/Zettel/.test(gebaut.prompt) && /Handy/.test(gebaut.prompt), 'kommunikationsgrenze im prompt');
-  assert.ok(!gebaut.whitelist.includes('send_sms'), 'ohne handy kein sms-intent');
+  assert.ok(gebaut.whitelist.includes('send_sms'), 'mit dev-handy sms-intent erlaubt');
+  db.prepare("DELETE FROM inventory WHERE character_id = ? AND item_key = 'handy'").run(characterId);
+  const ohneHandy = promptMod.buildPrompt(db, ch0, { orte: [{ id: 'apartment', name: 'Wohnung', category: 'home' }] });
+  assert.ok(!ohneHandy.whitelist.includes('send_sms'), 'ohne handy kein sms-intent');
   assert.ok(gebaut.memories.length >= 1, 'memories eingebunden');
   const cb = db.prepare('SELECT come_back_count FROM memories ORDER BY id LIMIT 1').get();
   assert.ok(Number(cb.come_back_count) >= 2, 'come_back beim einbinden erhoeht');

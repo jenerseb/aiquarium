@@ -467,6 +467,8 @@ function seed(db, kiezMap) {
     const inv = db.prepare('INSERT INTO inventory (character_id, item_key, label, count) VALUES (?, ?, ?, ?)');
     inv.run(charId, 'notizblock', 'Notizblock', 1);
     inv.run(charId, 'schluessel', 'Wohnungsschluessel', 1);
+    // NUR ZU DEV-ZWECKEN: Smartphone standardmäßig im Start-Inventar (eigentlich erst am Späti kaufbar).
+    inv.run(charId, 'handy', 'Gebrauchtes Smartphone', 1);
     db.prepare("INSERT INTO memories (character_id, tier, kind, text, initial_weight, worth) VALUES (?, 'short', 'moment', ?, 4.0, 4.0)").run(
       charId, 'Ankunft in der Beckstrasse mit 18 Euro. Die Wohnung riecht nach frischer Farbe.');
   } else {
