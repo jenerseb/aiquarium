@@ -1492,9 +1492,15 @@ function baueFigur() {
   );
   handyScreen.rotation.y = Math.PI; // leuchtet Richtung Gesicht/Oberkörper (-Z)
   handyScreen.position.z = -0.017;
-  handy.add(handyBody, handyScreen);
+  // Einfache Hand + Arm (in Welt/Figur-Koordinaten relativ zur Handy-Gruppe)
+  const hand = new THREE.Mesh(new THREE.SphereGeometry(0.085, 10, 8), haut);
+  hand.position.set(0, -0.05, 0.035);
+  const arm = new THREE.Mesh(new THREE.CylinderGeometry(0.08, 0.085, 0.56, 8), jacke);
+  arm.position.set(0.18, -0.02, -0.24);
+  arm.rotation.set(Math.PI / 2 - 0.15, 0, 0.42);
+  handy.add(handyBody, handyScreen, hand, arm);
   handy.position.set(0, 1.48, 0.56);
-  handy.rotation.x = -0.45;
+  handy.rotation.x = 0.55; // Bildschirm nach oben Richtung Gesicht gekippt
   handy.visible = false;
   const handyLicht = new THREE.PointLight(0x9bd4ff, 2.4, 4.5, 1.8);
   handyLicht.position.set(0, 1.56, 0.62);
