@@ -2417,7 +2417,7 @@ function staatAnwenden(s, opts) {
 function blasePositionieren() {
   const b = $('blase');
   if (!b || !Z.figur) return;
-  if (!Z.gedanke) { b.style.display = 'none'; return; }
+  if (!Z.gedanke || Z.modus !== 'pilot') { b.style.display = 'none'; return; }
   const v = new THREE.Vector3(Z.figur.position.x, 3.1, Z.figur.position.z).project(camera);
   if (v.z > 1) { b.style.display = 'none'; return; }
   b.style.display = 'block';
