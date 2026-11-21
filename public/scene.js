@@ -1966,6 +1966,10 @@ function hudAktualisieren() {
   balken('bMued', 'nMued', Number(ch.erschoepfung) || 0, 100);
   $('bGeld').style.width = `${Math.max(2, Math.min(100, (Number(ch.geld) || 0) / 1.2))}%`;
   $('nGeld').textContent = `${Math.round(Number(ch.geld) || 0)} €`;
+  const inv = Array.isArray(Z.staat && Z.staat.inventory) ? Z.staat.inventory : [];
+  $('tInv').textContent = inv.length > 0
+    ? 'Taschen: ' + inv.map((i) => `${i.label || i.item_key} (${i.count}x)`).join(', ')
+    : 'Taschen: leer';
   // Chunk-Markierung (20 %): senkrechte Striche auf der Gesund-Schiene
   const schiene = $('sGesund');
   if (!schiene.dataset.chunks) {

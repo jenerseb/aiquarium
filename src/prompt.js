@@ -182,10 +182,24 @@ function whitelistFuer(db, characterId, orte, ch = null) {
   return { intents: liste, orte: orte || [] };
 }
 
-function orteText(orte) {
+function orteText(orte, db = null) {
   if (!orte || orte.length === 0) return 'Bekannte Orte: nur deine Wohnung – alles andere musst du erst entdecken.';
   const a = ['Bekannte Orte (nur dorthin kannst du direkt gehen):'];
-  for (const o of orte) a.push(`- ${o.id}: ${o.name} (${o.category})`);
+  let qOffers = null;
+  if (db) {
+    try { qOffers = db.prepare('SELECT label FROM poi_offers WHERE poi_id = ? ORDER BY id DESC LIMIT 4'); } catch { qOffers = null; }
+  }
+  for (const o of orte) {
+    const desc = o.public_desc ? ` – ${String(o.public_desc).slice(0, 70)}` : '';
+    let ang = '';
+    if (qOffers) {
+      try {
+        const rows = qOffers.all(o.id);
+        if (rows.length > 0) ang = ` [bekannt: ${rows.map((r) => r.label).join(', ')}]`;
+      } catch { /* egal */ }
+    }
+    a.push(`- ${o.id}: ${o.name} (${o.category})${desc}${ang}`);
+  }
   return a.join('\n');
 }
 
@@ -239,6 +253,12 @@ function buildPrompt(db, ch, ctx) {
     : [c.letztesEreignis ? `Zuletzt: ${c.letztesEreignis}` : 'Zuletzt: nichts Besonderes.'];
   const regelnExtra = [];
   if (Number(ch.hunger) < 20) regelnExtra.push('Noch völlig satt: consume nicht als ersten Schritt planen.');
+  if (Number(ch.hunger) < 55 && Number(ch.erschoepfung) < 50) {
+    regelnExtra.push('Du bist fit: geh raus, erkunde neue Ecken (explore_street) oder unternimm an einem Ort etwas Konkretes (do_activity, z. B. passend zur Ortsbeschreibung).');
+  }
+  const letzteGedanken = Array.isArray(c.recentThoughts) && c.recentThoughts.length > 0
+    ? ['Letzte Gedanken (NICHT wiederholen, denk an neue Handlungen/Ziele):', ...c.recentThoughts.map((t) => `- ${t}`), '']
+    : [];
 
   const jobLine = jobText(db, ch.id);
   const linien = [
@@ -252,6 +272,7 @@ function buildPrompt(db, ch, ctx) {
     '',
     memoriesText(top),
     '',
+    ...letzteGedanken,
     loopsText(db, ch.id),
     '',
     inventarText(db, ch.id),
@@ -263,15 +284,15 @@ function buildPrompt(db, ch, ctx) {
     ...(wetter ? [wetter] : []),
     ...notizenListe,
     '',
-    orteText(wl.orte),
+    orteText(wl.orte, db),
     '',
     kommunikationsRegel(handy),
     'Keine Beträge oder Prozentwerte nennen – die rechnet die Welt.',
     ...regelnExtra,
     '',
     'ANTWORTE NUR ALS JSON:',
-    '{ "thought": "1 Satz (max. 20 Wörter)", "why_here": "kurzer Grund", "retrospective": "kurzer Rückblick",',
-    '  "plan": [ {"action": "intent", "target": "poi_id|null", "detail": "Wunschtext"} x 2..4 ] }',
+    '{ "thought": "1 aktiver, abwechslungsreicher Impuls oder Vorhaben (keine Zustandsbeschreibung wie \'hier ist es still\' oder \'ich bin satt\', max. 20 Wörter)", "why_here": "kurzer Handlungs-Grund", "retrospective": "kurzer Rückblick",',
+    '  "plan": [ {"action": "intent", "target": "poi_id|null", "detail": "konkreter Wunschtext"} x 2..4 ] }',
     'Erlaubte intents: ' + wl.intents.join(', ') + '.',
     'walk_to braucht immer target (poi_id); max. 1 leave_note pro Plan.',
   ];

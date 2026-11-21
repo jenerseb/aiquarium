@@ -152,12 +152,15 @@ function klammereAngebot(poi, kind, intentKey, vorschlag) {
   };
 }
 
+const GRATIS_AKTIVITAET_KATS = new Set(['park', 'denkmal', 'home', 'arzt']);
+
 async function resolveIntent(db, brain, poi, kind, wunschText, characterId) {
   const key = normalisiereKey(wunschText);
   const bekannt = findeAngebot(db, poi.id, kind, key);
   if (bekannt) return { angebot: bekannt, neu: false };
-  // Kostenlose Aktivitäten (do_activity) brauchen keinen Arbiter-LLM-Call (immer 0 €).
-  if (kind === 'do_activity') {
+  // Park/Denkmal/Wohnung/Praxis: kostenlose Aktivitäten lokal abwickeln (0 LLM-Calls).
+  // An Kultur-/Gastro-POIs (kino, club, kneipe, etc.) prüft der Arbiter einmalig per LLM & cached.
+  if (kind === 'do_activity' && (!poi || GRATIS_AKTIVITAET_KATS.has(poi.category))) {
     const angebot = klammereAngebot(poi, kind, key, deterministischesAngebot(poi, kind, wunschText));
     const gespeichert = speichereAngebot(db, angebot);
     return { angebot: gespeichert, neu: true, quelle: { source: 'lokal', model: '', tokens: 0 } };

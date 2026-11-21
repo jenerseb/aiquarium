@@ -45,6 +45,7 @@ function istLocalhost(req) {
 function apiState() {
   const { db, characterId } = ZUSTAND;
   const ch = engine.ladeCharakter(db, characterId);
+  const inventory = db.prepare('SELECT item_key, label, count FROM inventory WHERE character_id = ? ORDER BY id').all(characterId);
   const feed = db.prepare('SELECT id, type, payload_json, created_at FROM events WHERE character_id = ? ORDER BY id DESC LIMIT 30').all(characterId);
   const ws = db.prepare('SELECT tick, last_nightly_date, weather, temperature_c FROM world_state WHERE id = 1').get();
   const pois = db.prepare('SELECT id, name, category, pos_x, pos_z, discovered FROM pois ORDER BY id').all();
@@ -65,7 +66,7 @@ function apiState() {
       };
     }
   } catch { route = null; }
-  return { charakter: ch, feed, world: ws, pois, plan, route, zeit: { berlin: new Date().toISOString(), nacht: istNacht(Date.now()) } };
+  return { charakter: ch, inventory, feed, world: ws, pois, plan, route, zeit: { berlin: new Date().toISOString(), nacht: istNacht(Date.now()) } };
 }
 
 // GET /api/map: statische Kiez-Geometrie (buildings/lod2, trees, streets, parks, pois + meta).

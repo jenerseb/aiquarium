@@ -59,7 +59,7 @@ function klammereCharakter(ch) {
 
 // Wahrnehmung: bekannte Orte (discovered) + was ist in Sichtweite (22 m)?
 function bekannteOrte(db) {
-  return db.prepare('SELECT id, name, category, pos_x, pos_z FROM pois WHERE discovered = 1 ORDER BY id').all();
+  return db.prepare('SELECT id, name, category, pos_x, pos_z, public_desc FROM pois WHERE discovered = 1 ORDER BY id').all();
 }
 
 function entdeckeUmgebung(db, ch) {
@@ -738,8 +738,16 @@ async function holeNeuenPlanMitMeta(db, deps, characterId, jetztMs) {
   const brain = deps.brain;
   const promptMod = require('./prompt');
   const ch = ladeCharakter(db, characterId);
-  const orte = bekannteOrte(db).map((o) => ({ id: o.id, name: o.name, category: o.category }));
+  const orte = bekannteOrte(db).map((o) => ({ id: o.id, name: o.name, category: o.category, public_desc: o.public_desc || '' }));
   const devAn = String(process.env.AIQUARIUM_DEV ?? '1') !== '0';
+  const recentThoughts = [];
+  try {
+    const tRows = db.prepare("SELECT payload_json FROM events WHERE character_id = ? AND type = 'plan' ORDER BY id DESC LIMIT 3").all(characterId);
+    for (const r of tRows) {
+      const p = JSON.parse(r.payload_json || '{}');
+      if (p.thought) recentThoughts.push(String(p.thought));
+    }
+  } catch { /* egal */ }
   const letzterTick = 0;
   const ereignisse = ereignisSeit(db, characterId, letzterTick, 6);
   const letzteNotizen = [];
@@ -761,6 +769,7 @@ async function holeNeuenPlanMitMeta(db, deps, characterId, jetztMs) {
     zeitText: tageszeitText(jetztMs),
     letztesEreignis: letzteNotizen[0] || null,
     letzteNotizen,
+    recentThoughts,
   };
   const gebaut = promptMod.buildPrompt(db, ch, ctx);
   // LLM-Input-Log (Debug): was die KI bei diesem Call als INPUT bekommt –
@@ -779,7 +788,7 @@ async function holeNeuenPlanMitMeta(db, deps, characterId, jetztMs) {
       fallback: true, quelle: META_FALLBACK };
   }
   const antwort = await brain.decide({
-    prompt: gebaut.prompt, whitelist: gebaut.whitelist, apiKey: process.env.OPENROUTER_API_KEY || 'mock',
+    prompt: gebaut.prompt, whitelist: gebaut.whitelist, recentThoughts, apiKey: process.env.OPENROUTER_API_KEY || 'mock',
     slot: undefined, musing: false, orte: orte.map((o) => o.id), role: 'alltag', schema: 'plan',
   });
   // KI-Quelle für den Dev-Feed: usedModel + Tokens + Soll-Modell aus decide-Antwort.
