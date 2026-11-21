@@ -24,7 +24,7 @@ CREATE TABLE IF NOT EXISTS character (
   status TEXT DEFAULT 'alive',
   gesund REAL DEFAULT 100.0,
   gesund_chunk_cap REAL DEFAULT 100.0,
-  froh REAL DEFAULT 20.0,
+  froh REAL DEFAULT 25.0,
   hunger REAL DEFAULT 20.0,
   erschoepfung REAL DEFAULT 15.0,
   geld REAL DEFAULT 18.00,

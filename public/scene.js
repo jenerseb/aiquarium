@@ -8,6 +8,12 @@ import { TEXTUR_FAKTOR, DIORAMA_FASSADEN, DIORAMA_DAECHER, dioramaFarbe } from "
 const $ = (id) => document.getElementById(id);
 const DEV = new URLSearchParams(location.search).has('dev') || new URLSearchParams(location.search).get('mode') === 'dev';
 const CLAY = new URLSearchParams(location.search).get('map') === 'clay';
+const _photoParam = new URLSearchParams(location.search).get('photo');
+const PHOTO_OPACITY = CLAY
+  ? (_photoParam !== null && _photoParam !== '' && Number.isFinite(Number(_photoParam))
+    ? Math.max(0, Math.min(100, Number(_photoParam))) / 100
+    : 0)
+  : 1.0;
 // TEST-FLAG: Gruenzeug (Parks + Baeume) im Dev-Modus oder bei ?map=clay einblenden.
 const ZEIGE_GRUEN = DEV || CLAY;
 // Helligkeit aller Dachgrafiken (1.0 = Original, < 1.0 = dunkler, z. B. 0.55..0.85)
@@ -382,8 +388,8 @@ function baueBoden() {
   const randMesh = new THREE.Mesh(randGeo, new THREE.MeshBasicMaterial({ color: 0x3b424c }));
   randMesh.position.set(DIORAMA.cx, 0.012, DIORAMA.cz);
   gruppe.add(randMesh);
-  // DIORAMA_V1: optionales Luftbild-Overlay (/kiez-aerial.jpg in public/), bei ?map=clay ausblenden
-  if (!CLAY) new THREE.TextureLoader().load("/kiez-aerial.jpg",
+  // DIORAMA_V1: optionales Luftbild-Overlay (/kiez-aerial.jpg in public/), bei ?map=clay standardmäßig 0 (% via ?photo=0..100)
+  if (PHOTO_OPACITY > 0) new THREE.TextureLoader().load("/kiez-aerial.jpg",
     (tex) => {
       // Stale-Guard: wenn der Boden inzwischen neu gebaut wurde (ladeKarte()),
       // darf das Bild NICHT mehr in die entfernte Gruppe gehaengt werden.
@@ -393,12 +399,10 @@ function baueBoden() {
       tex.anisotropy = renderer.capabilities.getMaxAnisotropy();
       const luftGeo = new THREE.CircleGeometry(DIORAMA.r * 0.99, 96);
       luftGeo.rotateX(-Math.PI / 2);
-      // 2026-11-19 TIEFENORDNUNG: Das Bild liegt UEBER der Boden-Oberkante
-      // (y = 0), aber unter Parks (0.02) und Strassen (0.05/0.08). Bei -0.15
-      // war es unter der opaken Platte begraben (nur gruener Boden sichtbar).
-      // 2026-11-19 OPACITY 100 %: Das Luftbild liegt voll deckend auf dem
-      // Sockel (transparent: false → Opaque-Pass, kein Sortier-Flackern).
-      const luft = new THREE.Mesh(luftGeo, dioramaShader(new THREE.MeshLambertMaterial({ map: tex, transparent: false, opacity: 1.0, depthWrite: true })));
+      const voll = PHOTO_OPACITY >= 1;
+      const luft = new THREE.Mesh(luftGeo, dioramaShader(new THREE.MeshLambertMaterial({
+        map: tex, transparent: !voll, opacity: PHOTO_OPACITY, depthWrite: voll,
+      })));
       luft.receiveShadow = true; // Gebaeude-Schatten auf dem Luftbild
       luft.position.set(DIORAMA.cx, 0.005, DIORAMA.cz);
       gruppe.add(luft);
@@ -793,7 +797,7 @@ function fassadenEmissive() {
 let dachLuftMesh = null;
 let luftTex = null;
 function baueDachLuftbild(tex) {
-  if (CLAY) return;
+  if (PHOTO_OPACITY <= 0) return;
   luftTex = tex;
   if (dachLuftMesh) {
     scene.remove(dachLuftMesh);
@@ -826,13 +830,19 @@ function baueDachLuftbild(tex) {
   geo.setAttribute('aGebIdx', new THREE.Float32BufferAttribute(gebIdxArr, 1));
   geo.computeVertexNormals();
   const dachTint = new THREE.Color().setScalar(DACH_HELLIGKEIT);
-  dachLuftMesh = new THREE.Mesh(geo, dioramaShader(new THREE.MeshLambertMaterial({ map: tex, color: dachTint, transparent: true, opacity: DEV ? 0.66 : 1.0, depthWrite: true }), { gebIdxAttr: true }));
-  dachLuftMesh.castShadow = true;
+  const voll = PHOTO_OPACITY >= 1;
+  dachLuftMesh = new THREE.Mesh(geo, dioramaShader(new THREE.MeshLambertMaterial({
+    map: tex, color: dachTint, transparent: true,
+    opacity: DEV ? Math.min(0.66, PHOTO_OPACITY) : PHOTO_OPACITY,
+    depthWrite: voll,
+    ...(!voll ? { polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -1 } : {}),
+  }), { gebIdxAttr: true }));
+  dachLuftMesh.castShadow = voll;
   dachLuftMesh.receiveShadow = true;
   scene.add(dachLuftMesh);
-  // farbige Dächer aus dem gemergten Mesh nehmen (kein Z-Fighting)
+  // farbige Dächer nur bei 100 % Luftbild entfernen (bei Teil-Transparenz bleiben sie als Untergrund)
   const daecherAlt = gruppe.userData.daecher;
-  if (daecherAlt) {
+  if (voll && daecherAlt) {
     gruppe.remove(daecherAlt);
     daecherAlt.geometry.dispose();
     daecherAlt.material.dispose();
@@ -2009,7 +2019,7 @@ function hudAktualisieren() {
     $(num).textContent = suffix || String(Math.round(wert));
   };
   balken('bGesund', 'nGesund', Number(ch.gesund) || 0, 100);
-  balken('bFroh', 'nFroh', (Number(ch.froh) || 0) + 100, 200);
+  balken('bFroh', 'nFroh', (Number(ch.froh) || 0) + 50, 100);
   balken('bHunger', 'nHunger', Number(ch.hunger) || 0, 100);
   balken('bMued', 'nMued', Number(ch.erschoepfung) || 0, 100);
   $('bGeld').style.width = `${Math.max(2, Math.min(100, (Number(ch.geld) || 0) / 1.2))}%`;

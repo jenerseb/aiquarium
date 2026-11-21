@@ -3,7 +3,7 @@
 // Aktions-Ticks, Multi-Step-Plan-Queue, Interrupts, Health-Chunks, Tod/Respawn.
 // Die Engine rechnet – das Modell spürt nur Konsequenzen (natürliche Sätze).
 
-const { AKTION, SEKUNDAER, ECONOMY, GESUND, chunkCapFuer } = require('./config');
+const { AKTION, SEKUNDAER, ECONOMY, GESUND, FROH, chunkCapFuer } = require('./config');
 const pf = require('./pathfinding');
 const arbiter = require('./arbiter');
 const checks = require('./checks');
@@ -50,7 +50,7 @@ function speichereCharakter(db, ch) {
 function klammereCharakter(ch) {
   ch.gesund = Math.max(0, Math.min(100, Number(ch.gesund) || 0));
   ch.gesund_chunk_cap = Math.max(20, Math.min(100, Number(ch.gesund_chunk_cap) || 100));
-  ch.froh = Math.max(-100, Math.min(100, Number(ch.froh) || 0));
+  ch.froh = Math.max(FROH.min, Math.min(FROH.max, Number(ch.froh) || 0));
   ch.hunger = Math.max(0, Math.min(100, Number(ch.hunger) || 0));
   ch.erschoepfung = Math.max(0, Math.min(100, Number(ch.erschoepfung) || 0));
   ch.geld = Math.max(0, Math.round(Number(ch.geld) || 0));
@@ -118,16 +118,30 @@ function dauerFuer(schritt, wegM) {
   }
 }
 
+function addFroh(ch, delta) {
+  let d = Number(delta) || 0;
+  const f = Number(ch.froh) || 0;
+  if (d > 0) {
+    if (f >= 35) d = Math.min(1, d);
+    else if (f >= 20) d = Math.max(1, Math.round(d * 0.5));
+  }
+  ch.froh = Math.max(FROH.min, Math.min(FROH.max, f + d));
+  return ch.froh;
+}
+
 function lasseZeitVergehen(ch, sekunden) {
   const stunden = sekunden / 3600;
   ch.hunger = Math.min(100, ch.hunger + stunden * SEKUNDAER.hunger.proStunde);
+  const muedFaktor = Number(ch.froh) < 0 ? 1.25 : 1.0;
   if (ch.current_action === 'sleep') {
     ch.erschoepfung = Math.max(0, ch.erschoepfung - stunden * 60);
   } else if (ch.current_action === 'rest') {
     ch.erschoepfung = Math.max(0, ch.erschoepfung - stunden * 90);
   } else {
-    ch.erschoepfung = Math.min(100, ch.erschoepfung + stunden * SEKUNDAER.erschoepfung.proStunde);
+    ch.erschoepfung = Math.min(100, ch.erschoepfung + stunden * SEKUNDAER.erschoepfung.proStunde * muedFaktor);
   }
+  const frohRate = Number(ch.froh) > FROH.euphorieSchwelle ? FROH.euphorieProStunde : FROH.proStunde;
+  ch.froh = Math.max(FROH.min, Math.min(FROH.max, Number(ch.froh) + stunden * frohRate));
   if (ch.hunger >= GESUND.hungerSchwelle || ch.erschoepfung >= GESUND.erschoepfungSchwelle) {
     ch.gesund = Math.max(0, ch.gesund - stunden * 4);
   }
@@ -197,10 +211,26 @@ function restDistanz(route, wegIndex, x, z) {
 }
 
 // Zielwahl für explore_street: 40–130 m entfernt, bevorzugt Richtung unentdeckter POIs.
+// Mischt ab und an (max. 1x pro Kalendertag) gezielt eine unentdeckte Location ein.
 function waehleExploreZiel(db, karte, ch) {
   const knoten = (karte.navGraph && karte.navGraph.nodes) || [];
   if (knoten.length === 0) return null;
-  const unentdeckt = db.prepare('SELECT pos_x, pos_z FROM pois WHERE discovered = 0').all();
+  const unentdeckt = db.prepare('SELECT id, pos_x, pos_z FROM pois WHERE discovered = 0').all();
+  if (unentdeckt.length > 0 && Math.random() < 0.25) {
+    try {
+      const datum = arbiter.berlinDatum(Date.now());
+      const schonHeute = db.prepare(
+        "SELECT payload_json FROM events WHERE character_id = ? AND type = 'explore_poi_hint' ORDER BY id DESC LIMIT 1"
+      ).get(ch.id);
+      const letztesDatum = schonHeute ? (JSON.parse(schonHeute.payload_json || '{}').datum || '') : '';
+      if (letztesDatum !== datum) {
+        const zielPoi = unentdeckt[Math.floor(Math.random() * unentdeckt.length)];
+        db.prepare("INSERT INTO events (character_id, tick, type, payload_json, in_feed) VALUES (?, 0, 'explore_poi_hint', ?, 0)")
+          .run(ch.id, JSON.stringify({ datum, poi_id: zielPoi.id }));
+        return { x: Number(zielPoi.pos_x), z: Number(zielPoi.pos_z), _mitZielPunkt: true };
+      }
+    } catch { /* normaler explore-fallback unten */ }
+  }
   let richtung = null;
   if (unentdeckt.length > 0) {
     let best = null;
@@ -262,11 +292,11 @@ function waehleExploreZiel(db, karte, ch) {
 // Route starten: A* über die unsichtbaren Hauseingangspunkte auf der nächsten Strasse.
 // So verlässt/betritt die Figur Gebäude immer über den nächsten Straßenpunkt,
 // folgt allen Gehwegen/Ecken und läuft niemals diagonal durch Häuserblöcke.
-function starteRoute(db, karte, ch, zielX, zielZ, zielPoi) {
+function starteRoute(db, karte, ch, zielX, zielZ, zielPoi, erzwingeZielPunkt = false) {
   const navGraph = karte.navGraph;
   let tx = Number(zielX);
   let tz = Number(zielZ);
-  let mitZielPunkt = false;
+  let mitZielPunkt = Boolean(erzwingeZielPunkt);
   if (navGraph && zielPoi) {
     const ziel = db.prepare('SELECT id, pos_x, pos_z FROM pois WHERE id = ?').get(zielPoi);
     if (ziel) {
@@ -396,7 +426,7 @@ async function fuehreSchrittAus(db, deps, characterId, schritt, jetztMs) {
         lasseZeitVergehen(ch, dauerFuer(schritt));
         notizen.push('Du bist ein Stück durch die Straßen geschlendert.');
       } else {
-        meta = starteRoute(db, karte, ch, Number(ziel.x), Number(ziel.z), null);
+        meta = starteRoute(db, karte, ch, Number(ziel.x), Number(ziel.z), null, Boolean(ziel._mitZielPunkt));
         if (!meta) {
           lasseZeitVergehen(ch, dauerFuer(schritt));
           notizen.push('Du bist ein Stück durch die Straßen geschlendert.');
@@ -418,7 +448,7 @@ async function fuehreSchrittAus(db, deps, characterId, schritt, jetztMs) {
         speichereRoute(db, ch, null);
         ch.current_action = 'idle';
         ch.erschoepfung = Math.min(100, Number(ch.erschoepfung) + 6);
-        ch.froh = Math.min(100, Math.max(-100, Number(ch.froh) + 3));
+        addFroh(ch, 3);
         notizen.push('Du hast dich umgesehen und atmest durch.');
         ereignis = true;
       } else {
@@ -454,7 +484,7 @@ async function fuehreSchrittAus(db, deps, characterId, schritt, jetztMs) {
     ch.geld = Math.max(0, Math.round(Number(ch.geld) - Math.round(Number(angebot.price))));
     ch.hunger = Math.max(0, Math.min(100, Number(ch.hunger) + Number(angebot.hunger_delta)));
     ch.erschoepfung = Math.max(0, Math.min(100, Number(ch.erschoepfung) + Number(angebot.erschoepfung_delta)));
-    ch.froh = Math.max(-100, Math.min(100, Number(ch.froh) + frohDelta));
+    addFroh(ch, frohDelta);
     lasseZeitVergehen(ch, dauerFuer(schritt));
     notizen.push(`${angebot.label}: ${angebot.narrative || ''}`.trim() + (res.neu ? ' (Neu im Kiez-Katalog!)' : ''));
     if (frohDelta >= 5 || res.neu) {
@@ -550,9 +580,12 @@ async function fuehreSchrittAusTeil2(db, deps, characterId, schritt) {
     if (!job) return { ok: false, grund: 'kein_job', notizen };
     const abrech = arbiter.rechneSchichtAb(db, characterId, job, klammereCharakter({ ...ch }));
     ch = ladeCharakter(db, characterId);
-    ch.erschoepfung = Math.min(100, Number(ch.erschoepfung) + SEKUNDAER.erschoepfung.proSchicht);
+    const schichtMued = Number(ch.froh) < 0
+      ? Math.round(SEKUNDAER.erschoepfung.proSchicht * 1.2)
+      : (Number(ch.froh) >= 20 ? Math.round(SEKUNDAER.erschoepfung.proSchicht * 0.9) : SEKUNDAER.erschoepfung.proSchicht);
+    ch.erschoepfung = Math.min(100, Number(ch.erschoepfung) + schichtMued);
     ch.hunger = Math.min(100, Number(ch.hunger) + SEKUNDAER.hunger.proSchicht);
-    ch.froh = Math.max(-100, Number(ch.froh) - 2);
+    addFroh(ch, -2);
     lasseZeitVergehen(ch, dauerFuer(schritt));
     if (abrech.abgebrochen) {
       notizen.push(`Schicht abgebrochen: halber Lohn ${Math.round(abrech.lohn)} Euro, Strike ${abrech.strikes}.`);
@@ -676,7 +709,7 @@ async function fuehreSchrittAusTeil3(db, deps, characterId, schritt) {
         .run(prog, JSON.stringify(frags), st, wp.id);
       wp = db.prepare('SELECT * FROM work_pieces WHERE id = ?').get(wp.id);
     }
-    ch.froh = Math.min(100, Number(ch.froh) + 6);
+    addFroh(ch, 6);
     const { speichereMemory } = require('./memory');
     speichereMemory(db, characterId, { tier: 'short', kind: 'work', text: `Projekt „${wp.title}“ (${wp.progress} %): ${fragment.slice(0, 100)}`, initial_weight: 3.5 });
     notizen.push(`Du hast an „${wp.title}“ weitergearbeitet (${wp.progress} %).`);
@@ -989,17 +1022,13 @@ async function tick(db, deps, characterId, jetztMs) {
   try { await arbiter.bewerteBewerbungen(db, telegram, deps.brain); } catch { /* nie crashen */ }
   try { arbiter.pruefeInaktivitaet(db, characterId, jetztMs); } catch { /* nie crashen */ }
 
-  // Stimmung (froh): reagiert auf Mangel und pendelt sich sonst sanft Richtung +10 ein.
+  // Stimmung (froh): zusätzlicher Malus bei akutem Mangel (kein automatisches Hochziehen).
   let frohDelta = 0;
   if (Number(ch.hunger) > 75) frohDelta -= 2;
   if (Number(ch.erschoepfung) > 80) frohDelta -= 2;
   if (Number(ch.geld) < 5) frohDelta -= 1;
-  if (frohDelta === 0) {
-    if (Number(ch.froh) > 10) frohDelta = -0.5;
-    else if (Number(ch.froh) < 10) frohDelta = 0.5;
-  }
   if (frohDelta !== 0) {
-    ch.froh = Math.max(-100, Math.min(100, Number(ch.froh) + frohDelta));
+    addFroh(ch, frohDelta);
     db.prepare('UPDATE character SET froh = ? WHERE id = ?').run(ch.froh, characterId);
   }
 

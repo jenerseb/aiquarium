@@ -92,7 +92,7 @@ async function arbiterLLM(brain, poi, kind, wunschText, db, characterId) {
     `Preisrahmen fuer diese Kategorie: ${pMin} bis ${pMax} Euro (nur ganze Euro-Betraege).`,
     'Antworte NUR als JSON: { "plausibel": true/false, "label": "kurzer Name", "price": zahl,',
     ' "hunger_delta": -50..-5 (nur consume, sonst 0), "erschoepfung_delta": 2..15 bei Aktivitaet,',
-    ' "froh_delta": -8..16, "narrative": "ein Satz" }. Unplausibles -> plausibel:false.',
+    ' "froh_delta": -6..12 (auch negativ bei enttaeuschendem/anstrengendem Erlebnis), "narrative": "ein Satz" }. Unplausibles -> plausibel:false.',
   ].join('\n');
   // LLM-Input-Log (Debug): was der Arbiter-Call als INPUT bekommt.
   if (db) {

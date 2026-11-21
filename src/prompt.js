@@ -18,11 +18,11 @@ function gesundGefuehl(gesund) {
 
 function frohGefuehl(froh) {
   const f = Number(froh);
-  if (f >= 60) return 'Stimmung leicht und hell.';
-  if (f >= 20) return 'Stimmung ruhig und zuversichtlich.';
-  if (f >= -20) return 'Stimmung grau und leicht gereizt.';
-  if (f >= -60) return 'Niedergeschlagen und einsam.';
-  return 'Tief unten, traurig und mutlos.';
+  if (f >= 35) return 'Richtig euphorisch und glücklich – genieße den Moment und widme dich deinen anderen Zielen.';
+  if (f >= 10) return 'Zufrieden und ausgeglichen.';
+  if (f >= 0) return 'Okay, aber etwas eintönig – eine kleine Abwechslung wäre nett.';
+  if (f >= -25) return 'Stimmung im Keller – unternimm etwas Schönes im Kiez, bevor es schlimmer wird.';
+  return 'Antriebslos und tief unten – geh raus und tu dir dringend etwas Gutes.';
 }
 
 function hungerGefuehl(hunger) {

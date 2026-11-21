@@ -45,9 +45,12 @@ function chunkCapFuer(gesund) {
 }
 
 const FROH = {
-  min: -100,
-  max: 100,
-  start: 20,
+  min: -50,
+  max: 50,
+  start: 25,
+  proStunde: -2.0,
+  euphorieSchwelle: 30,
+  euphorieProStunde: -4.0,
 };
 
 // ---- Sekundärwerte ----
@@ -99,8 +102,8 @@ const ECONOMY = {
   },
   deltaBounds: {
     consumeHunger: [-50, -5],
-    consumeFroh: [-2, 14],
-    activityFroh: [-8, 16],
+    consumeFroh: [-2, 10],
+    activityFroh: [-6, 12],
     activityErschoepfung: [2, 15], // freie Aktivitäten geben NIEMALS Geld
   },
   arztKosten: 15,
