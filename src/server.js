@@ -255,6 +255,10 @@ function erstelleServer() {
         const r = await arbiter.runNightlyConsolidation(db, brain, characterId, 'manueller dev-aufruf', Date.now());
         return json(res, 200, r);
       }
+      if (url.pathname === '/api/dev/llm-log' && req.method === 'GET') {
+        const brain = require('./brain');
+        return json(res, 200, { ok: true, entries: brain.getLlmLog() });
+      }
       if (url.pathname.startsWith('/api/')) return json(res, 404, { ok: false, grund: 'unbekannt' });
       if (statischeDatei(url.pathname, res)) return;
       return json(res, 404, { ok: false, grund: 'nicht_gefunden' });

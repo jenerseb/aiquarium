@@ -290,6 +290,32 @@ async function versucheSlot({ prompt, apiKey, slot, temperature, label, whitelis
   return { v, raw: rohText, info, latencyMs: r.latencyMs, cost: r.cost, debugInfo: eigenDbg };
 }
 
+// --- Erfolgreiche LLM-Nachrichten (In-Memory-Ringbuffer für Dev-UI) --------------------
+const MAX_LLM_LOG = 100;
+const LLM_LOG = [];
+let llmLogSeq = 0;
+
+function logLlmErfolg({ role = 'alltag', versuch = 'primary', provider = '', model = '', prompt = '', response = '', tokens = 0, latencyMs = 0 }) {
+  llmLogSeq += 1;
+  LLM_LOG.push({
+    id: llmLogSeq,
+    ts: new Date().toISOString(),
+    role: String(role || 'alltag'),
+    versuch: String(versuch || 'primary'),
+    provider: String(provider || ''),
+    model: String(model || ''),
+    prompt: String(prompt || ''),
+    response: String(response || ''),
+    tokens: Number(tokens) || 0,
+    latencyMs: Number(latencyMs) || 0,
+  });
+  if (LLM_LOG.length > MAX_LLM_LOG) LLM_LOG.shift();
+}
+
+function getLlmLog() {
+  return LLM_LOG.slice().reverse();
+}
+
 /**
  * Entscheidung holen. Nie werfen: bei Fehlschlag kommt { ok:false, stale:true }
  * zurück und die Engine arbeitet mit der letzten Absicht weiter.
@@ -369,6 +395,16 @@ async function decide(opts) {
         infoMitSoll.debug = primaryDebug;
       }
       if (kette.length) infoMitSoll.versuchDebug = kette;
+      logLlmErfolg({
+        role,
+        versuch: a.label,
+        provider: infoMitSoll.provider || '',
+        model: infoMitSoll.usedModel || a.slot.model,
+        prompt,
+        response: raw,
+        tokens: infoMitSoll.tokens || infoMitSoll.totalTokens || 0,
+        latencyMs: ergebnis.latencyMs || 0,
+      });
       return { ...v, stale: false, raw, ...total, ...infoMitSoll };
     }
     // Leere Antwort eigens benennen: „Modell schweigt" ist etwas anderes als Kauderwelsch.
@@ -411,4 +447,4 @@ async function decide(opts) {
   return { ...(last || { ok: false, stale: true, failures: ['unknown'] }), ...total };
 }
 
-module.exports = { callModel, callGoogleDirect, decide, PRICE, debugAusHttpFehler, debugAusValidierung, googleEndpoint, googleThinkingFuer, googleModellIdAufraeumen };
+module.exports = { callModel, callGoogleDirect, decide, PRICE, debugAusHttpFehler, debugAusValidierung, googleEndpoint, googleThinkingFuer, googleModellIdAufraeumen, logLlmErfolg, getLlmLog };

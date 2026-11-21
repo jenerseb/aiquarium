@@ -2175,11 +2175,55 @@ function bindeGehirn() {
     const an = p.hidden;
     p.hidden = !an;
     $('btnFeed').setAttribute('aria-pressed', String(an));
+    if (an && $('llmLogPanel')) {
+      $('llmLogPanel').hidden = true;
+      if ($('btnLlmLog')) $('btnLlmLog').setAttribute('aria-pressed', 'false');
+    }
   });
+  if (DEV && $('btnLlmLog') && $('llmLogPanel')) {
+    $('btnLlmLog').hidden = false;
+    $('btnLlmLog').addEventListener('click', async () => {
+      const p = $('llmLogPanel');
+      const an = p.hidden;
+      p.hidden = !an;
+      $('btnLlmLog').setAttribute('aria-pressed', String(an));
+      if (an) {
+        $('feedPanel').hidden = true;
+        $('btnFeed').setAttribute('aria-pressed', 'false');
+        await llmLogLaden();
+      }
+    });
+  }
   // Auf Mobile (<= 820 px) startet der Live-Feed eingeklappt für freie Sicht
   if (typeof window !== 'undefined' && window.matchMedia && window.matchMedia('(max-width: 820px)').matches) {
     $('feedPanel').hidden = true;
     $('btnFeed').setAttribute('aria-pressed', 'false');
+  }
+}
+
+async function llmLogLaden() {
+  const box = $('llmLog');
+  if (!box) return;
+  try {
+    const r = await fetch('/api/dev/llm-log');
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    const data = await r.json();
+    const entries = Array.isArray(data.entries) ? data.entries : [];
+    if (!entries.length) {
+      box.innerHTML = '<div class="eintrag"><small>Noch keine erfolgreichen LLM-Calls.</small></div>';
+      return;
+    }
+    box.innerHTML = entries.map((e) => {
+      const zeit = e.ts ? String(e.ts).slice(11, 19) : '';
+      const meta = [e.role, e.versuch, e.model || e.provider, e.tokens ? `${e.tokens} tok` : '', e.latencyMs ? `${e.latencyMs} ms` : '', zeit].filter(Boolean).join(' · ');
+      return `<div class="eintrag gedanke">`
+        + `<b>#${Number(e.id) || 0}</b> <small>${esc(meta)}</small>`
+        + `<details><summary>→ Outgoing (Prompt)</summary><pre>${esc(e.prompt || '')}</pre></details>`
+        + `<details><summary>← Incoming (Response)</summary><pre>${esc(e.response || '')}</pre></details>`
+        + `</div>`;
+    }).join('');
+  } catch (err) {
+    box.innerHTML = `<div class="eintrag warnung">LLM-Log nicht erreichbar: ${esc(err.message)}</div>`;
   }
 }
 
@@ -2443,6 +2487,7 @@ function starteLiveUpdates() {
           for (const n of (ev.notizen || [])) feedEintrag('', String(n).slice(0, 200), '', null);
           // Frischen State holen (Figur-Position, Werte, POIs)
           ladeJson('/api/state').then(staatAnwenden).catch(() => {});
+          if (DEV && $('llmLogPanel') && !$('llmLogPanel').hidden) llmLogLaden();
         }
       } catch { /* kaputte SSE-Nachricht ignorieren */ }
     };

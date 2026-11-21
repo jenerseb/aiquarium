@@ -62,6 +62,11 @@
   .dbg-versuch{margin-top:6px;padding-top:6px;border-top:1px solid var(--line)}
   .dbg-versuch pre{max-height:160px;overflow:auto;white-space:pre-wrap;word-break:break-word;
     background:rgba(255,255,255,.06);border-radius:6px;padding:6px;font-size:.62rem;font-family:var(--mono)}
+  .llm-log{width:min(460px,calc(100% - 32px))}
+  .llm-log .eintrag pre{max-height:180px;overflow:auto;white-space:pre-wrap;word-break:break-word;
+    background:rgba(255,255,255,.06);border-radius:6px;padding:6px;font-size:.62rem;font-family:var(--mono);margin-top:4px}
+  .llm-log details{margin-top:4px}
+  .llm-log summary{cursor:pointer;color:var(--himmel);font-family:var(--mono);font-size:.64rem}
 
   .blase{position:fixed;transform:translate(-50%,-100%);max-width:280px;background:#eef3f9;color:#0b0e13;
     border-radius:10px;padding:7px 11px;font-size:.78rem;line-height:1.35;z-index:8;display:none;
@@ -145,11 +150,17 @@
 <nav class="leiste">
   <button id="btnFeed" aria-pressed="true">Feed</button>
   <button id="btnGehirn">Gehirn</button>
+  <button id="btnLlmLog" aria-pressed="false" hidden>LLM-Log</button>
 </nav>
 
 <aside class="feed" id="feedPanel">
   <h2>Live-Feed</h2>
   <div class="liste" id="feed"></div>
+</aside>
+
+<aside class="feed llm-log" id="llmLogPanel" hidden>
+  <h2>LLM-Log <small style="font-weight:400;opacity:.7">(nur erfolgreiche Calls)</small></h2>
+  <div class="liste" id="llmLog"></div>
 </aside>
 
 <div class="blase" id="blase"></div>

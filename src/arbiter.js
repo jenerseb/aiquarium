@@ -102,7 +102,8 @@ async function arbiterLLM(brain, poi, kind, wunschText, db, characterId) {
     } catch { /* Gehirn-Log darf nie crashen */ }
   }
   const pair = getRoleSlots('arbiter');
-  for (const slot of [pair.primary, pair.fallback]) {
+  for (const [idx, slot] of [pair.primary, pair.fallback].entries()) {
+    if (!slot) continue;
     try {
       const r = await brain.callModel({
         prompt, apiKey, model: slot.model, reasoningExclude: slot.reasoningExclude,
@@ -111,6 +112,12 @@ async function arbiterLLM(brain, poi, kind, wunschText, db, characterId) {
       const obj = JSON.parse(r.content);
       if (!obj || typeof obj !== 'object') continue; // ungültiges JSON → Fallback
       const tokens = Number((r.usage && (r.usage.completion_tokens || r.usage.total_tokens)) || 0) || 0;
+      if (typeof brain.logLlmErfolg === 'function') {
+        brain.logLlmErfolg({
+          role: 'arbiter', versuch: idx === 0 ? 'primary' : 'fallback', provider: 'OpenRouter',
+          model: r.usedModel || slot.model, prompt, response: r.content, tokens, latencyMs: r.latencyMs || 0,
+        });
+      }
       return { obj, usedModel: r.usedModel || slot.model, tokens };
     } catch {
       continue; // HTTP-Fehler (429 etc.) → Fallback
@@ -320,7 +327,8 @@ async function runNightlyConsolidation(db, brain, characterId, tagesLog, jetztMs
   if (brain && typeof brain.callModel === 'function' && apiKey) {
     // Nightly-Rolle: primary → fallback (getRoleSlots('nightly'))
     const pair = getRoleSlots('nightly');
-    for (const slot of [pair.primary, pair.fallback]) {
+    for (const [idx, slot] of [pair.primary, pair.fallback].entries()) {
+      if (!slot) continue;
       try {
         const r = await brain.callModel({
           prompt, apiKey, model: slot.model, reasoningExclude: slot.reasoningExclude,
@@ -330,6 +338,12 @@ async function runNightlyConsolidation(db, brain, characterId, tagesLog, jetztMs
         if (out && typeof out === 'object') {
           const tokens = Number((r.usage && (r.usage.completion_tokens || r.usage.total_tokens)) || 0) || 0;
           nightlyQuelle = { source: 'llm', model: r.usedModel || slot.model, tokens };
+          if (typeof brain.logLlmErfolg === 'function') {
+            brain.logLlmErfolg({
+              role: 'nightly', versuch: idx === 0 ? 'primary' : 'fallback', provider: 'OpenRouter',
+              model: r.usedModel || slot.model, prompt, response: r.content, tokens, latencyMs: r.latencyMs || 0,
+            });
+          }
           break;
         }
         out = null; // ungültiges JSON → Fallback-Slot
