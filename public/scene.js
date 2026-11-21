@@ -238,23 +238,34 @@ function baueHimmel() {
 const wolken = [];
 function baueWolken() {
   const mat = new THREE.MeshLambertMaterial({ color: 0xfff6ea, transparent: true, opacity: 0.85, fog: true });
-  for (let i = 0; i < 12; i += 1) {
-    const gruppe = new THREE.Group();
-    const teile = 4 + (i % 2);
-    for (let j = 0; j < teile; j += 1) {
-      const rx = 9 + ((i * 7 + j * 5) % 9);
-      const ry = 4 + ((i * 3 + j * 2) % 3);
-      const rz = 6 + ((i * 5 + j * 3) % 6);
-      const geo = new THREE.SphereGeometry(1, 12, 10);
-      const m = new THREE.Mesh(geo, mat);
-      m.scale.set(rx, 0.45 * ry, rz);
-      m.position.set(j * 9 - teile * 4.2, 0.45 * ry * 0.4, ((i + j) % 3 - 1) * 5);
-      gruppe.add(m);
+  const schichten = [
+    { anzahl: 12, yMin: 85, ySpan: 30, skala: 1.0, tempoBase: 0.5, tempoStep: 0.25 },
+    { anzahl: 12, yMin: 170, ySpan: 50, skala: 1.25, tempoBase: 0.35, tempoStep: 0.2 },
+  ];
+  for (let sIdx = 0; sIdx < schichten.length; sIdx += 1) {
+    const s = schichten[sIdx];
+    for (let i = 0; i < s.anzahl; i += 1) {
+      const gruppe = new THREE.Group();
+      const teile = 4 + ((i + sIdx) % 2);
+      for (let j = 0; j < teile; j += 1) {
+        const rx = (9 + (((i + sIdx * 3) * 7 + j * 5) % 9)) * s.skala;
+        const ry = (4 + ((i * 3 + j * 2) % 3)) * s.skala;
+        const rz = (6 + ((i * 5 + j * 3) % 6)) * s.skala;
+        const geo = new THREE.SphereGeometry(1, 12, 10);
+        const m = new THREE.Mesh(geo, mat);
+        m.scale.set(rx, 0.45 * ry, rz);
+        m.position.set(j * 9 * s.skala - teile * 4.2 * s.skala, 0.45 * ry * 0.4, (((i + j) % 3) - 1) * 5 * s.skala);
+        gruppe.add(m);
+      }
+      gruppe.position.set(
+        -350 + (((i + sIdx * 5) * 173) % 1100),
+        s.yMin + ((i * 37) % s.ySpan),
+        -250 + (((i + sIdx * 4) * 211) % 750)
+      );
+      gruppe.userData.tempo = s.tempoBase + (i % 4) * s.tempoStep;
+      scene.add(gruppe);
+      wolken.push(gruppe);
     }
-    gruppe.position.set(-350 + ((i * 173) % 1100), 85 + ((i * 37) % 30), -250 + ((i * 211) % 750));
-    gruppe.userData.tempo = 0.5 + (i % 4) * 0.25;
-    scene.add(gruppe);
-    wolken.push(gruppe);
   }
 }
 function wolkenTreiben(dt) {
