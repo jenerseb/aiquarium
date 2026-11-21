@@ -88,7 +88,7 @@ async function main() {
     'overviewTarget', 'panUm', 'klemmeUeber', // 6: Panning/Zoom (Diorama-Scheibe)
     'figurRouteSetzen', 'atan2(dx, dz)', 'badgeHtml', 'plan-queue', 'not:', 'grund2', // 1+7: Route + Soll-Badges
     'DIORAMA', 'dioramaBerechnen', 'dioramaShader', 'uDioramaRadius', 'dioramaAussenAusblenden', // Scheibe + Kreisschnitt
-    'CylinderGeometry(DIORAMA.r', '2b2d30', 'scene.fog = null', // Sockel + Nebel-Aus
+    'CylinderGeometry(DIORAMA.r', '2b2d30', 'FogExp2', // Sockel + Horizont-Dunst
   ];
   for (const s of stich) assert.ok(szene.includes(s), 'scene.js ohne: ' + s);
     'DIORAMA_V1', 'effektiveHoehe', 'baueHimmel', 'baueWolken', 'baueDioramaBaeume', 'bevelEnabled', 'uebersprungen', 'engine/diorama', // Diorama + Modul

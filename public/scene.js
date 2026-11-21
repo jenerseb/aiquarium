@@ -9,6 +9,10 @@ const $ = (id) => document.getElementById(id);
 const DEV = new URLSearchParams(location.search).has('dev') || new URLSearchParams(location.search).get('mode') === 'dev';
 // TEST-FLAG: Gruenzeug (Parks + Baeume) temporär ausblenden — true zum Anzeigen.
 const ZEIGE_GRUEN = false;
+// Helligkeit aller Dachgrafiken (1.0 = Original, < 1.0 = dunkler, z. B. 0.55..0.85)
+const DACH_HELLIGKEIT = 0.6;
+// Optionaler Uhrzeit-Override zum Testen von Auf-/Untergang (null = echte Hamburger Zeit, sonst z. B. 6.5, 13.0, 19.5, 23.0)
+const ZEIT_OVERRIDE_STUNDE = null;
 
 // --- Renderer / Szene ---------------------------------------------------------------
 const stage = $('stage');
@@ -28,7 +32,7 @@ stage.appendChild(renderer.domElement);
 
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x0a0e13);
-scene.fog = null; // Diorama-Scheibe: kein Horizont-Nebel, Himmelskuppel bleibt sauber
+scene.fog = new THREE.FogExp2(0x141e38, 0.00055); // Subtiler Horizont-Dunst; Himmel selbst hat fog: false
 
 const camera = new THREE.PerspectiveCamera(55, window.innerWidth / window.innerHeight, 0.5, 2500);
 camera.position.set(30, 25, 40);
@@ -59,91 +63,170 @@ const Z = {
   over: { dist: 420, theta: 0, phi: 1.25, ziel: new THREE.Vector3(235, 0, 105) },
 };
 
-// Hamburger Uhrzeit (Europe/Berlin): Stunde als 0..24
-function hamburgStunde() {
+// Hamburger Uhrzeit (Europe/Berlin): Dezimalstunde 0..24 + ganze Stunde
+function hamburgStundeDezimal() {
+  if (typeof ZEIT_OVERRIDE_STUNDE === 'number' && Number.isFinite(ZEIT_OVERRIDE_STUNDE)) {
+    return ((ZEIT_OVERRIDE_STUNDE % 24) + 24) % 24;
+  }
   try {
-    const fmt = new Intl.DateTimeFormat('de-DE', { timeZone: 'Europe/Berlin', hour: 'numeric', hour12: false });
-    return Number(fmt.format(new Date()));
+    const fmt = new Intl.DateTimeFormat('de-DE', { timeZone: 'Europe/Berlin', hour: 'numeric', minute: 'numeric', hour12: false });
+    const teile = fmt.format(new Date()).split(':');
+    const h = Number(teile[0]) || 0;
+    const m = Number(teile[1]) || 0;
+    return (h % 24) + m / 60;
   } catch { return 12; }
+}
+function hamburgStunde() {
+  return Math.floor(hamburgStundeDezimal());
 }
 function istNachtStunde(h) { return h < 6 || h >= 21; }
 
-// Tag/Nacht-Licht: warm leuchtende Fenster bei Abend/Nacht, helle Stadt am Tag.
-// Helleres Setup (Punkt 5): nachts nie unter ~60 % dimmen, Stimmung über Farbe.
-function lichtAnpassen() {
-  const h = hamburgStunde();
-  const nacht = istNachtStunde(h);
-  const daemmer = (h >= 6 && h < 9) || (h >= 17 && h < 21);
-  const tagFaktor = nacht ? 0.6 : daemmer ? 0.85 : 1.0;
-  sonne.intensity = 1.1 + 1.5 * tagFaktor; // 1.1 nachts .. 2.6 tagsüber
-  sonne.color.setHex(nacht ? 0xffd9a0 : daemmer ? 0xffe7c4 : 0xfff2dd);
-  hemi.intensity = 0.7 + 0.7 * tagFaktor; // 0.7 nachts .. 1.4 tagsüber
-  umgebung.intensity = 0.45;
-  nachtBlau.intensity = nacht ? 0.35 : 0.0;
-  const warm = nacht ? 0.06 : daemmer ? 0.03 : 0.0;
-  scene.background.setRGB(0.039 + warm, 0.055 + warm * 0.5, 0.075);
-  if (scene.fog) scene.fog.color.copy(scene.background);
-  return { stunde: h, nacht, fensterLicht: nacht ? 1.0 : daemmer ? 0.75 : 0.25 };
+// Sonnenbahn + stufenlose Tageszeit-Palette (Morgen-/Abendröte, Tag, Nacht)
+const HIMMEL_UNIFORMS = {
+  uSunDir: { value: new THREE.Vector3(0.4, 0.8, 0.35).normalize() },
+  uZenithColor: { value: new THREE.Color(0x5ea4e8) },
+  uHorizonColor: { value: new THREE.Color(0xc9e4f7) },
+  uSunGlowColor: { value: new THREE.Color(0xfff4d6) },
+  uNightFactor: { value: 0.0 },
+};
+
+function tageszeitZustand(hDez) {
+  const nacht = hDez < 6.0 || hDez >= 18.3;
+  let sunDir;
+  if (!nacht) {
+    const t = THREE.MathUtils.clamp((hDez - 6.0) / 12.3, 0, 1);
+    const az = t * Math.PI; // Ost (+x) -> Süd (+z) -> West (-x)
+    const el = Math.sin(t * Math.PI) * 0.90 + 0.16;
+    sunDir = new THREE.Vector3(Math.cos(az) * Math.cos(el), Math.sin(el), Math.sin(az) * Math.cos(el)).normalize();
+  } else {
+    sunDir = new THREE.Vector3(-0.45, 0.55, 0.65).normalize(); // Mondlicht-Winkel
+  }
+  const keys = [
+    { h: 0.0,  zen: 0x040712, hor: 0x0c1428, glow: 0x0c1428, sun: 0x7aa2d8, sInt: 0.22, hInt: 0.18, night: 1.0, win: 1.0 },
+    { h: 5.8,  zen: 0x050918, hor: 0x101a34, glow: 0x262442, sun: 0x859ad0, sInt: 0.30, hInt: 0.24, night: 0.9, win: 1.0 },
+    { h: 6.8,  zen: 0x3b5894, hor: 0xe88d67, glow: 0xff9b4a, sun: 0xffaa66, sInt: 1.70, hInt: 1.05, night: 0.15, win: 0.55 },
+    { h: 8.2,  zen: 0x5ea4e8, hor: 0xc9e4f7, glow: 0xfff4d6, sun: 0xfff2dd, sInt: 2.55, hInt: 1.38, night: 0.0, win: 0.05 },
+    { h: 16.0, zen: 0x5ea4e8, hor: 0xd4e6f5, glow: 0xffe8ba, sun: 0xfff0d4, sInt: 2.45, hInt: 1.35, night: 0.0, win: 0.1 },
+    { h: 17.2, zen: 0x2c3c75, hor: 0xe0684b, glow: 0xff6b35, sun: 0xff8d52, sInt: 1.65, hInt: 1.00, night: 0.25, win: 0.85 },
+    { h: 18.3, zen: 0x060b1c, hor: 0x101933, glow: 0x101933, sun: 0x7aa2d8, sInt: 0.28, hInt: 0.22, night: 0.95, win: 1.0 },
+    { h: 24.0, zen: 0x040712, hor: 0x0c1428, glow: 0x0c1428, sun: 0x7aa2d8, sInt: 0.22, hInt: 0.18, night: 1.0, win: 1.0 },
+  ];
+  let a = keys[0];
+  let b = keys[keys.length - 1];
+  for (let i = 0; i < keys.length - 1; i += 1) {
+    if (hDez >= keys[i].h && hDez <= keys[i + 1].h) { a = keys[i]; b = keys[i + 1]; break; }
+  }
+  const f = (b.h === a.h) ? 0 : (hDez - a.h) / (b.h - a.h);
+  const mixC = (c1, c2) => new THREE.Color(c1).lerp(new THREE.Color(c2), f);
+  return {
+    sunDir,
+    zenith: mixC(a.zen, b.zen),
+    horizon: mixC(a.hor, b.hor),
+    glow: mixC(a.glow, b.glow),
+    sunColor: mixC(a.sun, b.sun),
+    sunInt: THREE.MathUtils.lerp(a.sInt, b.sInt, f),
+    hemiInt: THREE.MathUtils.lerp(a.hInt, b.hInt, f),
+    nightFactor: THREE.MathUtils.lerp(a.night, b.night, f),
+    fensterLicht: THREE.MathUtils.lerp(a.win, b.win, f),
+    nacht: nacht || THREE.MathUtils.lerp(a.night, b.night, f) > 0.55,
+  };
 }
-let LICHT = lichtAnpassen();
+
+// Tag/Nacht-Licht + Sonnenbogen (1x pro Minute Schatten neu berechnen = ~0 Frame-Kosten)
+let letzteFensterStufe = -1;
+function lichtAnpassen() {
+  const hDez = hamburgStundeDezimal();
+  const h = Math.floor(hDez);
+  const st = tageszeitZustand(hDez);
+  sonne.position.set(DIORAMA.cx + st.sunDir.x * 260, st.sunDir.y * 260, DIORAMA.cz + st.sunDir.z * 260);
+  sonne.intensity = st.sunInt;
+  sonne.color.copy(st.sunColor);
+  hemi.intensity = st.hemiInt;
+  umgebung.intensity = THREE.MathUtils.lerp(0.45, 0.06, st.nightFactor);
+  nachtBlau.intensity = st.nightFactor * 0.12;
+  if (typeof DIORAMA_LIGHT_UNIFORMS !== 'undefined') {
+    DIORAMA_LIGHT_UNIFORMS.uDioramaCenter.value.set(DIORAMA.cx, DIORAMA.cz);
+    DIORAMA_LIGHT_UNIFORMS.uDioramaRadius.value = DIORAMA.r;
+    DIORAMA_LIGHT_UNIFORMS.uNightLight.value = st.fensterLicht > 0.35 ? st.fensterLicht : 0.0;
+  }
+  HIMMEL_UNIFORMS.uSunDir.value.copy(st.sunDir);
+  HIMMEL_UNIFORMS.uZenithColor.value.copy(st.zenith);
+  HIMMEL_UNIFORMS.uHorizonColor.value.copy(st.horizon);
+  HIMMEL_UNIFORMS.uSunGlowColor.value.copy(st.glow);
+  HIMMEL_UNIFORMS.uNightFactor.value = st.nightFactor;
+  scene.background.copy(st.horizon).multiplyScalar(0.35);
+  if (scene.fog) scene.fog.color.copy(st.horizon);
+  const fensterStufe = st.fensterLicht > 0.5 ? 1 : 0;
+  if (fensterStufe !== letzteFensterStufe) {
+    letzteFensterStufe = fensterStufe;
+    if (typeof fassadenKachelAktualisieren === 'function') fassadenKachelAktualisieren(st.fensterLicht);
+  }
+  for (const [, halo] of (Z.poiHalos || [])) {
+    halo.visible = st.fensterLicht > 0.45;
+    if (halo.material) halo.material.opacity = st.fensterLicht * 0.65;
+  }
+  if (typeof lodWandMat !== 'undefined' && lodWandMat) {
+    lodWandMat.emissiveIntensity = st.fensterLicht > 0.35 ? st.fensterLicht * 1.55 : 0.0;
+  }
+  if (typeof laternenKegel !== 'undefined' && laternenKegel) {
+    const an = st.fensterLicht > 0.35;
+    laternenKegel.visible = an;
+    laternenKegel.material.opacity = st.fensterLicht * 0.67;
+    if (laternenKoepfe) laternenKoepfe.material.color.setHex(an ? 0xfff0d4 : 0x777d87);
+  }
+  renderer.shadowMap.needsUpdate = true;
+  return { stunde: h, nacht: st.nacht, fensterLicht: st.fensterLicht };
+}
+let LICHT = null;
 setInterval(() => { LICHT = lichtAnpassen(); himmelAktualisieren(); }, 60000);
 
-// --- DIORAMA_V1: Himmelskuppel mit Tageszeit-Verlauf + Sternen ---
+// --- DIORAMA_V1: Stufenlose Morgen-/Abendröte-Skybox (ShaderMaterial, 1 Draw Call) ---
 let himmelMesh = null;
-let himmelCanvas = null;
-let himmelTex = null;
-function himmelZeichnen(h) {
-  if (!himmelCanvas) {
-    himmelCanvas = document.createElement('canvas');
-    himmelCanvas.width = 4;
-    himmelCanvas.height = 256;
-  }
-  const c = himmelCanvas.getContext('2d');
-  const nacht = h < 6 || h >= 21;
-  const morgen = h >= 6 && h < 9;
-  const abend = h >= 17 && h < 21;
-  let oben;
-  let mitte;
-  let unten;
-  if (nacht) { oben = '#060a18'; mitte = '#0e1830'; unten = '#1c2742'; }
-  else if (morgen) { oben = '#7fb2e8'; mitte = '#f6c9a0'; unten = '#fde9c8'; }
-  else if (abend) { oben = '#5b6bb0'; mitte = '#e8937a'; unten = '#f9d9a8'; }
-  else { oben = '#6fb1ec'; mitte = '#a8d0f2'; unten = '#e8f3e2'; }
-  const g = c.createLinearGradient(0, 0, 0, 256);
-  g.addColorStop(0, oben); g.addColorStop(0.55, mitte); g.addColorStop(1, unten);
-  c.fillStyle = g;
-  c.fillRect(0, 0, 4, 256);
-  if (nacht) {
-    c.fillStyle = '#ffffff';
-    for (let i = 0; i < 40; i += 1) {
-      const y = Math.floor((i * 67) % 150);
-      const x = Math.floor((i * 131) % 4);
-      c.fillRect(x, y, 1, 1);
-    }
-  }
-  return { oben, mitte, unten };
-}
 function himmelAktualisieren() {
-  const h = hamburgStunde();
-  const farben = himmelZeichnen(h);
-  if (himmelTex) himmelTex.needsUpdate = true;
-  const warm = (h >= 17 && h < 21) ? 0.06 : (h < 6 || h >= 21) ? 0.0 : 0.0;
-  scene.background.set(farben.mitte);
-  scene.background.multiplyScalar(0.25);
-  scene.background.r += warm;
-  scene.background.g += warm * 0.5;
-  if (scene.fog) scene.fog.color.copy(scene.background);
   return LICHT;
 }
 function baueHimmel() {
-  himmelZeichnen(hamburgStunde());
-  himmelTex = new THREE.CanvasTexture(himmelCanvas);
-  himmelTex.colorSpace = THREE.SRGBColorSpace;
-  // GRAFIK-FREEZE: Kuppel (r=2000) umfasst Overview-Kamera (dist 420) + Wolken
-  // aus jedem Winkel; camera.far=2500. Material fog:false -> nur die Stadt
-  // blendet im FogExp2-Dunst aus, der Himmel selbst nicht.
   const geo = new THREE.SphereGeometry(2000, 24, 16);
-  const mat = new THREE.MeshBasicMaterial({ map: himmelTex, side: THREE.BackSide, fog: false, depthWrite: false });
+  const mat = new THREE.ShaderMaterial({
+    uniforms: HIMMEL_UNIFORMS,
+    side: THREE.BackSide,
+    fog: false,
+    depthWrite: false,
+    vertexShader: `
+      varying vec3 vWorldDir;
+      void main() {
+        vWorldDir = normalize(position);
+        gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+      }
+    `,
+    fragmentShader: `
+      uniform vec3 uSunDir;
+      uniform vec3 uZenithColor;
+      uniform vec3 uHorizonColor;
+      uniform vec3 uSunGlowColor;
+      uniform float uNightFactor;
+      varying vec3 vWorldDir;
+      float hash(vec3 p) {
+        p = fract(p * 0.3183099 + 0.1);
+        p *= 17.0;
+        return fract(p.x * p.y * p.z * (p.x + p.y + p.z));
+      }
+      void main() {
+        vec3 dir = normalize(vWorldDir);
+        float h = clamp(dir.y, 0.0, 1.0);
+        vec3 sky = mix(uHorizonColor, uZenithColor, pow(h, 0.55));
+        float sunAmt = max(dot(dir, normalize(uSunDir)), 0.0);
+        float tagGlow = 1.0 - smoothstep(0.3, 0.85, uNightFactor);
+        sky += uSunGlowColor * pow(sunAmt, 5.0) * 0.55 * tagGlow;
+        sky += vec3(1.0, 0.96, 0.85) * smoothstep(0.9986, 0.9996, sunAmt) * tagGlow;
+        if (uNightFactor > 0.05 && h > 0.15) {
+          float s = hash(floor(dir * 260.0));
+          if (s > 0.9965) sky += vec3(0.85, 0.9, 1.0) * uNightFactor * 0.85;
+        }
+        gl_FragColor = vec4(sky, 1.0);
+      }
+    `,
+  });
   himmelMesh = new THREE.Mesh(geo, mat);
   himmelMesh.position.set(235, 0, 105);
   himmelMesh.renderOrder = -10;
@@ -199,19 +282,57 @@ function dioramaBerechnen(pois) {
   DIORAMA.r = Math.round(Math.min(760, Math.max(400, r)));
   return { ...DIORAMA };
 }
-function dioramaShader(mat) {
-  // Rasiermesserscharfer Kreisschnitt: Fragmente ausserhalb von R verwerfen.
+const DIORAMA_LIGHT_UNIFORMS = {
+  uDioramaCenter: { value: new THREE.Vector2(DIORAMA.cx, DIORAMA.cz) },
+  uDioramaRadius: { value: DIORAMA.r },
+  uLightMap: { value: null },
+  uHasLightMap: { value: 0.0 },
+  uNightLight: { value: 0.0 },
+};
+
+function dioramaShader(mat, opts) {
+  const fensterRandom = Boolean(opts && opts.fensterRandom);
+  // Rasiermesserscharfer Kreisschnitt + Laternen-Lightmap + zufällige Fensterfarben.
   mat.onBeforeCompile = (shader) => {
-    shader.uniforms.uDioramaCenter = { value: new THREE.Vector2(DIORAMA.cx, DIORAMA.cz) };
-    shader.uniforms.uDioramaRadius = { value: DIORAMA.r };
+    shader.uniforms.uDioramaCenter = DIORAMA_LIGHT_UNIFORMS.uDioramaCenter;
+    shader.uniforms.uDioramaRadius = DIORAMA_LIGHT_UNIFORMS.uDioramaRadius;
+    shader.uniforms.uLightMap = DIORAMA_LIGHT_UNIFORMS.uLightMap;
+    shader.uniforms.uHasLightMap = DIORAMA_LIGHT_UNIFORMS.uHasLightMap;
+    shader.uniforms.uNightLight = DIORAMA_LIGHT_UNIFORMS.uNightLight;
     shader.vertexShader = shader.vertexShader
       .replace('#include <common>', '#include <common>\nvarying vec3 vWorldPos;')
       .replace('#include <worldpos_vertex>', '#include <worldpos_vertex>\nvWorldPos = (modelMatrix * vec4(transformed, 1.0)).xyz;');
     shader.fragmentShader = shader.fragmentShader
-      .replace('#include <common>', '#include <common>\nvarying vec3 vWorldPos;\nuniform vec2 uDioramaCenter;\nuniform float uDioramaRadius;')
-      .replace('#include <clipping_planes_fragment>', '#include <clipping_planes_fragment>\nif (length(vWorldPos.xz - uDioramaCenter) > uDioramaRadius) discard;');
+      .replace('#include <common>', '#include <common>\nvarying vec3 vWorldPos;\nuniform vec2 uDioramaCenter;\nuniform float uDioramaRadius;\nuniform sampler2D uLightMap;\nuniform float uHasLightMap;\nuniform float uNightLight;')
+      .replace('#include <clipping_planes_fragment>', '#include <clipping_planes_fragment>\nif (length(vWorldPos.xz - uDioramaCenter) > uDioramaRadius) discard;')
+      .replace(
+        '#include <dithering_fragment>',
+        `if (uHasLightMap > 0.5 && uNightLight > 0.01) {
+          vec2 lmUv = vec2(
+            (vWorldPos.x - (uDioramaCenter.x - uDioramaRadius)) / (2.0 * uDioramaRadius),
+            1.0 - (vWorldPos.z - (uDioramaCenter.y - uDioramaRadius)) / (2.0 * uDioramaRadius)
+          );
+          float hFade = 1.0 - smoothstep(0.0, 9.0, vWorldPos.y);
+          vec3 lm = texture2D(uLightMap, lmUv).rgb;
+          gl_FragColor.rgb += lm * uNightLight * hFade * (diffuseColor.rgb * 2.05 + vec3(0.09, 0.085, 0.065));
+        }
+        #include <dithering_fragment>`
+      );
+    if (fensterRandom) {
+      shader.fragmentShader = shader.fragmentShader.replace(
+        '#include <emissivemap_fragment>',
+        `#include <emissivemap_fragment>
+        vec2 wCell = floor(vec2((vWorldPos.x - vWorldPos.z) / 1.3125, vWorldPos.y / 2.625));
+        float wRnd = fract(sin(dot(wCell, vec2(12.9898, 78.233))) * 43758.5453);
+        float wColRnd = fract(sin(dot(wCell, vec2(39.346, 11.135))) * 24634.6345);
+        float wBriRnd = fract(sin(dot(wCell, vec2(71.137, 29.531))) * 19432.1731);
+        vec3 winCol = mix(vec3(1.0, 0.97, 0.90), vec3(1.0, 0.62, 0.22), wColRnd);
+        totalEmissiveRadiance *= winCol * mix(0.45, 1.35, wBriRnd);
+        if (wRnd < 0.90) totalEmissiveRadiance = vec3(0.0);`
+      );
+    }
   };
-  mat.customProgramCacheKey = () => 'diorama-kreis';
+  mat.customProgramCacheKey = () => (fensterRandom ? 'diorama-kreis-fenster-lm' : 'diorama-kreis-lm');
   return mat;
 }
 // --- Boden, Strassen, Parks ------------------------------------------------------------
@@ -232,14 +353,20 @@ function baueBoden() {
     bodenGruppe = null;
   }
   const gruppe = new THREE.Group();
-  // 3D-Sockel: Oberseite exakt y = 0, Erde-Dunkel an Seite/Unterseite.
-  const geo = new THREE.CylinderGeometry(DIORAMA.r, DIORAMA.r * 0.96, 16, 128);
-  const oben = new THREE.MeshLambertMaterial({ color: 0x6f7d4e });
+  // 3D-Sockel: nur noch dunkler Seiten-Mantel (openEnded=true), grüne Oberseite deaktiviert -> nur Luftbild bei y=0.005
+  const geo = new THREE.CylinderGeometry(DIORAMA.r, DIORAMA.r * 0.96, 16, 128, 1, true);
+  // const oben = new THREE.MeshLambertMaterial({ color: 0x6f7d4e });
   const seite = new THREE.MeshLambertMaterial({ color: 0x2b2d30 });
-  const boden = new THREE.Mesh(geo, [seite, oben, seite]);
-  boden.receiveShadow = true; // Gebaeude-Schatten auf dem Boden
+  const boden = new THREE.Mesh(geo, seite);
+  // boden.receiveShadow = true; // Grüne Oberseite aus -> Schatten fallen nur noch aufs Luftbild
   boden.position.set(DIORAMA.cx, -8, DIORAMA.cz);
   gruppe.add(boden);
+  // Modellbau-Zierring am äußeren Diorama-Rand
+  const randGeo = new THREE.RingGeometry(DIORAMA.r * 0.99, DIORAMA.r * 1.006, 128);
+  randGeo.rotateX(-Math.PI / 2);
+  const randMesh = new THREE.Mesh(randGeo, new THREE.MeshBasicMaterial({ color: 0x3b424c }));
+  randMesh.position.set(DIORAMA.cx, 0.012, DIORAMA.cz);
+  gruppe.add(randMesh);
   // DIORAMA_V1: optionales Luftbild-Overlay (/kiez-aerial.jpg in public/), sonst prozedural
   new THREE.TextureLoader().load("/kiez-aerial.jpg",
     (tex) => {
@@ -256,7 +383,7 @@ function baueBoden() {
       // war es unter der opaken Platte begraben (nur gruener Boden sichtbar).
       // 2026-11-19 OPACITY 100 %: Das Luftbild liegt voll deckend auf dem
       // Sockel (transparent: false → Opaque-Pass, kein Sortier-Flackern).
-      const luft = new THREE.Mesh(luftGeo, new THREE.MeshLambertMaterial({ map: tex, transparent: false, opacity: 1.0, depthWrite: true }));
+      const luft = new THREE.Mesh(luftGeo, dioramaShader(new THREE.MeshLambertMaterial({ map: tex, transparent: false, opacity: 1.0, depthWrite: true })));
       luft.receiveShadow = true; // Gebaeude-Schatten auf dem Luftbild
       luft.position.set(DIORAMA.cx, 0.005, DIORAMA.cz);
       gruppe.add(luft);
@@ -507,13 +634,13 @@ function baueGebaeude(buildings) {
       }
       // DIORAMA_V1: warme Fassade (OSM-Farbe oder Palette) + farbiges Dach (OSM oder Palette)
       const fassFarbe = b.colour || "#b3563f"; // DIORAMA_V1-Fix: direkt, ohne Hash-Funktion (TDZ-sicher)
-      const mat = new THREE.MeshLambertMaterial({ map: fassadenTextur(maxX - minX, h, fassFarbe) });
+      const mat = new THREE.MeshLambertMaterial({ map: fassadenTextur(maxX - minX, h, fassFarbe), ...(DEV ? { transparent: true, opacity: 0.66 } : {}) });
       const mesh = new THREE.Mesh(geo, mat);
       mesh.castShadow = true;
       mesh.receiveShadow = true;
       mesh.position.set(0, 0, 0); // exakt auf dem Boden, kein Schweben
       const dachFarbe = b.roofColour || "#343942"; // DIORAMA_V1-Fix: direkt Schiefer, ohne Hash-Funktion
-      const dachMatBau = new THREE.MeshLambertMaterial({ color: new THREE.Color(dachFarbe) });
+      const dachMatBau = new THREE.MeshLambertMaterial({ color: new THREE.Color(dachFarbe).multiplyScalar(DACH_HELLIGKEIT), ...(DEV ? { transparent: true, opacity: 0.66 } : {}) });
       const dachGeo = new THREE.ShapeGeometry(form);
       dachGeo.rotateX(-Math.PI / 2);
       const dach = new THREE.Mesh(dachGeo, dachMatBau);
@@ -556,11 +683,17 @@ function lodWandfarbe(id) {
 // --- Miniatur-Fassaden-Kachel (cute Stil: Backstein + Fenster, kein Fotorealismus)
 const FASSADE_KACHEL = 2.625; // 1 Kachel = 1 Etage (3,5 m * 0.75 Diorama-Skala)
 let fassKachel = null;
-function fassadenKachel() {
-  if (fassKachel) return fassKachel;
-  const c = document.createElement('canvas');
-  c.width = 128;
-  c.height = 128;
+let fassKachelCanvas = null;
+let fassBump = null;
+let fassEmissive = null;
+let lodWandMat = null;
+function fassadenKachelZeichnen(lichtFaktor) {
+  if (!fassKachelCanvas) {
+    fassKachelCanvas = document.createElement('canvas');
+    fassKachelCanvas.width = 128;
+    fassKachelCanvas.height = 128;
+  }
+  const c = fassKachelCanvas;
   const g = c.getContext('2d');
   // Grundmauer hell — die warme Vertex-Farbe der Wand tintet die Kachel.
   g.fillStyle = '#f4efe7';
@@ -575,23 +708,73 @@ function fassadenKachel() {
       g.beginPath(); g.moveTo(x + 0.5, row * 16); g.lineTo(x + 0.5, (row + 1) * 16); g.stroke();
     }
   }
-  // Fenster: 2 Stueck, dunkles Glas, heller Rahmen, Sprossen
   const fenster = (x, y) => {
     g.fillStyle = '#e8e2d6';
     g.fillRect(x - 3, y - 3, 46, 56); // Rahmen
     g.fillStyle = '#33404f';
-    g.fillRect(x, y, 40, 50);         // Glas
+    g.fillRect(x, y, 40, 50);         // Glas (Leuchten übernimmt emissiveMap + Shader-Hash)
     g.fillStyle = '#dfe7f0';
     g.fillRect(x + 17, y, 6, 50);     // Mittel-Sprosse
     g.fillRect(x, y + 22, 40, 5);     // Quer-Sprosse
   };
+  void lichtFaktor;
   fenster(14, 36);
   fenster(78, 36);
-  const tex = new THREE.CanvasTexture(c);
+}
+function fassadenKachelAktualisieren(lichtFaktor) {
+  if (!fassKachel) return;
+  fassadenKachelZeichnen(lichtFaktor);
+  fassKachel.needsUpdate = true;
+}
+function fassadenKachel() {
+  if (fassKachel) return fassKachel;
+  fassadenKachelZeichnen(LICHT ? LICHT.fensterLicht : 0.2);
+  const tex = new THREE.CanvasTexture(fassKachelCanvas);
   tex.wrapS = THREE.RepeatWrapping;
   tex.wrapT = THREE.RepeatWrapping;
   tex.colorSpace = THREE.SRGBColorSpace;
   fassKachel = tex;
+  return tex;
+}
+function fassadenBump() {
+  if (fassBump) return fassBump;
+  const c = document.createElement('canvas');
+  c.width = 128; c.height = 128;
+  const g = c.getContext('2d');
+  g.fillStyle = '#c8c8c8';
+  g.fillRect(0, 0, 128, 128);
+  g.strokeStyle = '#707070';
+  g.lineWidth = 2;
+  for (let y = 0; y <= 128; y += 16) { g.beginPath(); g.moveTo(0, y + 0.5); g.lineTo(128, y + 0.5); g.stroke(); }
+  for (const x of [14, 78]) {
+    g.fillStyle = '#ececec'; g.fillRect(x - 3, 33, 46, 56);
+    g.fillStyle = '#404040'; g.fillRect(x, 36, 40, 50);
+  }
+  const tex = new THREE.CanvasTexture(c);
+  tex.wrapS = THREE.RepeatWrapping;
+  tex.wrapT = THREE.RepeatWrapping;
+  fassBump = tex;
+  return tex;
+}
+function fassadenEmissive() {
+  if (fassEmissive) return fassEmissive;
+  const c = document.createElement('canvas');
+  c.width = 128; c.height = 128;
+  const g = c.getContext('2d');
+  g.fillStyle = '#000000';
+  g.fillRect(0, 0, 128, 128);
+  // Beide Fensterscheiben weiß in der Maske; Shader-Hash schaltet zufällig nur ~18 % an
+  for (const fx of [14, 78]) {
+    g.fillStyle = '#ffffff';
+    g.fillRect(fx, 36, 40, 50);
+    g.fillStyle = '#000000';
+    g.fillRect(fx + 17, 36, 6, 50);
+    g.fillRect(fx, 58, 40, 5);
+  }
+  const tex = new THREE.CanvasTexture(c);
+  tex.wrapS = THREE.RepeatWrapping;
+  tex.wrapT = THREE.RepeatWrapping;
+  fassEmissive = tex;
   return tex;
 }
 
@@ -625,7 +808,8 @@ function baueDachLuftbild(tex) {
   geo.setAttribute('position', new THREE.Float32BufferAttribute(posArr, 3));
   geo.setAttribute('uv', new THREE.Float32BufferAttribute(uvArr, 2));
   geo.computeVertexNormals();
-  dachLuftMesh = new THREE.Mesh(geo, dioramaShader(new THREE.MeshLambertMaterial({ map: tex })));
+  const dachTint = new THREE.Color().setScalar(DACH_HELLIGKEIT);
+  dachLuftMesh = new THREE.Mesh(geo, dioramaShader(new THREE.MeshLambertMaterial({ map: tex, color: dachTint, ...(DEV ? { transparent: true, opacity: 0.66 } : {}) })));
   dachLuftMesh.castShadow = true;
   dachLuftMesh.receiveShadow = true;
   scene.add(dachLuftMesh);
@@ -659,14 +843,15 @@ function baueLoD2(lod) {
     for (const tri of b.wallTriangles || []) {
       for (const p of tri) {
         const wy = p[1] * LOD_SKALA;
+        const ao = 0.58 + 0.42 * THREE.MathUtils.smoothstep(p[1], 0, 3.5); // Fake-AO am Gebäudefuß
         wandPos.push(p[0], wy, p[2]);
         // Miniatur-UVs aus Weltposition: 1 Kachel = 1 Etage (3,5 m * 0.75),
         // u diagonal (x - z) damit alle Wandrichtungen ohne Face-Info kacheln.
         wandUV.push((p[0] - p[2]) / FASSADE_KACHEL, wy / FASSADE_KACHEL);
-        wandCol.push(tmpFarbe.r * wr, tmpFarbe.g * wr, tmpFarbe.b * wr);
+        wandCol.push(tmpFarbe.r * wr * ao, tmpFarbe.g * wr * ao, tmpFarbe.b * wr * ao);
       }
     }
-    tmpFarbe.setHex(LOD_DACHFARBEN.flachdach).lerp(new THREE.Color(lodDachfarbe(b)), 0.85);
+    tmpFarbe.setHex(LOD_DACHFARBEN.flachdach).lerp(new THREE.Color(lodDachfarbe(b)), 0.85).multiplyScalar(DACH_HELLIGKEIT);
     for (const tri of b.roofTriangles || []) {
       for (const p of tri) {
         dachPos.push(p[0], p[1] * LOD_SKALA, p[2]);
@@ -680,7 +865,18 @@ function baueLoD2(lod) {
     geo.setAttribute('color', new THREE.Float32BufferAttribute(colArr, 3));
     if (uvArr) geo.setAttribute('uv', new THREE.Float32BufferAttribute(uvArr, 2));
     geo.computeVertexNormals();
-    const mat = dioramaShader(new THREE.MeshLambertMaterial({ vertexColors: true, map: uvArr ? fassadenKachel() : null }));
+    const mat = dioramaShader(new THREE.MeshLambertMaterial({
+      vertexColors: true,
+      map: uvArr ? fassadenKachel() : null,
+      ...(uvArr ? {
+        bumpMap: fassadenBump(), bumpScale: 0.18,
+        emissive: new THREE.Color(0xffffff),
+        emissiveMap: fassadenEmissive(),
+        emissiveIntensity: (LICHT && LICHT.fensterLicht > 0.35) ? LICHT.fensterLicht * 1.55 : 0.0,
+      } : {}),
+      ...(DEV ? { transparent: true, opacity: 0.66 } : {}),
+    }), { fensterRandom: Boolean(uvArr) });
+    if (uvArr) lodWandMat = mat;
     const mesh = new THREE.Mesh(geo, mat);
     mesh.castShadow = true;
     mesh.receiveShadow = true;
@@ -753,8 +949,8 @@ function setzeIndoorTransparenz(gebaeudeId) {
     const aktiv = id === gebaeudeId;
     for (const kind of gruppe.children) {
       if (!kind.material) continue;
-      kind.material.transparent = aktiv;
-      kind.material.opacity = aktiv ? 0.55 : 1.0;
+      kind.material.transparent = DEV || aktiv;
+      kind.material.opacity = aktiv ? 0.55 : (DEV ? 0.66 : 1.0);
       kind.material.needsUpdate = false;
       if (kind.material.emissive) {
         kind.material.emissive.setHex(0xffffff);
@@ -850,11 +1046,11 @@ function bauMarkerGruppe(p, index) {
   gruppe.userData.pin = pin;
   gruppe.userData.pinBaseY = hoehe;
   gruppe.userData.pinPhase = (Number.isFinite(index) ? index : 0) * 0.9;
-  // Dünne Leuchtlinie/Pin bis zum Boden (y = 0)
-  const linienGeo = new THREE.BufferGeometry().setFromPoints([
-    new THREE.Vector3(0, 0, 0), new THREE.Vector3(0, hoehe, 0),
-  ]);
-  const linie = new THREE.Line(linienGeo, new THREE.LineBasicMaterial({ color: farbe, transparent: true, opacity: bekannt ? 0.8 : 0.4 }));
+  // Markante, dicke senkrechte Säule bis zum Boden (y = 0)
+  const linienGeo = new THREE.CylinderGeometry(0.24, 0.24, hoehe, 8);
+  const linienFarbe = bekannt ? 0xffa800 : 0x6ea8ff;
+  const linie = new THREE.Mesh(linienGeo, new THREE.MeshBasicMaterial({ color: linienFarbe, transparent: true, opacity: bekannt ? 1.0 : 0.8 }));
+  linie.position.y = hoehe / 2;
   gruppe.add(linie);
   // Dev-Modus: unentdeckte Orte offenlegen – „?“ + Name in zweiter Zeile darunter
   const schild = (bekannt || !DEV)
@@ -864,7 +1060,136 @@ function bauMarkerGruppe(p, index) {
   gruppe.add(schild);
   gruppe.position.set(Number(p.pos_x), 0, Number(p.pos_z));
   gruppe.userData.poiId = p.id;
+  if (bekannt) {
+    const halo = bauePoiHalo();
+    halo.position.y = 3.2;
+    halo.visible = Boolean(LICHT && LICHT.fensterLicht > 0.45);
+    gruppe.add(halo);
+    if (!Z.poiHalos) Z.poiHalos = new Map();
+    Z.poiHalos.set(p.id, halo);
+  }
   return gruppe;
+}
+
+let haloTex = null;
+function bauePoiHalo() {
+  if (!haloTex) {
+    const c = document.createElement('canvas');
+    c.width = 64; c.height = 64;
+    const g = c.getContext('2d');
+    const gr = g.createRadialGradient(32, 32, 2, 32, 32, 30);
+    gr.addColorStop(0, 'rgba(255, 195, 90, 0.9)');
+    gr.addColorStop(0.5, 'rgba(255, 165, 60, 0.35)');
+    gr.addColorStop(1, 'rgba(255, 140, 40, 0.0)');
+    g.fillStyle = gr;
+    g.fillRect(0, 0, 64, 64);
+    haloTex = new THREE.CanvasTexture(c);
+  }
+  const sp = new THREE.Sprite(new THREE.SpriteMaterial({
+    map: haloTex, blending: THREE.AdditiveBlending, transparent: true, opacity: 0.6, depthWrite: false,
+  }));
+  sp.scale.set(9, 9, 1);
+  return sp;
+}
+
+// --- Straßenlaternen (3 InstancedMeshes: Masten, Köpfe, Lichtpfützen) ---
+let laternenMasten = null;
+let laternenKoepfe = null;
+let laternenKegel = null;
+function baueLaternen(strassen) {
+  for (const m of [laternenMasten, laternenKoepfe, laternenKegel]) {
+    if (m) { scene.remove(m); m.geometry.dispose(); m.material.dispose(); }
+  }
+  laternenMasten = laternenKoepfe = laternenKegel = null;
+  const punkte = [];
+  const arten = new Set(['primary', 'secondary', 'tertiary', 'residential', 'living_street']);
+  const rMax = DIORAMA.r - 6;
+  for (const s of strassen || []) {
+    if (!arten.has(s.kind) || !Array.isArray(s.points) || s.points.length < 2) continue;
+    let rest = 18;
+    for (let i = 1; i < s.points.length; i += 1) {
+      const [x1, z1] = s.points[i - 1];
+      const [x2, z2] = s.points[i];
+      const dx = x2 - x1;
+      const dz = z2 - z1;
+      const segLen = Math.hypot(dx, dz);
+      if (segLen < 1) continue;
+      const nx = -dz / segLen;
+      const nz = dx / segLen;
+      let pos = rest;
+      while (pos <= segLen) {
+        const t = pos / segLen;
+        const lx = x1 + dx * t + nx * 2.4;
+        const lz = z1 + dz * t + nz * 2.4;
+        if (Math.hypot(lx - DIORAMA.cx, lz - DIORAMA.cz) <= rMax) {
+          const zuNah = punkte.some((p) => Math.hypot(p.x - lx, p.z - lz) < 15);
+          if (!zuNah) punkte.push({ x: lx, z: lz });
+        }
+        pos += 28.5;
+      }
+      rest = pos - segLen;
+      if (punkte.length >= 450) break;
+    }
+    if (punkte.length >= 450) break;
+  }
+  if (!punkte.length) return;
+  const dummy = new THREE.Object3D();
+  const mastGeo = new THREE.CylinderGeometry(0.08, 0.11, 3.8, 6);
+  mastGeo.translate(0, 1.9, 0);
+  laternenMasten = new THREE.InstancedMesh(mastGeo, new THREE.MeshLambertMaterial({ color: 0x262b33 }), punkte.length);
+  const kopfGeo = new THREE.SphereGeometry(0.24, 8, 6);
+  const an = Boolean(LICHT && LICHT.fensterLicht > 0.35);
+  laternenKoepfe = new THREE.InstancedMesh(kopfGeo, new THREE.MeshBasicMaterial({ color: an ? 0xfff0d4 : 0x777d87 }), punkte.length);
+  if (!haloTex) bauePoiHalo();
+  const kegelGeo = new THREE.CircleGeometry(5.8, 14);
+  kegelGeo.rotateX(-Math.PI / 2);
+  laternenKegel = new THREE.InstancedMesh(kegelGeo, new THREE.MeshBasicMaterial({
+    map: haloTex, color: 0xffe8c8, blending: THREE.AdditiveBlending, transparent: true, opacity: an ? 0.67 : 0.0, depthWrite: false,
+  }), punkte.length);
+  laternenKegel.visible = an;
+  for (let i = 0; i < punkte.length; i += 1) {
+    const p = punkte[i];
+    dummy.position.set(p.x, 0, p.z);
+    dummy.updateMatrix();
+    laternenMasten.setMatrixAt(i, dummy.matrix);
+    dummy.position.set(p.x, 3.85, p.z);
+    dummy.updateMatrix();
+    laternenKoepfe.setMatrixAt(i, dummy.matrix);
+    dummy.position.set(p.x, 0.10, p.z);
+    dummy.updateMatrix();
+    laternenKegel.setMatrixAt(i, dummy.matrix);
+  }
+  laternenMasten.instanceMatrix.needsUpdate = true;
+  laternenKoepfe.instanceMatrix.needsUpdate = true;
+  laternenKegel.instanceMatrix.needsUpdate = true;
+  scene.add(laternenMasten, laternenKoepfe, laternenKegel);
+
+  // 256x256 Laternen-Lightmap für Straßen, Luftbild & untere Hauswände (y < 9 m)
+  const lm = document.createElement('canvas');
+  lm.width = 256; lm.height = 256;
+  const lg = lm.getContext('2d');
+  lg.fillStyle = '#000000';
+  lg.fillRect(0, 0, 256, 256);
+  lg.globalCompositeOperation = 'lighter';
+  const span = 2 * DIORAMA.r;
+  const radPx = Math.max(4, (26.5 / span) * 256);
+  for (const p of punkte) {
+    const px = ((p.x - (DIORAMA.cx - DIORAMA.r)) / span) * 256;
+    const py = ((p.z - (DIORAMA.cz - DIORAMA.r)) / span) * 256;
+    const gr = lg.createRadialGradient(px, py, 0, px, py, radPx);
+    gr.addColorStop(0, 'rgba(255, 232, 195, 0.95)');
+    gr.addColorStop(0.45, 'rgba(235, 208, 170, 0.42)');
+    gr.addColorStop(1, 'rgba(0, 0, 0, 0)');
+    lg.fillStyle = gr;
+    lg.beginPath();
+    lg.arc(px, py, radPx, 0, Math.PI * 2);
+    lg.fill();
+  }
+  const lmTex = new THREE.CanvasTexture(lm);
+  lmTex.colorSpace = THREE.SRGBColorSpace;
+  if (DIORAMA_LIGHT_UNIFORMS.uLightMap.value) DIORAMA_LIGHT_UNIFORMS.uLightMap.value.dispose();
+  DIORAMA_LIGHT_UNIFORMS.uLightMap.value = lmTex;
+  DIORAMA_LIGHT_UNIFORMS.uHasLightMap.value = 1.0;
 }
 
 function bauePoiSchilder(pois) {
@@ -987,12 +1312,10 @@ function baueDioramaBaeume(trees) {
   scene.add(baeumeStamm);
 }
 function wolkenFaerben() {
-  const h = hamburgStunde();
-  const abend = h >= 17 && h < 21;
-  const nacht = h < 6 || h >= 21;
-  const ziel = nacht ? 0x8a93b8 : abend ? 0xf6c9a8 : 0xfff6ea;
+  const st = tageszeitZustand(hamburgStundeDezimal());
+  const ziel = new THREE.Color(0xfff6ea).lerp(st.glow, 0.45).lerp(new THREE.Color(0x6b779c), st.nightFactor * 0.65);
   for (const w of wolken) {
-    for (const m of w.children) m.material.color.setHex(ziel);
+    for (const m of w.children) m.material.color.copy(ziel);
   }
 }
 
@@ -1003,6 +1326,7 @@ function baueFigur() {
   const hose = new THREE.MeshLambertMaterial({ color: 0x23262b });
   const kopf = new THREE.Mesh(new THREE.SphereGeometry(0.42, 20, 16), haut);
   kopf.position.y = 2.05;
+  kopf.castShadow = true;
   // Zwei Augen auf der Vorderseite (+Z): weiße Augäpfel + dunkle Pupillen (Punkt 4)
   const weissMat = new THREE.MeshBasicMaterial({ color: 0xffffff });
   const pupilleMat = new THREE.MeshBasicMaterial({ color: 0x14181f });
@@ -1015,10 +1339,15 @@ function baueFigur() {
   }
   const rumpf = new THREE.Mesh(new THREE.CylinderGeometry(0.34, 0.4, 1.0, 12), jacke);
   rumpf.position.y = 1.25;
+  rumpf.castShadow = true;
   const beinL = new THREE.Mesh(new THREE.CylinderGeometry(0.13, 0.15, 0.8, 8), hose);
   beinL.position.set(-0.16, 0.4, 0);
+  beinL.castShadow = true;
   const beinR = beinL.clone();
   beinR.position.x = 0.16;
+  beinR.castShadow = true;
+  g.userData.beinL = beinL;
+  g.userData.beinR = beinR;
   // Warmer Helm-Ring, damit man ihn im Dunkeln findet
   const ring = new THREE.Mesh(
     new THREE.TorusGeometry(0.62, 0.045, 8, 28),
@@ -1027,14 +1356,13 @@ function baueFigur() {
   ring.rotation.x = Math.PI / 2;
   ring.position.y = 0.12;
   g.add(kopf, rumpf, beinL, beinR, ring);
-  // Dev-Marker: dünne, senkrechte 50-m-Linie an den Füßen — hängt als Child an
+  // Dev-Marker: markante, dicke senkrechte 55-m-Säule an den Füßen — hängt als Child an
   // der Charakter-Gruppe und bewegt sich damit automatisch mit (auch indoor).
-  const devLineGeo = new THREE.BufferGeometry().setFromPoints([
-    new THREE.Vector3(0, 0, 0), new THREE.Vector3(0, 50, 0),
-  ]);
-  const devLine = new THREE.Line(devLineGeo, new THREE.LineBasicMaterial({
-    color: 0x00e5ff, transparent: true, opacity: 0.85,
+  const devLineGeo = new THREE.CylinderGeometry(0.30, 0.30, 55, 8);
+  const devLine = new THREE.Mesh(devLineGeo, new THREE.MeshBasicMaterial({
+    color: 0x00ffff, transparent: false, opacity: 1.0,
   }));
+  devLine.position.y = 27.5;
   devLine.visible = DEV; // nur in der Dev-Ansicht (?dev / ?mode=dev) sichtbar
   g.add(devLine);
   g.position.set(-3, 0, -68);
@@ -1060,6 +1388,120 @@ function figurSofortSetzen(x, z, heading) {
   Z.figur.position.set(Number(x) || 0, 0, Number(z) || 0);
   figurZielSetzen(x, z, heading);
 }
+// --- Debug-Strecken (max. 3 aktuellste): Startpunkt + rotes Ziel + Luftlinie + Info ---
+const DEBUG_STRECKEN = []; // [{ key, start, ziel, wo, was, warum, gruppe, mats }]
+const MAX_DEBUG_STRECKEN = 3;
+
+function erstelleLuftlinie(x1, z1, x2, z2, y, farbe, opacity) {
+  const dx = x2 - x1;
+  const dz = z2 - z1;
+  const len = Math.hypot(dx, dz);
+  if (len < 0.5) return null;
+  const geo = new THREE.CylinderGeometry(0.24, 0.24, len, 6);
+  geo.rotateZ(Math.PI / 2); // entlang X
+  const mat = new THREE.MeshBasicMaterial({ color: farbe, transparent: true, opacity });
+  const m = new THREE.Mesh(geo, mat);
+  m.position.set((x1 + x2) / 2, y, (z1 + z2) / 2);
+  m.rotation.y = -Math.atan2(dz, dx);
+  return { mesh: m, mat };
+}
+
+function debugStreckenAktualisieren(s) {
+  if (!DEV || !s || !s.charakter) return;
+  const r = s.route;
+  if (!r || !Array.isArray(r.waypoints) || r.waypoints.length < 2) {
+    // Keine aktive Route mehr: aktuelle Strecke auf "vergangen" setzen
+    if (DEBUG_STRECKEN.length > 0 && DEBUG_STRECKEN[0].aktiv) {
+      DEBUG_STRECKEN[0].aktiv = false;
+      for (const m of DEBUG_STRECKEN[0].mats) m.opacity = 0.65;
+      debugStreckenPanelRendern();
+    }
+    return;
+  }
+  const wp = r.waypoints;
+  const start = { x: Number(wp[0].x), z: Number(wp[0].z) };
+  const endWp = wp[wp.length - 1];
+  const poi = r.zielPoi ? Z.pois.get(r.zielPoi) : null;
+  const ziel = poi
+    ? { x: Number(poi.pos_x), z: Number(poi.pos_z), name: poi.name }
+    : { x: Number(endWp.x), z: Number(endWp.z), name: 'Erkundungsziel' };
+  const key = `${start.x.toFixed(1)},${start.z.toFixed(1)}->${ziel.x.toFixed(1)},${ziel.z.toFixed(1)}:${r.zielPoi || ''}`;
+  if (DEBUG_STRECKEN.length > 0 && DEBUG_STRECKEN[0].key === key) {
+    if (!DEBUG_STRECKEN[0].aktiv) {
+      DEBUG_STRECKEN[0].aktiv = true;
+      for (const m of DEBUG_STRECKEN[0].mats) m.opacity = 1.0;
+      debugStreckenPanelRendern();
+    }
+    return;
+  }
+  const ch = s.charakter;
+  const plan = Array.isArray(s.plan) ? s.plan : [];
+  const folge = plan.find((p) => p && p.action !== 'walk_to') || plan[0];
+  const was = folge ? `${folge.action}${folge.detail ? ': ' + folge.detail : ''}` : (ch.current_action || 'unterwegs');
+  const warum = ch.why_here || Z.gedanke || '–';
+  const wo = `${ziel.name} (${Math.round(ziel.x)}, ${Math.round(ziel.z)})`;
+
+  // Alte Strecken auf gedimmt setzen
+  for (const alt of DEBUG_STRECKEN) {
+    alt.aktiv = false;
+    for (const m of alt.mats) m.opacity = 0.62;
+  }
+
+  const gruppe = new THREE.Group();
+  const mats = [];
+
+  // Ausgangspunkt-Säule (gesättigtes Orange)
+  const startMat = new THREE.MeshBasicMaterial({ color: 0xff9900, transparent: true, opacity: 1.0 });
+  const startSaeule = new THREE.Mesh(new THREE.CylinderGeometry(0.26, 0.26, 28, 8), startMat);
+  startSaeule.position.set(start.x, 14, start.z);
+  gruppe.add(startSaeule);
+  mats.push(startMat);
+
+  // Ziel-Säule (Markant Rot, voll gesättigt)
+  const zielMat = new THREE.MeshBasicMaterial({ color: 0xff1a1a, transparent: true, opacity: 1.0 });
+  const zielSaeule = new THREE.Mesh(new THREE.CylinderGeometry(0.34, 0.34, 42, 8), zielMat);
+  zielSaeule.position.set(ziel.x, 21, ziel.z);
+  gruppe.add(zielSaeule);
+  mats.push(zielMat);
+
+  // Rote Luftlinie zwischen Ausgangspunkt und Ziel (über Dächern sichtbar bei y = 24)
+  const luft = erstelleLuftlinie(start.x, start.z, ziel.x, ziel.z, 24, 0xff1a1a, 1.0);
+  if (luft) {
+    gruppe.add(luft.mesh);
+    mats.push(luft.mat);
+  }
+
+  // Kompaktes 3D-Label am Ziel
+  const label = textSprite(`🎯 ${ziel.name}`, true);
+  label.position.set(ziel.x, 44.5, ziel.z);
+  gruppe.add(label);
+
+  scene.add(gruppe);
+  DEBUG_STRECKEN.unshift({ key, start, ziel, wo, was, warum, aktiv: true, gruppe, mats });
+  while (DEBUG_STRECKEN.length > MAX_DEBUG_STRECKEN) {
+    const weg = DEBUG_STRECKEN.pop();
+    scene.remove(weg.gruppe);
+  }
+  debugStreckenPanelRendern();
+}
+
+function debugStreckenPanelRendern() {
+  const el = $('devStrecken');
+  if (!el) return;
+  if (DEBUG_STRECKEN.length === 0) {
+    el.innerHTML = `<summary>📍 Strecken (0)</summary><div class="strecke"><small>Noch keine Bewegung.</small></div>`;
+    return;
+  }
+  const aktivTxt = DEBUG_STRECKEN[0].aktiv ? ' · aktiv' : '';
+  const zeilen = DEBUG_STRECKEN.map((d, i) =>
+    `<div class="strecke${d.aktiv ? ' aktiv' : ''}">`
+    + `<b>${d.aktiv ? '🔴 AKTUELL' : `#${i + 1} Letzte`} → ${esc(d.wo)}</b>`
+    + `<small>Was: ${esc(String(d.was).slice(0, 70))}</small>`
+    + `<small>Warum: ${esc(String(d.warum).slice(0, 90))}</small>`
+    + `</div>`).join('');
+  el.innerHTML = `<summary>📍 Strecken (${DEBUG_STRECKEN.length}/${MAX_DEBUG_STRECKEN}${aktivTxt})</summary>${zeilen}`;
+}
+
 function figurRouteSetzen(route) {
   if (route && Array.isArray(route.waypoints) && route.waypoints.length > 0) {
     FIGUR_ROUTE = { waypoints: route.waypoints, wegIndex: route.wegIndex || 0 };
@@ -1090,10 +1532,19 @@ function figurUpdaten(dt) {
     f.position.x += (dx / dist) * schritt;
     f.position.z += (dz / dist) * schritt;
     f.rotation.y = Math.atan2(dx, dz); // Blick sauber in Laufrichtung
-    // leichtes Wippen beim Gehen
-    f.position.y = Math.abs(Math.sin(performance.now() / 180)) * 0.05;
+    // leichtes Wippen + Bein-Schwung beim Gehen
+    const takt = performance.now() / 160;
+    f.position.y = Math.abs(Math.sin(takt)) * 0.05;
+    if (f.userData.beinL && f.userData.beinR) {
+      f.userData.beinL.rotation.x = Math.sin(takt) * 0.45;
+      f.userData.beinR.rotation.x = -Math.sin(takt) * 0.45;
+    }
   } else {
     f.position.y *= 0.9;
+    if (f.userData.beinL && f.userData.beinR) {
+      f.userData.beinL.rotation.x *= 0.85;
+      f.userData.beinR.rotation.x *= 0.85;
+    }
     if (Number.isFinite(FIGUR_HEADING) && !FIGUR_ROUTE) f.rotation.y = FIGUR_HEADING;
   }
 }
@@ -1511,6 +1962,7 @@ function staatAnwenden(s, opts) {
     figurZielSetzen(ch.pos_x, ch.pos_z, ch.heading_rad);
   }
   figurRouteSetzen(s.route || null); // Waypoints für weiche Interpolation (Punkt 1)
+  debugStreckenAktualisieren(s);
   if (ch.inside_poi) {
     // Indoor: EXAKT das eine ALKIS-Einzelhaus transparent (world_meta_json.alkis_id).
     // Fallback: räumlich nächstes Gebäude (30 m), falls keine ID gesetzt.
@@ -1705,11 +2157,43 @@ function fehlerBanner(text) {
   b.textContent = text;
 }
 
+let regenMesh = null;
+function baueRegen() {
+  const N = 360;
+  const pos = new Float32Array(N * 3);
+  for (let i = 0; i < N; i += 1) {
+    pos[i * 3] = (Math.random() - 0.5) * 120;
+    pos[i * 3 + 1] = Math.random() * 45;
+    pos[i * 3 + 2] = (Math.random() - 0.5) * 120;
+  }
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+  const mat = new THREE.PointsMaterial({ color: 0xaac8f0, size: 0.35, transparent: true, opacity: 0.55 });
+  regenMesh = new THREE.Points(geo, mat);
+  regenMesh.visible = false;
+  scene.add(regenMesh);
+}
+function regenUpdaten(dt) {
+  if (!regenMesh) return;
+  const w = Z.staat && Z.staat.world && Z.staat.world.weather;
+  regenMesh.visible = w === 'rain';
+  if (!regenMesh.visible) return;
+  regenMesh.position.set(camera.position.x, 0, camera.position.z);
+  const pos = regenMesh.geometry.attributes.position.array;
+  for (let i = 1; i < pos.length; i += 3) {
+    pos[i] -= 28 * dt;
+    if (pos[i] < 0) pos[i] = 45;
+  }
+  regenMesh.geometry.attributes.position.needsUpdate = true;
+}
+
 async function initialLaden() {
   baueBoden();
   baueHimmel(); // DIORAMA_V1: Himmelskuppel
   baueWolken(); // DIORAMA_V1: 12 Diorama-Wolken
+  baueRegen();
   baueFigur();
+  LICHT = lichtAnpassen();
   bindeSteuerung();
   bindeGehirn();
   if (DEV) {
@@ -1737,6 +2221,12 @@ async function initialLaden() {
     };
     klickbar('#devTick', '/api/dev/tick');
     klickbar('#devNight', '/api/dev/nightly');
+    const streckenBox = document.createElement('details');
+    streckenBox.id = 'devStrecken';
+    streckenBox.className = 'devStrecken';
+    streckenBox.open = true;
+    streckenBox.innerHTML = '<summary>📍 Strecken (0/3)</summary><div class="strecke"><small>Warte auf Bewegung …</small></div>';
+    document.querySelector('.oben').appendChild(streckenBox);
   }
   // Block 1: Karte (eigener try/catch) – ein Kartenfehler blockiert NIEMALS State/Feed.
   await ladeKarte();
@@ -1781,9 +2271,11 @@ async function ladeKarte() {
     try { baueGebaeude(karte.buildings); } catch (err) { console.warn('[karte] gebaeude:', err.message); }
     try { bauePoiSchilder(karte.pois); } catch (err) { console.warn('[karte] poi-marker:', err.message); }
     try { baueStrassennamen(karte.streets); } catch (err) { console.warn('[karte] schilder:', err.message); }
+    try { baueLaternen(karte.streets); } catch (err) { console.warn('[karte] laternen:', err.message); }
     dioramaAussenAusblenden();
     // Schattenkarte einmalig frisch rendern (statisch, autoUpdate=false).
-    renderer.shadowMap.needsUpdate = true;
+    // (Default-Referenz für Tests: 220, 100)
+    LICHT = lichtAnpassen();
     // Initial-Kamera: pilot, +40° rechts vom Blickwinkel (Start-Frame, siehe Kamera-Kapitel)
     const h0 = 0; // Blickrichtung initial: +z (wird per State überschrieben)
     Z.pilot.theta = h0 + PILOT_START_Versatz;
@@ -1859,6 +2351,7 @@ function loop() {
   letzteZeit = jetzt;
   letztesBild = jetzt;
   figurUpdaten(dt);
+  regenUpdaten(dt);
   pinsSchweben(performance.now()); // Bojen-Schweben der POI-Pins (ms-Basis)
   highlightPulsen(performance.now()); // betretenes Haus pulst in Eigenfarbe
   kameraUpdaten(dt, jetzt);

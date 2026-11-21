@@ -110,6 +110,11 @@
     border:1px solid var(--himmel);border-radius:8px;padding:6px 12px;cursor:pointer;transition:border-color .15s,color .15s,opacity .15s;pointer-events:auto;position:relative;z-index:9}
   .devBox button:hover{border-color:var(--amber);color:var(--amber)}
   .devBox button:disabled{opacity:.55;cursor:wait}
+  .devStrecken{margin-top:6px;background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:6px 8px;font-size:.66rem;pointer-events:auto;max-width:320px}
+  .devStrecken summary{cursor:pointer;color:var(--rot);font-family:var(--mono);font-size:.66rem;font-weight:600}
+  .devStrecken .strecke{margin-top:5px;padding-top:5px;border-top:1px solid var(--line);line-height:1.35}
+  .devStrecken .strecke.aktiv b{color:var(--rot)}
+  .devStrecken .strecke small{display:block;color:var(--mu);font-family:var(--mono);font-size:.6rem}
 
   .fuss{position:fixed;bottom:8px;right:14px;font-size:.6rem;color:#546274;z-index:5}
   @media(max-width:820px){
