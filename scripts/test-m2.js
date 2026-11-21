@@ -146,6 +146,8 @@ async function main() {
   assert.strictEqual(engine.ladeCharakter(db, characterId).inside_poi, 'apartment', 'wieder daheim');
   console.log(`[m2] heimweg schrittweise ok (${heimSchritte} ticks)`);
   // Nacht-Konsolidierung beim Schlafen daheim (nightly an, Mock ohne Key -> Fallback)
+  // Hard-Limit-Check: bei erschoepfung < 50 darf sleep noch nicht greifen, ab >= 50 klappt es.
+  db.prepare('UPDATE character SET erschoepfung = 60 WHERE id = ?').run(characterId);
   const depsNightly = { karte, brain: mockBrainFuer([PLAN_SHIFT_SLEEP]), telegram: MOCK_TELEGRAM, nightly: true };
   const t7 = await engine.tick(db, depsNightly, characterId, Date.now());
   assert.ok(t7.ok && t7.schritt.action === 'sleep', 'tick7 sleep');

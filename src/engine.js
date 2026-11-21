@@ -78,6 +78,9 @@ function entdeckeUmgebung(db, ch) {
   for (const n of neu) {
     db.prepare("INSERT INTO events (character_id, tick, type, payload_json, in_feed) VALUES (?, 0, 'poi_discovered', ?, 1)")
       .run(ch.id, JSON.stringify(n));
+    require('./memory').speichereMemory(db, ch.id, {
+      tier: 'short', kind: 'fact', text: `Neuen Ort entdeckt: ${n.name}.`, initial_weight: 4.0,
+    });
   }
   return neu;
 }
@@ -121,7 +124,7 @@ function lasseZeitVergehen(ch, sekunden) {
   if (ch.current_action === 'sleep') {
     ch.erschoepfung = Math.max(0, ch.erschoepfung - stunden * 60);
   } else if (ch.current_action === 'rest') {
-    ch.erschoepfung = Math.max(0, ch.erschoepfung - stunden * 30);
+    ch.erschoepfung = Math.max(0, ch.erschoepfung - stunden * 90);
   } else {
     ch.erschoepfung = Math.min(100, ch.erschoepfung + stunden * SEKUNDAER.erschoepfung.proStunde);
   }
@@ -416,6 +419,9 @@ async function fuehreSchrittAus(db, deps, characterId, schritt, jetztMs) {
       ch.current_action = 'idle';
     }
   } else if (action === 'consume' || action === 'do_activity') {
+    if (action === 'consume' && Number(ch.hunger) < 20) {
+      return { ok: false, grund: 'nicht_hungrig', notizen: ['Du bist noch völlig satt und bekommst gerade keinen Bissen herunter.'] };
+    }
     const ortId = zielId || ch.inside_poi;
     const poi = poiVonId(ortId);
     if (!poi) return { ok: false, grund: 'ort_unbekannt', notizen };
@@ -424,12 +430,22 @@ async function fuehreSchrittAus(db, deps, characterId, schritt, jetztMs) {
     if (action === 'consume' && Number(ch.geld) < Number(angebot.price)) {
       return { ok: false, grund: 'geld_reicht_nicht', notizen, angebot };
     }
+    const frohDelta = (action === 'consume' && Number(ch.hunger) < 40 && Number(angebot.froh_delta) > 0)
+      ? Math.round(Number(angebot.froh_delta) * 0.5)
+      : Number(angebot.froh_delta);
     ch.geld = Math.max(0, Math.round(Number(ch.geld) - Math.round(Number(angebot.price))));
     ch.hunger = Math.max(0, Math.min(100, Number(ch.hunger) + Number(angebot.hunger_delta)));
     ch.erschoepfung = Math.max(0, Math.min(100, Number(ch.erschoepfung) + Number(angebot.erschoepfung_delta)));
-    ch.froh = Math.max(-100, Math.min(100, Number(ch.froh) + Number(angebot.froh_delta)));
+    ch.froh = Math.max(-100, Math.min(100, Number(ch.froh) + frohDelta));
     lasseZeitVergehen(ch, dauerFuer(schritt));
     notizen.push(`${angebot.label}: ${angebot.narrative || ''}`.trim() + (res.neu ? ' (Neu im Kiez-Katalog!)' : ''));
+    if (frohDelta >= 5 || res.neu) {
+      require('./memory').speichereMemory(db, characterId, {
+        tier: 'short', kind: 'moment',
+        text: `${poi.name}: ${angebot.label}${angebot.narrative ? ' – ' + angebot.narrative : ''}`.slice(0, 180),
+        initial_weight: 3.5,
+      });
+    }
     ch.current_action = 'idle';
     // Arbiter-Quelle für den Dev-Feed (primary vs. fallback sichtbar machen)
     if (res.quelle && (res.quelle.model || res.quelle.source !== 'fallback')) {
@@ -441,8 +457,10 @@ async function fuehreSchrittAus(db, deps, characterId, schritt, jetztMs) {
   } else if (action === 'leave_note') {
     const ortId = zielId || ch.inside_poi;
     const zettelText = detail || 'Hallo! Ich suche Arbeit als Spuelhilfe. Ich bin zuverlaessig.';
-    const ins = db.prepare("INSERT INTO messages_outbox (character_id, channel, target_poi, content, status, resolve_after_at) VALUES (?, 'leave_note', ?, ?, 'pending', datetime('now', '+2 hours'))")
-      .run(characterId, ortId, zettelText);
+    const tgAktiv = deps.telegram && typeof deps.telegram.istAktiv === 'function' && deps.telegram.istAktiv();
+    const delay = tgAktiv ? '+15 minutes' : '+3 minutes';
+    const ins = db.prepare("INSERT INTO messages_outbox (character_id, channel, target_poi, content, status, resolve_after_at) VALUES (?, 'leave_note', ?, ?, 'pending', datetime('now', ?))")
+      .run(characterId, ortId, zettelText, delay);
     db.prepare("INSERT INTO open_loops (character_id, kind, text, urgency, related_poi, status) VALUES (?, 'question', ?, 0.6, ?, 'open')")
       .run(characterId, `Antwort auf Zettel bei ${ortId || 'unterwegs'}: ${zettelText.slice(0, 120)}`, ortId || null);
     if (deps.telegram && typeof deps.telegram.sendeNachricht === 'function') {
@@ -514,11 +532,28 @@ async function fuehreSchrittAusTeil2(db, deps, characterId, schritt) {
     ch = ladeCharakter(db, characterId);
     ch.erschoepfung = Math.min(100, Number(ch.erschoepfung) + SEKUNDAER.erschoepfung.proSchicht);
     ch.hunger = Math.min(100, Number(ch.hunger) + SEKUNDAER.hunger.proSchicht);
+    ch.froh = Math.max(-100, Number(ch.froh) - 2);
     lasseZeitVergehen(ch, dauerFuer(schritt));
-    if (abrech.abgebrochen) notizen.push(`Schicht abgebrochen: halber Lohn ${Math.round(abrech.lohn)} Euro, Strike ${abrech.strikes}.`);
-    else notizen.push(`Schicht geschafft: ${Math.round(abrech.lohn)} Euro verdient.`);
+    if (abrech.abgebrochen) {
+      notizen.push(`Schicht abgebrochen: halber Lohn ${Math.round(abrech.lohn)} Euro, Strike ${abrech.strikes}.`);
+    } else {
+      notizen.push(`Schicht geschafft: ${Math.round(abrech.lohn)} Euro verdient.`);
+      require('./memory').speichereMemory(db, characterId, {
+        tier: 'short', kind: 'work',
+        text: `Schicht bei ${job.poi_id} geschafft (${Math.round(abrech.lohn)} Euro verdient).`,
+        initial_weight: 3.5,
+      });
+    }
     if (abrech.gekuendigt) notizen.push('Gekuendigt nach dem 2. Strike.');
   } else if (action === 'rest' || action === 'sleep') {
+    if (action === 'sleep') {
+      if (ch.inside_poi !== 'apartment') {
+        return { ok: false, grund: 'nur_daheim', notizen: ['Zum Schlafen musst du heim in deine Wohnung.'] };
+      }
+      if (Number(ch.erschoepfung) < 50) {
+        return { ok: false, grund: 'nicht_muede', notizen: ['Du bist noch viel zu wach zum Schlafen und stehst wieder vom Bett auf.'] };
+      }
+    }
     ch.current_action = action;
     lasseZeitVergehen(ch, dauerFuer(schritt));
     if (action === 'sleep') {
@@ -599,11 +634,51 @@ async function fuehreSchrittAusTeil3(db, deps, characterId, schritt) {
     }
     lasseZeitVergehen(ch, dauerFuer(schritt));
   } else if (action === 'work_on_project') {
+    const ort = ch.inside_poi ? db.prepare('SELECT id, category FROM pois WHERE id = ?').get(ch.inside_poi) : null;
+    if (!ort || (ort.id !== 'apartment' && ort.category !== 'park')) {
+      return { ok: false, grund: 'falscher_ort', notizen: ['An deinem Projekt kannst du nur daheim (apartment) oder im Park arbeiten.'] };
+    }
+    let wp = db.prepare("SELECT * FROM work_pieces WHERE character_id = ? AND status = 'in_progress' ORDER BY id DESC LIMIT 1").get(characterId);
+    const fragment = detail || 'Ein weiterer Gedanke über St. Pauli.';
+    if (!wp) {
+      const titel = String(schritt.title || 'Notizen aus St. Pauli').slice(0, 80);
+      const frags = [{ added_at: new Date().toISOString(), text: fragment, source: ort.id }];
+      const ins = db.prepare("INSERT INTO work_pieces (character_id, title, kind, poi_id, progress, fragments_json, status) VALUES (?, ?, 'zine', ?, 15, ?, 'in_progress')")
+        .run(characterId, titel, ort.id, JSON.stringify(frags));
+      wp = db.prepare('SELECT * FROM work_pieces WHERE id = ?').get(Number(ins.lastInsertRowid));
+    } else {
+      let frags = [];
+      try { frags = JSON.parse(wp.fragments_json || '[]'); } catch { frags = []; }
+      frags.push({ added_at: new Date().toISOString(), text: fragment, source: ort.id });
+      const prog = Math.min(100, (Number(wp.progress) || 0) + 15);
+      const st = prog >= 100 ? 'completed' : 'in_progress';
+      db.prepare("UPDATE work_pieces SET progress = ?, fragments_json = ?, status = ?, updated_at = datetime('now') WHERE id = ?")
+        .run(prog, JSON.stringify(frags), st, wp.id);
+      wp = db.prepare('SELECT * FROM work_pieces WHERE id = ?').get(wp.id);
+    }
+    ch.froh = Math.min(100, Number(ch.froh) + 6);
     const { speichereMemory } = require('./memory');
-    speichereMemory(db, characterId, { tier: 'short', kind: 'work', text: 'Am Projekt gearbeitet: ' + detail.slice(0, 120), initial_weight: 3.5 });
-    notizen.push('Du hast an deinem Projekt weitergearbeitet.');
+    speichereMemory(db, characterId, { tier: 'short', kind: 'work', text: `Projekt „${wp.title}“ (${wp.progress} %): ${fragment.slice(0, 100)}`, initial_weight: 3.5 });
+    notizen.push(`Du hast an „${wp.title}“ weitergearbeitet (${wp.progress} %).`);
     lasseZeitVergehen(ch, dauerFuer(schritt));
-  } else if (action === 'send_sms' || action === 'send_email' || action === 'web_search' || action === 'quit_job' || action === 'buy_item') {
+  } else if (action === 'buy_item') {
+    if (ch.inside_poi !== 'spaeti') {
+      return { ok: false, grund: 'nur_am_spaeti', notizen: ['Gebraucht-Elektronik bekommst du nur am Späti (spaeti).'] };
+    }
+    const preis = 50;
+    if (Number(ch.geld) < preis) {
+      return { ok: false, grund: 'geld_reicht_nicht', notizen: ['Ein gebrauchtes Smartphone kostet 50 Euro – so viel Geld hast du noch nicht.'] };
+    }
+    ch.geld = Math.max(0, Math.round(Number(ch.geld) - preis));
+    const hat = db.prepare("SELECT id FROM inventory WHERE character_id = ? AND item_key = 'handy'").get(characterId);
+    if (hat) db.prepare("UPDATE inventory SET count = count + 1 WHERE id = ?").run(hat.id);
+    else db.prepare("INSERT INTO inventory (character_id, item_key, label, count) VALUES (?, 'handy', 'Gebrauchtes Smartphone', 1)").run(characterId);
+    require('./memory').speichereMemory(db, characterId, {
+      tier: 'short', kind: 'moment', text: 'Am Späti ein gebrauchtes Smartphone für 50 Euro gekauft.', initial_weight: 5.0,
+    });
+    notizen.push('Du hast dir am Späti ein gebrauchtes Smartphone für 50 Euro gekauft! Jetzt kannst du SMS und E-Mails schreiben.');
+    lasseZeitVergehen(ch, dauerFuer(schritt));
+  } else if (action === 'send_sms' || action === 'send_email' || action === 'web_search' || action === 'quit_job') {
     if ((action === 'send_sms' || action === 'send_email' || action === 'web_search') && deps.telegram && typeof deps.telegram.sendeNachricht === 'function') {
       try { await deps.telegram.sendeNachricht(db, { character_id: characterId, channel: action, content: detail }); } catch { /* loggen, nicht crashen */ }
     }
@@ -672,13 +747,26 @@ async function holeNeuenPlanMitMeta(db, deps, characterId, jetztMs) {
   const orte = bekannteOrte(db).map((o) => ({ id: o.id, name: o.name, category: o.category }));
   const devAn = String(process.env.AIQUARIUM_DEV ?? '1') !== '0';
   const letzterTick = 0;
-  const ereignisse = ereignisSeit(db, characterId, letzterTick);
+  const ereignisse = ereignisSeit(db, characterId, letzterTick, 6);
+  const letzteNotizen = [];
+  for (const ev of ereignisse) {
+    try {
+      const p = JSON.parse(ev.payload_json || '{}');
+      if (Array.isArray(p.notizen) && p.notizen.length > 0) letzteNotizen.push(p.notizen.join(' '));
+      else if (p.name) letzteNotizen.push(`Neu entdeckt: ${p.name}`);
+      else if (p.text) letzteNotizen.push(String(p.text));
+      else if (p.rolle) letzteNotizen.push(`Job-Zusage: ${p.rolle}`);
+      else if (p.grund) letzteNotizen.push(`Unterbrochen: ${p.grund}`);
+    } catch { /* egal */ }
+    if (letzteNotizen.length >= 4) break;
+  }
   const ctx = {
     orte,
     woName: ch.inside_poi ? (db.prepare('SELECT name FROM pois WHERE id = ?').get(ch.inside_poi) || {}).name || ch.inside_poi : 'draussen unterwegs',
     woText: ch.inside_poi ? `Du bist bei ${ch.inside_poi}.` : `Du bist draussen bei (${Number(ch.pos_x).toFixed(0)}, ${Number(ch.pos_z).toFixed(0)}).`,
     zeitText: tageszeitText(jetztMs),
-    letztesEreignis: ereignisse.length > 0 ? `${ereignisse[0].type}: ${ereignisse[0].payload_json}` : null,
+    letztesEreignis: letzteNotizen[0] || null,
+    letzteNotizen,
   };
   const gebaut = promptMod.buildPrompt(db, ch, ctx);
   // LLM-Input-Log (Debug): was die KI bei diesem Call als INPUT bekommt –
@@ -740,7 +828,13 @@ async function holeNeuenPlanMitMeta(db, deps, characterId, jetztMs) {
     // validatePlan mit raw: liefert fehlerDetails { code, reason, rawResponse, feld, wert, erlaubt }
     // orte (bekannte IDs) nur als Kontext fürs Debug mitgegeben – walk_to zu unentdeckten POIs
     // ist Discovery-Kernmechanik und bleibt valide (Fehler erst auf Ausführungsebene: ort_unbekannt).
-    geprueft = checks.validatePlan(obj, { intents: gebaut.whitelist, raw: String(antwort.raw || ''), orte: orte.map((o) => o.id) });
+    geprueft = checks.validatePlan(obj, {
+      intents: gebaut.whitelist,
+      raw: String(antwort.raw || ''),
+      orte: orte.map((o) => o.id),
+      hunger: Number(ch.hunger),
+      erschoepfung: Number(ch.erschoepfung),
+    });
   }
   if (!geprueft.ok) {
     let fehlerDebug = Array.isArray(geprueft.fehlerDetails) && geprueft.fehlerDetails.length > 0 ? geprueft.fehlerDetails : [];
@@ -865,6 +959,20 @@ async function tick(db, deps, characterId, jetztMs) {
   }
   try { arbiter.bewerteBewerbungen(db, telegram); } catch { /* nie crashen */ }
   try { arbiter.pruefeInaktivitaet(db, characterId, jetztMs); } catch { /* nie crashen */ }
+
+  // Stimmung (froh): reagiert auf Mangel und pendelt sich sonst sanft Richtung +10 ein.
+  let frohDelta = 0;
+  if (Number(ch.hunger) > 75) frohDelta -= 2;
+  if (Number(ch.erschoepfung) > 80) frohDelta -= 2;
+  if (Number(ch.geld) < 5) frohDelta -= 1;
+  if (frohDelta === 0) {
+    if (Number(ch.froh) > 10) frohDelta = -0.5;
+    else if (Number(ch.froh) < 10) frohDelta = 0.5;
+  }
+  if (frohDelta !== 0) {
+    ch.froh = Math.max(-100, Math.min(100, Number(ch.froh) + frohDelta));
+    db.prepare('UPDATE character SET froh = ? WHERE id = ?').run(ch.froh, characterId);
+  }
 
   let queue = ladeQueue(ch);
   let snapshot = null;

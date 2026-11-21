@@ -62,14 +62,27 @@ function ladeMemories(db, characterId) {
   return db.prepare('SELECT * FROM memories WHERE character_id = ?').all(characterId);
 }
 
+function passtZuKontext(m, kontext) {
+  if (!kontext) return true;
+  const txt = String(m.text || '').toLowerCase();
+  const poi = String(kontext.insidePoi || '').toLowerCase();
+  const wo = String(kontext.woName || '').toLowerCase();
+  if (poi && txt.includes(poi)) return true;
+  if (wo && wo.length >= 4 && txt.includes(wo.slice(0, 6))) return true;
+  if (poi === 'apartment' && (txt.includes('wohnung') || txt.includes('beckstrasse') || m.kind === 'read' || m.kind === 'work')) return true;
+  if (kontext.action === 'work_shift' && m.kind === 'work') return true;
+  return false;
+}
+
 // Come-back-Zähler erhöhen + worth neu berechnen (beim Einbinden in Prompt).
-// Gibt die aktualisierten Zeilen (mit worth) zurück, sortiert nach worth.
-function einbindenUndZaehlen(db, characterId, limit, jetztMs) {
+// Steigert come_back_count nur noch bei Kontext-Bezug (oder ohne Kontext für Rückwärtskompatibilität).
+function einbindenUndZaehlen(db, characterId, limit, jetztMs, kontext) {
   const alle = ladeMemories(db, characterId);
   const jetzt = jetztMs || Date.now();
   const top = topMemories(alle, limit == null ? 10 : limit, jetzt);
   const upd = db.prepare("UPDATE memories SET come_back_count = come_back_count + 1, worth = ?, last_recalled_at = datetime('now') WHERE id = ?");
   for (const m of top) {
+    if (!passtZuKontext(m, kontext)) continue;
     const neu = berechneWorth({ ...m, come_back_count: (Number(m.come_back_count) || 0) + 1 }, jetzt);
     upd.run(neu, m.id);
     m.worth = neu;

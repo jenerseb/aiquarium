@@ -108,6 +108,11 @@ function verarbeiteAntwort(db, characterId, text) {
   }
   db.prepare("INSERT INTO open_loops (character_id, kind, text, urgency, status) VALUES (?, 'question', ?, 0.8, 'open')")
     .run(characterId, 'Nachricht von draussen: ' + String(text).slice(0, 200));
+  require('./memory').speichereMemory(db, characterId, {
+    tier: 'short', kind: 'person',
+    text: 'Nachricht von draussen: ' + String(text).slice(0, 160),
+    initial_weight: 4.5,
+  });
   db.prepare("INSERT INTO events (character_id, tick, type, payload_json, in_feed) VALUES (?, 0, 'telegram_msg', ?, 1)")
     .run(characterId, JSON.stringify({ text: String(text).slice(0, 280) }));
   return { typ: 'notiz', text: String(text).slice(0, 80) };

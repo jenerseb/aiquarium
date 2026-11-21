@@ -27,30 +27,29 @@ function frohGefuehl(froh) {
 
 function hungerGefuehl(hunger) {
   const h = Number(hunger);
-  if (h < 25) return 'Du bist angenehm satt und musst an Essen gerade nicht denken.';
-  if (h < 50) return 'Dein Magen meldet sich leise: bald wäre eine Kleinigkeit gut.';
-  if (h < 75) return 'Du hast deutlich Hunger: der Magen knurrt, du wirst unkonzentriert.';
-  if (h < 90) return 'Du hast starken Hunger: zittrige Hände, flau im Magen. Iss bald etwas Richtiges.';
-  return 'Du bist ausgehungert: dir ist flau und schwindelig vor Hunger. Iss sofort etwas.';
+  if (h < 20) return 'Du bist pappsatt. Allein der Gedanke an Essen oder Trinken widerstrebt dir – du bekommst gerade keinen Bissen herunter. Nutze die Zeit zum Erkunden, Lesen, Schreiben oder Arbeiten.';
+  if (h < 45) return 'Du bist satt und brauchst kein Essen. Dein Kopf ist frei für den Kiez, deine Projekte oder Erledigungen.';
+  if (h < 70) return 'Langsam bekommst du Appetit – bei Gelegenheit wäre ein Imbiss oder Snack nett, aber es eilt noch nicht.';
+  if (h < 85) return 'Du hast deutlich Hunger: der Magen knurrt, lange solltest du das Essen nicht mehr aufschieben.';
+  return 'Du bist ausgehungert: dir ist flau und schwindelig vor Hunger. Iss sofort etwas!';
 }
 
 function erschoepfungGefuehl(wert) {
   const e = Number(wert);
-  if (e < 25) return 'Du bist wach und ausgeruht.';
-  if (e < 50) return 'Du merkst erste Müdigkeit: Gähnen, schwere Lider ab und zu.';
-  if (e < 75) return 'Du bist müde: das Denken wird zäh, du sehnst dich nach einer Pause.';
-  if (e < 90) return 'Du bist stark erschöpft: alles verschwimmt, du machst Fehler. Ruh dich bald aus.';
-  return 'Du bist völlig übermüdet: kaum noch wach zu halten. Leg dich sofort hin.';
+  if (e < 30) return 'Du bist hellwach und voller Tatendrang. Ans Schlafen oder Ausruhen ist überhaupt nicht zu denken.';
+  if (e < 50) return 'Du bist wach und aufnahmefähig. Fürs Bett bist du noch viel zu fit – du könntest jetzt unmöglich einschlafen.';
+  if (e < 75) return 'Du merkst langsam die Anstrengung in den Knochen. Du hältst noch gut durch, könntest dich aber auch schon ausruhen oder schlafen legen.';
+  if (e < 90) return 'Du bist richtig müde: schwere Lider, das Denken wird zäh. Geh bald heim in deine Wohnung zum Schlafen.';
+  return 'Du bist völlig übermüdet und hältst dich kaum noch auf den Beinen. Geh sofort in deine Wohnung und schlaf!';
 }
 
 function geldGefuehl(geld) {
   const g = Math.round(Number(geld) || 0);
-  if (g >= 50) return `Du hast ${g} Euro dabei – das reicht für eine entspannte Mahlzeit und noch etwas obendrauf.`;
-  if (g >= 25) return `Du hast ${g} Euro dabei – das reicht für eine ordentliche warme Mahlzeit oder zwei kleine Einkäufe.`;
-  if (g >= 12) return `Du hast ${g} Euro dabei – das reicht für eine einfache Mahlzeit beim Imbiss oder ein Getränk in der Kneipe, aber nicht für viel mehr.`;
-  if (g >= 5) return `Du hast ${g} Euro dabei – das reicht höchstens für einen Kaffee oder einen kleinen Snack am Kiosk.`;
-  if (g >= 1) return `Du hast ${g} Euro dabei – das reicht kaum für das Nötigste. Jede Ausgabe zählt doppelt.`;
-  return 'Du hast praktisch kein Geld mehr. Du musst sparsam über jeden Euro nachdenken oder erst etwas verdienen bzw. Pfand abgeben.';
+  if (g >= 50) return `Du hast ${g} Euro in der Tasche – ein solides Polster (damit könntest du dir am Späti sogar ein gebrauchtes Handy kaufen).`;
+  if (g >= 25) return `Du hast ${g} Euro in der Tasche – ein ordentliches Polster für den Kiez, mit dem du gut haushalten kannst.`;
+  if (g >= 10) return `Du hast ${g} Euro in der Tasche – ein kleines Polster für den Kiez, mit dem du aber haushalten musst.`;
+  if (g >= 1) return `Du hast nur noch ${g} Euro in der Tasche – das ist knapp, jede Ausgabe zählt doppelt.`;
+  return 'Du hast praktisch kein Geld mehr. Du musst erst etwas verdienen oder Pfand abgeben.';
 }
 
 function koerperSaetze(ch) {
@@ -189,14 +188,23 @@ function jobText(db, characterId) {
 function buildPrompt(db, ch, ctx) {
   const c = ctx || {};
   const mem = require('./memory');
-  // Top-Memories einbinden + come-back-Zähler erhöhen (§6.2)
-  const top = mem.einbindenUndZaehlen(db, ch.id, 10);
+  // Top-Memories einbinden + come-back-Zähler gezielt erhöhen (§6.2)
+  const top = mem.einbindenUndZaehlen(db, ch.id, 10, Date.now(), {
+    insidePoi: ch.inside_poi,
+    woName: c.woName,
+    action: ch.current_action,
+  });
   const handy = hatHandy(db, ch.id);
   const wl = whitelistFuer(db, ch.id, c.orte);
   const wo = c.woText || `Du bist ${c.woName || 'unterwegs'}.`;
   const zeit = c.zeitText || 'Es ist Tag in Hamburg.';
   const wetter = c.wetterText || '';
-  const ereignis = c.letztesEreignis ? `Zuletzt ist passiert: ${c.letztesEreignis}` : 'Zuletzt ist nichts Besonderes passiert.';
+  const notizenListe = Array.isArray(c.letzteNotizen) && c.letzteNotizen.length > 0
+    ? ['Was zuletzt passiert ist:', ...c.letzteNotizen.map((n) => `- ${n}`)]
+    : [c.letztesEreignis ? `Zuletzt ist passiert: ${c.letztesEreignis}` : 'Zuletzt ist nichts Besonderes passiert.'];
+  const regelnExtra = [];
+  if (Number(ch.hunger) < 20) regelnExtra.push('Du bist noch völlig satt: plane consume NICHT als ersten Schritt (höchstens nach einer Arbeitsschicht).');
+  if (Number(ch.erschoepfung) < 50) regelnExtra.push('Du bist noch zu wach zum Schlafen: plane sleep NICHT (höchstens nach einer Arbeitsschicht), und geschlafen wird nur in apartment.');
 
   const linien = [
     'Du bist ein junger Stadterkunder, frisch in St. Pauli angekommen. Du erlebst alles in der Ich-Form, heute, hier.',
@@ -218,12 +226,13 @@ function buildPrompt(db, ch, ctx) {
     wo,
     zeit,
     wetter,
-    ereignis,
+    ...notizenListe,
     '',
     orteText(wl.orte),
     '',
     kommunikationsRegel(handy),
     'Geld, Zeit und Gesundheit rechnet die Welt für dich – du beschreibst nur Wünsche und Gedanken, nie Beträge oder Prozentwerte.',
+    ...regelnExtra,
     '',
     'ANTWORTE AUSSCHLIESSLICH ALS JSON (kein anderer Text):',
     '{ "thought": "ein Satz, was dir gerade durch den Kopf geht (max. 20 Wörter)",',

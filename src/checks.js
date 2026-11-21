@@ -246,9 +246,13 @@ function planSchrittGrund(failure, intents, obj) {
 function validatePlan(obj, intents) {
   let rawText = '';
   let orte = [];
+  let hunger = null;
+  let erschoepfung = null;
   if (intents && typeof intents === 'object' && !Array.isArray(intents)) {
     rawText = typeof intents.raw === 'string' ? intents.raw : '';
     orte = Array.isArray(intents.orte) ? intents.orte : [];
+    if (Number.isFinite(Number(intents.hunger))) hunger = Number(intents.hunger);
+    if (Number.isFinite(Number(intents.erschoepfung))) erschoepfung = Number(intents.erschoepfung);
     intents = intents.intents;
   }
   const failures = [];
@@ -279,10 +283,18 @@ function validatePlan(obj, intents) {
     if (plan.length < 2 || plan.length > 4) notiere('plan_laenge');
     const erlaubt = Array.isArray(intents) && intents.length > 0 ? intents : null;
     let leaveNoteN = 0;
+    let hatteSchicht = false;
     plan.forEach((s, i) => {
       if (!s || typeof s !== 'object') { notiere('schritt_' + i + '_kein_objekt'); return; }
       const action = typeof s.action === 'string' ? s.action.trim() : '';
       if (!action) { notiere('schritt_' + i + '_ohne_action'); return; }
+      if (action === 'work_shift') hatteSchicht = true;
+      if (i === 0 && action === 'consume' && hunger !== null && hunger < 20) {
+        notiere('schritt_0_zu_satt');
+      }
+      if (action === 'sleep' && erschoepfung !== null && erschoepfung < 50 && !hatteSchicht) {
+        notiere('schritt_' + i + '_zu_wach_fuer_schlaf');
+      }
       if (action === 'walk_to' && Array.isArray(orte) && orte.length > 0 && typeof s.target === 'string' && s.target.trim()) {
         // Hinweis: KEIN harter Fehler – walk_to zu unentdeckten POIs ist Kernmechanik (§5.2 Discovery).
         // Unbekannte Ziele scheitern erst auf Ausführungsebene (ort_unbekannt) – dort erzeugt
