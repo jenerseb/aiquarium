@@ -1312,36 +1312,77 @@ function textSprite(text, gross) {
 // konstanter Standard (nicht nach kronendurchmesser skaliert).
 // (Grasbüschel/Blumen ersatzlos gestrichen – nur Parkflächen + echte Bäume.)
 let baeumeStamm = null;
+let baeumeKrone = null;
+let baeumeKroneTop = null;
 function baueDioramaBaeume(trees) {
-  // Ein InstancedMesh: leicht konischer Zylinder (0,35 → 0,5 m Radius).
+  for (const m of [baeumeStamm, baeumeKrone, baeumeKroneTop]) {
+    if (m) { scene.remove(m); m.geometry.dispose(); m.material.dispose(); }
+  }
   const echte = (trees || []).filter((t) => Number.isFinite(Number(t.x)) && Number.isFinite(Number(t.z)));
   const N_BAEUME = Math.max(1, Math.min(1500, echte.length || 90));
   const dummy = new THREE.Object3D();
-  const geo = new THREE.CylinderGeometry(0.35, 0.5, 1, 7);
-  geo.translate(0, 0.5, 0); // Basis am Boden (y = 0)
-  const mat = new THREE.MeshLambertMaterial({ color: 0x4f7a3e }); // einfacher Grün-Ton
-  baeumeStamm = new THREE.InstancedMesh(geo, mat, N_BAEUME);
-  // 2026-11-19: Bäume GEOMETRISCH am Diorama-Kreis clippen (Instanzen außerhalb
-  // werden nicht gesetzt). Ein Shader-Clip ginge ohne instanceMatrix-Behandlung
-  // nicht – alle Bäume hätten die Position des Mesh-Ursprungs und wären weg.
+
+  const stammGeo = new THREE.CylinderGeometry(0.18, 0.28, 1, 7);
+  stammGeo.translate(0, 0.5, 0);
+  const stammMat = new THREE.MeshLambertMaterial({ color: 0x6b4c35 });
+  baeumeStamm = new THREE.InstancedMesh(stammGeo, stammMat, N_BAEUME);
+  baeumeStamm.castShadow = true;
+
+  const kroneGeo = new THREE.IcosahedronGeometry(1.65, 1);
+  const kroneMat = new THREE.MeshLambertMaterial({ color: 0xffffff });
+  baeumeKrone = new THREE.InstancedMesh(kroneGeo, kroneMat, N_BAEUME);
+  baeumeKrone.castShadow = true;
+  baeumeKrone.receiveShadow = true;
+
+  const topGeo = new THREE.IcosahedronGeometry(1.15, 1);
+  baeumeKroneTop = new THREE.InstancedMesh(topGeo, kroneMat.clone(), N_BAEUME);
+  baeumeKroneTop.castShadow = true;
+  baeumeKroneTop.receiveShadow = true;
+
+  const gruenToene = [0x4d7a3f, 0x588846, 0x426e37, 0x61914d].map((h) => new THREE.Color(h));
   const limit = DIORAMA.r + 10; // +10 m: Randbäume dürfen die Kante noch säumen
   let plaziert = 0;
   for (let i = 0; i < N_BAEUME; i += 1) {
     const t = echte.length ? echte[i % echte.length] : null;
     const hochM = t ? Math.max(4, Math.min(22, Number(t.baumhoehe) || 8)) : 8;
-    const sHoch = hochM * 0.75; // ~75 % Diorama-Maßstab wie bisher
+    const sHoch = hochM * 0.75; // ~75 % Diorama-Maßstab
     const bx = t ? Number(t.x) : (i % 2 ? 30 : -30);
     const bz = t ? Number(t.z) : (i % 3 ? 40 : -40);
-    if (Math.hypot(bx - DIORAMA.cx, bz - DIORAMA.cz) > limit) continue; // außerhalb: weg
+    if (Math.hypot(bx - DIORAMA.cx, bz - DIORAMA.cz) > limit) continue;
+
+    // Höhe skaliert über Stamm + vertikale Kronen-Dehnung, Breite bleibt schlank (0.9..1.15)
+    const stammH = Math.max(1.6, sHoch * 0.45);
+    const kroneH = Math.max(1.2, (sHoch - stammH) * 0.45);
+    const breite = 0.9 + ((i * 17) % 26) / 100;
+    const rotY = ((i * 73) % 360) * (Math.PI / 180);
+
     dummy.position.set(bx, 0, bz);
-    dummy.scale.set(1, sHoch, 1); // Höhe skaliert, Breite konstanter Standard
+    dummy.rotation.set(0, rotY, 0);
+    dummy.scale.set(1, stammH, 1);
     dummy.updateMatrix();
     baeumeStamm.setMatrixAt(plaziert, dummy.matrix);
+
+    dummy.position.set(bx, stammH + kroneH * 0.55, bz);
+    dummy.scale.set(breite, Math.max(0.85, kroneH * 0.75), breite);
+    dummy.updateMatrix();
+    baeumeKrone.setMatrixAt(plaziert, dummy.matrix);
+
+    dummy.position.set(bx + Math.sin(rotY) * 0.25, stammH + kroneH * 1.15, bz + Math.cos(rotY) * 0.25);
+    dummy.scale.set(breite * 0.9, Math.max(0.75, kroneH * 0.65), breite * 0.9);
+    dummy.updateMatrix();
+    baeumeKroneTop.setMatrixAt(plaziert, dummy.matrix);
+
+    const col = gruenToene[i % gruenToene.length];
+    baeumeKrone.setColorAt(plaziert, col);
+    baeumeKroneTop.setColorAt(plaziert, col);
     plaziert += 1;
   }
-  baeumeStamm.count = plaziert; // ungesetzte Slots weg (keine Geisterbäume)
-  baeumeStamm.instanceMatrix.needsUpdate = true;
-  scene.add(baeumeStamm);
+  for (const m of [baeumeStamm, baeumeKrone, baeumeKroneTop]) {
+    m.count = plaziert;
+    m.instanceMatrix.needsUpdate = true;
+    if (m.instanceColor) m.instanceColor.needsUpdate = true;
+    scene.add(m);
+  }
 }
 function wolkenFaerben() {
   const st = tageszeitZustand(hamburgStundeDezimal());
