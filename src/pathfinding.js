@@ -32,6 +32,45 @@ function naechsterKnoten(knotenMap, x, z) {
   return { knoten: best, distanzM: bestD };
 }
 
+// Orthogonal-Projektion von (x, z) auf das naechste Strassen-Segment in navGraph.edges.
+// Liefert den unsichtbaren Hauseingangspunkt direkt auf der naechstgelegenen Strasse.
+function naechsterStrassenPunkt(navGraph, x, z) {
+  const { knoten } = baueAdjazenz(navGraph);
+  let best = null;
+  let bestD = Infinity;
+  for (const [aId, bId] of (navGraph && navGraph.edges) || []) {
+    const A = knoten.get(String(aId));
+    const B = knoten.get(String(bId));
+    if (!A || !B) continue;
+    const dx = B.x - A.x;
+    const dz = B.z - A.z;
+    const len2 = dx * dx + dz * dz;
+    const t = len2 > 1e-6 ? Math.max(0, Math.min(1, ((x - A.x) * dx + (z - A.z) * dz) / len2)) : 0;
+    const px = A.x + t * dx;
+    const pz = A.z + t * dz;
+    const d = Math.hypot(px - x, pz - z);
+    if (d < bestD) {
+      bestD = d;
+      const dA = Math.hypot(px - A.x, pz - A.z);
+      const dB = Math.hypot(px - B.x, pz - B.z);
+      best = {
+        x: Math.round(px * 10) / 10,
+        z: Math.round(pz * 10) / 10,
+        edgeA: A.id,
+        edgeB: B.id,
+        knotenId: dA <= dB ? A.id : B.id,
+        distanzM: Math.round(d * 10) / 10,
+      };
+    }
+  }
+  if (!best) {
+    const nk = naechsterKnoten(knoten, x, z);
+    if (!nk.knoten) return null;
+    return { x: nk.knoten.x, z: nk.knoten.z, edgeA: nk.knoten.id, edgeB: nk.knoten.id, knotenId: nk.knoten.id, distanzM: Math.round(nk.distanzM * 10) / 10 };
+  }
+  return best;
+}
+
 // A* von startId nach zielId. Gibt { pfad, weg, distanzM } zurueck.
 function findeRoute(navGraph, startId, zielId) {
   const { knoten, adj } = baueAdjazenz(navGraph);
@@ -79,18 +118,93 @@ function findeRoute(navGraph, startId, zielId) {
   return { pfad: [], weg: [], distanzM: Infinity, keineRoute: true };
 }
 
-// Bequem: Koordinaten -> naechste Knoten -> A*-Route.
-function findeWegFuerKoordinaten(navGraph, startX, startZ, zielX, zielZ) {
-  const { knoten } = baueAdjazenz(navGraph);
-  const s = naechsterKnoten(knoten, startX, startZ);
-  const z = naechsterKnoten(knoten, zielX, zielZ);
-  const r = findeRoute(navGraph, s.knoten.id, z.knoten.id);
-  return { startKnoten: s, zielKnoten: z, ...r };
+// A* zwischen beliebigen Koordinaten über ihre Strassen-Projektionen (Hauseingangspunkte).
+// Kein diagonales Querfeldein-Laufen durch Haeuserbloecke!
+function findeRouteZwischenPunkten(navGraph, startX, startZ, zielX, zielZ, opts = {}) {
+  const { knoten, adj } = baueAdjazenz(navGraph);
+  const sEnt = naechsterStrassenPunkt(navGraph, startX, startZ);
+  const zEnt = naechsterStrassenPunkt(navGraph, zielX, zielZ);
+  if (!sEnt || !zEnt) return { startKnoten: null, zielKnoten: null, pfad: [], weg: [], distanzM: Infinity, keineRoute: true };
+
+  const sId = '__start_ent';
+  const zId = '__ziel_ent';
+  knoten.set(sId, { id: sId, x: sEnt.x, z: sEnt.z });
+  knoten.set(zId, { id: zId, x: zEnt.x, z: zEnt.z });
+  adj.set(sId, []);
+  adj.set(zId, []);
+
+  const verbinde = (u, v) => {
+    const ku = knoten.get(u);
+    const kv = knoten.get(v);
+    if (!ku || !kv || u === v) return;
+    const d = dist(ku, kv);
+    adj.get(u).push({ nach: v, kosten: d });
+    adj.get(v).push({ nach: u, kosten: d });
+  };
+  verbinde(sId, sEnt.edgeA);
+  verbinde(sId, sEnt.edgeB);
+  verbinde(zId, zEnt.edgeA);
+  verbinde(zId, zEnt.edgeB);
+  // Gleiches Strassensegment? Direkte Verbindung entlang der Strasse erlauben.
+  if ((sEnt.edgeA === zEnt.edgeA && sEnt.edgeB === zEnt.edgeB) || (sEnt.edgeA === zEnt.edgeB && sEnt.edgeB === zEnt.edgeA)) {
+    verbinde(sId, zId);
+  }
+
+  const h = (id) => dist(knoten.get(id), knoten.get(zId));
+  const offen = [{ id: sId, f: h(sId) }];
+  const gWert = new Map([[sId, 0]]);
+  const herkunft = new Map();
+  const geschlossen = new Set();
+
+  while (offen.length > 0) {
+    let bi = 0;
+    for (let i = 1; i < offen.length; i += 1) {
+      if (offen[i].f < offen[bi].f) bi = i;
+    }
+    const akt = offen.splice(bi, 1)[0].id;
+    if (akt === zId) {
+      const pfad = [zId];
+      let c = zId;
+      while (herkunft.has(c)) { c = herkunft.get(c); pfad.unshift(c); }
+      const weg = pfad.map((id) => ({ x: knoten.get(id).x, z: knoten.get(id).z }));
+      if (opts.mitStartPunkt && Math.hypot(startX - sEnt.x, startZ - sEnt.z) > 0.5) {
+        weg.unshift({ x: Math.round(startX * 10) / 10, z: Math.round(startZ * 10) / 10 });
+      }
+      if (opts.mitZielPunkt && Math.hypot(zielX - zEnt.x, zielZ - zEnt.z) > 0.5) {
+        weg.push({ x: Math.round(zielX * 10) / 10, z: Math.round(zielZ * 10) / 10 });
+      }
+      let d = 0;
+      for (let i = 1; i < weg.length; i += 1) d += Math.hypot(weg[i].x - weg[i - 1].x, weg[i].z - weg[i - 1].z);
+      return {
+        startKnoten: { knoten: sEnt, distanzM: sEnt.distanzM },
+        zielKnoten: { knoten: zEnt, distanzM: zEnt.distanzM },
+        pfad: pfad.filter((id) => id !== sId && id !== zId),
+        weg,
+        distanzM: Math.round(d * 10) / 10,
+      };
+    }
+    if (geschlossen.has(akt)) continue;
+    geschlossen.add(akt);
+    for (const kante of adj.get(akt)) {
+      if (geschlossen.has(kante.nach)) continue;
+      const gNeu = gWert.get(akt) + kante.kosten;
+      if (gNeu < (gWert.get(kante.nach) ?? Infinity)) {
+        gWert.set(kante.nach, gNeu);
+        herkunft.set(kante.nach, akt);
+        offen.push({ id: kante.nach, f: gNeu + h(kante.nach) });
+      }
+    }
+  }
+  return { startKnoten: { knoten: sEnt, distanzM: sEnt.distanzM }, zielKnoten: { knoten: zEnt, distanzM: zEnt.distanzM }, pfad: [], weg: [], distanzM: Infinity, keineRoute: true };
 }
 
-// POI-Snap: jeder POI bekommt seinen naechsten Strassenknoten (entryNodeId).
-// Laufzeit-Cache (navGraph ist statisch aus data/kiez_map.json) – kein DB-Umbau.
-// Rueckgabe: Map poiId -> { knotenId, x, z, distanzM }.
+// Bequem: Koordinaten -> Strassen-Eingangspunkte -> A*-Route.
+function findeWegFuerKoordinaten(navGraph, startX, startZ, zielX, zielZ, opts) {
+  return findeRouteZwischenPunkten(navGraph, startX, startZ, zielX, zielZ, opts);
+}
+
+// POI-Snap: jeder POI bekommt seinen unsichtbaren Hauseingangspunkt direkt auf
+// der naechstgelegenen Strassen-Kante (Orthogonal-Projektion).
 const _snapCache = new Map();
 function _cacheSchluessel(navGraph) {
   const n = (navGraph && navGraph.nodes && navGraph.nodes.length) || 0;
@@ -101,30 +215,26 @@ function _cacheSchluessel(navGraph) {
 function snappePois(navGraph, pois) {
   const key = _cacheSchluessel(navGraph) + '#' + pois.map((p) => p.id).join(',');
   if (_snapCache.has(key)) return _snapCache.get(key);
-  const { knoten } = baueAdjazenz(navGraph);
   const snap = new Map();
   for (const p of pois) {
-    const s = naechsterKnoten(knoten, Number(p.pos_x), Number(p.pos_z));
-    snap.set(p.id, { knotenId: s.knoten.id, x: s.knoten.x, z: s.knoten.z, distanzM: Math.round(s.distanzM * 10) / 10 });
+    const s = naechsterStrassenPunkt(navGraph, Number(p.pos_x), Number(p.pos_z));
+    if (s) snap.set(p.id, s);
   }
   _snapCache.set(key, snap);
   return snap;
 }
 
-// POI-zu-POI-Route (liest Koordinaten aus Seed oder DB-Zeilen).
+// POI-zu-POI-Route (mit unsichtbaren Hauseingangspunkten an der naechstgelegenen Strasse).
 function findePoiRoute(navGraph, pois, startPoiId, zielPoiId) {
   const idx = new Map(pois.map((p) => [p.id, p]));
   const s = idx.get(startPoiId);
   const z = idx.get(zielPoiId);
   if (!s) throw new Error('Start-POI unbekannt: ' + startPoiId);
   if (!z) throw new Error('Ziel-POI unbekannt: ' + zielPoiId);
-  // PATHFINDING-FIX: POIs liegen teils in Gebaeude-Footprints – Route immer
-  // Knoten -> entryNodeId rechnen, damit niemand quer durch Waende abkuerzt.
-  const snap = snappePois(navGraph, [s, z]);
-  const sNode = snap.get(s.id);
-  const zNode = snap.get(z.id);
-  const r = findeRoute(navGraph, sNode.knotenId, zNode.knotenId);
-  return { startPoi: s, zielPoi: z, startKnoten: { knoten: sNode, distanzM: sNode.distanzM }, zielKnoten: { knoten: zNode, distanzM: zNode.distanzM }, ...r };
+  return findeRouteZwischenPunkten(navGraph, Number(s.pos_x), Number(s.pos_z), Number(z.pos_x), Number(z.pos_z), {
+    mitStartPunkt: true,
+    mitZielPunkt: true,
+  });
 }
 
-module.exports = { dist, baueAdjazenz, naechsterKnoten, findeRoute, findeWegFuerKoordinaten, findePoiRoute, snappePois };
+module.exports = { dist, baueAdjazenz, naechsterKnoten, naechsterStrassenPunkt, findeRoute, findeRouteZwischenPunkten, findeWegFuerKoordinaten, findePoiRoute, snappePois };

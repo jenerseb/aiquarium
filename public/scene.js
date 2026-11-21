@@ -58,9 +58,9 @@ const Z = {
   pois: new Map(), poiSchilder: new Map(), gebaeude: new Map(),
   figur: null, gedanke: '',
   modus: 'pilot', blende: null,
-  pilot: { dist: 24, theta: 0, phi: 0.19 },
+  pilot: { dist: 12, theta: 0, phi: -0.18 },
   // Ueberblick ueber die GROSS-Karte (x -445..915, z -277..486): Zentrum ~ (235, 105).
-  over: { dist: 420, theta: 0, phi: 1.25, ziel: new THREE.Vector3(235, 0, 105) },
+  over: { dist: 380, theta: 0, phi: 1.05, ziel: new THREE.Vector3(235, 0, 105) },
 };
 
 // Hamburger Uhrzeit (Europe/Berlin): Dezimalstunde 0..24 + ganze Stunde
@@ -288,22 +288,25 @@ const DIORAMA_LIGHT_UNIFORMS = {
   uLightMap: { value: null },
   uHasLightMap: { value: 0.0 },
   uNightLight: { value: 0.0 },
+  uAktivGebIdx: { value: 0.0 },
 };
 
 function dioramaShader(mat, opts) {
   const fensterRandom = Boolean(opts && opts.fensterRandom);
-  // Rasiermesserscharfer Kreisschnitt + Laternen-Lightmap + zufällige Fensterfarben.
+  const gebIdxAttr = Boolean(opts && opts.gebIdxAttr);
+  // Rasiermesserscharfer Kreisschnitt + Laternen-Lightmap + zufällige Fensterfarben + Indoor-0.66.
   mat.onBeforeCompile = (shader) => {
     shader.uniforms.uDioramaCenter = DIORAMA_LIGHT_UNIFORMS.uDioramaCenter;
     shader.uniforms.uDioramaRadius = DIORAMA_LIGHT_UNIFORMS.uDioramaRadius;
     shader.uniforms.uLightMap = DIORAMA_LIGHT_UNIFORMS.uLightMap;
     shader.uniforms.uHasLightMap = DIORAMA_LIGHT_UNIFORMS.uHasLightMap;
     shader.uniforms.uNightLight = DIORAMA_LIGHT_UNIFORMS.uNightLight;
+    shader.uniforms.uAktivGebIdx = DIORAMA_LIGHT_UNIFORMS.uAktivGebIdx;
     shader.vertexShader = shader.vertexShader
-      .replace('#include <common>', '#include <common>\nvarying vec3 vWorldPos;')
-      .replace('#include <worldpos_vertex>', '#include <worldpos_vertex>\nvWorldPos = (modelMatrix * vec4(transformed, 1.0)).xyz;');
+      .replace('#include <common>', `#include <common>\nvarying vec3 vWorldPos;${gebIdxAttr ? '\nattribute float aGebIdx;\nvarying float vGebIdx;' : ''}`)
+      .replace('#include <worldpos_vertex>', `#include <worldpos_vertex>\nvWorldPos = (modelMatrix * vec4(transformed, 1.0)).xyz;${gebIdxAttr ? '\nvGebIdx = aGebIdx;' : ''}`);
     shader.fragmentShader = shader.fragmentShader
-      .replace('#include <common>', '#include <common>\nvarying vec3 vWorldPos;\nuniform vec2 uDioramaCenter;\nuniform float uDioramaRadius;\nuniform sampler2D uLightMap;\nuniform float uHasLightMap;\nuniform float uNightLight;')
+      .replace('#include <common>', `#include <common>\nvarying vec3 vWorldPos;\nuniform vec2 uDioramaCenter;\nuniform float uDioramaRadius;\nuniform sampler2D uLightMap;\nuniform float uHasLightMap;\nuniform float uNightLight;${gebIdxAttr ? '\nvarying float vGebIdx;\nuniform float uAktivGebIdx;' : ''}`)
       .replace('#include <clipping_planes_fragment>', '#include <clipping_planes_fragment>\nif (length(vWorldPos.xz - uDioramaCenter) > uDioramaRadius) discard;')
       .replace(
         '#include <dithering_fragment>',
@@ -315,7 +318,7 @@ function dioramaShader(mat, opts) {
           float hFade = 1.0 - smoothstep(0.0, 9.0, vWorldPos.y);
           vec3 lm = texture2D(uLightMap, lmUv).rgb;
           gl_FragColor.rgb += lm * uNightLight * hFade * (diffuseColor.rgb * 2.05 + vec3(0.09, 0.085, 0.065));
-        }
+        }${gebIdxAttr ? '\n        if (uAktivGebIdx > 0.5 && abs(vGebIdx - uAktivGebIdx) < 0.4) gl_FragColor.a *= 0.66;' : ''}
         #include <dithering_fragment>`
       );
     if (fensterRandom) {
@@ -332,7 +335,7 @@ function dioramaShader(mat, opts) {
       );
     }
   };
-  mat.customProgramCacheKey = () => (fensterRandom ? 'diorama-kreis-fenster-lm' : 'diorama-kreis-lm');
+  mat.customProgramCacheKey = () => `diorama-kreis-lm-${fensterRandom ? 'f' : '0'}-${gebIdxAttr ? 'g' : '0'}`;
   return mat;
 }
 // --- Boden, Strassen, Parks ------------------------------------------------------------
@@ -794,12 +797,16 @@ function baueDachLuftbild(tex) {
   if (!gruppe || !lod.length) return; // noch keine Gebaeude / kein LoD2-Modus
   const posArr = [];
   const uvArr = [];
+  const gebIdxArr = [];
   const span = 2 * DIORAMA.r;
-  for (const b of lod) {
+  for (let i = 0; i < lod.length; i += 1) {
+    const b = lod[i];
+    const idx = b._idx || (i + 1);
     for (const tri of b.roofTriangles || []) {
       for (const p of tri) {
         posArr.push(p[0], p[1] * LOD_SKALA, p[2]);
         uvArr.push((p[0] - (DIORAMA.cx - DIORAMA.r)) / span, ((DIORAMA.cz + DIORAMA.r) - p[2]) / span);
+        gebIdxArr.push(idx);
       }
     }
   }
@@ -807,9 +814,10 @@ function baueDachLuftbild(tex) {
   const geo = new THREE.BufferGeometry();
   geo.setAttribute('position', new THREE.Float32BufferAttribute(posArr, 3));
   geo.setAttribute('uv', new THREE.Float32BufferAttribute(uvArr, 2));
+  geo.setAttribute('aGebIdx', new THREE.Float32BufferAttribute(gebIdxArr, 1));
   geo.computeVertexNormals();
   const dachTint = new THREE.Color().setScalar(DACH_HELLIGKEIT);
-  dachLuftMesh = new THREE.Mesh(geo, dioramaShader(new THREE.MeshLambertMaterial({ map: tex, color: dachTint, ...(DEV ? { transparent: true, opacity: 0.66 } : {}) })));
+  dachLuftMesh = new THREE.Mesh(geo, dioramaShader(new THREE.MeshLambertMaterial({ map: tex, color: dachTint, transparent: true, opacity: DEV ? 0.66 : 1.0, depthWrite: true }), { gebIdxAttr: true }));
   dachLuftMesh.castShadow = true;
   dachLuftMesh.receiveShadow = true;
   scene.add(dachLuftMesh);
@@ -833,11 +841,16 @@ function baueLoD2(lod) {
   const wandPos = [];
   const wandCol = [];
   const wandUV = [];
+  const wandGebIdx = [];
   const dachPos = [];
   const dachCol = [];
+  const dachGebIdx = [];
   const tmpFarbe = new THREE.Color();
   // Pro Gebäude: Dreiecke einsammeln (y bereits ab 0, Skala 0.75 anwenden).
-  for (const b of lod) {
+  for (let i = 0; i < lod.length; i += 1) {
+    const b = lod[i];
+    const idx = i + 1;
+    b._idx = idx;
     tmpFarbe.setHex(lodWandfarbe(b.id));
     const wr = 0.92 + ((String(b.id).length * 7) % 12) / 100;
     for (const tri of b.wallTriangles || []) {
@@ -849,6 +862,7 @@ function baueLoD2(lod) {
         // u diagonal (x - z) damit alle Wandrichtungen ohne Face-Info kacheln.
         wandUV.push((p[0] - p[2]) / FASSADE_KACHEL, wy / FASSADE_KACHEL);
         wandCol.push(tmpFarbe.r * wr * ao, tmpFarbe.g * wr * ao, tmpFarbe.b * wr * ao);
+        wandGebIdx.push(idx);
       }
     }
     tmpFarbe.setHex(LOD_DACHFARBEN.flachdach).lerp(new THREE.Color(lodDachfarbe(b)), 0.85).multiplyScalar(DACH_HELLIGKEIT);
@@ -856,13 +870,15 @@ function baueLoD2(lod) {
       for (const p of tri) {
         dachPos.push(p[0], p[1] * LOD_SKALA, p[2]);
         dachCol.push(tmpFarbe.r, tmpFarbe.g, tmpFarbe.b);
+        dachGebIdx.push(idx);
       }
     }
   }
-  function meshAus(posArr, colArr, uvArr) {
+  function meshAus(posArr, colArr, uvArr, gebIdxArr) {
     const geo = new THREE.BufferGeometry();
     geo.setAttribute('position', new THREE.Float32BufferAttribute(posArr, 3));
     geo.setAttribute('color', new THREE.Float32BufferAttribute(colArr, 3));
+    geo.setAttribute('aGebIdx', new THREE.Float32BufferAttribute(gebIdxArr, 1));
     if (uvArr) geo.setAttribute('uv', new THREE.Float32BufferAttribute(uvArr, 2));
     geo.computeVertexNormals();
     const mat = dioramaShader(new THREE.MeshLambertMaterial({
@@ -874,8 +890,10 @@ function baueLoD2(lod) {
         emissiveMap: fassadenEmissive(),
         emissiveIntensity: (LICHT && LICHT.fensterLicht > 0.35) ? LICHT.fensterLicht * 1.55 : 0.0,
       } : {}),
-      ...(DEV ? { transparent: true, opacity: 0.66 } : {}),
-    }), { fensterRandom: Boolean(uvArr) });
+      transparent: true,
+      opacity: DEV ? 0.66 : 1.0,
+      depthWrite: true,
+    }), { fensterRandom: Boolean(uvArr), gebIdxAttr: true });
     if (uvArr) lodWandMat = mat;
     const mesh = new THREE.Mesh(geo, mat);
     mesh.castShadow = true;
@@ -883,8 +901,8 @@ function baueLoD2(lod) {
     mesh.position.set(0, 0, 0);
     return mesh;
   }
-  const waende = meshAus(wandPos, wandCol, wandUV);
-  const daecher = meshAus(dachPos, dachCol, null);
+  const waende = meshAus(wandPos, wandCol, wandUV, wandGebIdx);
+  const daecher = meshAus(dachPos, dachCol, null, dachGebIdx);
   const gruppe = new THREE.Group();
   gruppe.add(waende, daecher);
   gruppe.userData.daecher = daecher; // Referenz fuer den Luftbild-Tausch
@@ -895,16 +913,17 @@ function baueLoD2(lod) {
   console.log(`[lod2] ${lod.length} gebäude gemergt: ${Math.round(wandPos.length / 9)} wand- + ${Math.round(dachPos.length / 9)} dach-dreiecke, 2 draw calls`);
 }
 
-// LoD2-Highlight: Overlay-Mesh NUR für das betretene POI-Haus. KEIN Zusatzlicht,
-// KEINE Fremdfarbe mehr: das Haus pulsiert in seiner EIGENEN Wandfarbe
-// (emissive-Puls, polygonOffset gegen Z-Fighting mit dem gemergten Mesh).
+// LoD2-Highlight: Betretenes Gebäude auf opacity 0.66 im Hauptmesh + 3D-Overlay (Wände & Dach)
+// in Hellgelb pulsierend bei opacity 0.25.
 function setzeLoD2Highlight(gebId) {
-  if (lodHighlight) { scene.remove(lodHighlight); lodHighlight = null; }
+  if (lodHighlight) { scene.remove(lodHighlight); lodHighlight.geometry.dispose(); lodHighlight.material.dispose(); lodHighlight = null; }
   if (glowLicht) { scene.remove(glowLicht); glowLicht = null; }
+  DIORAMA_LIGHT_UNIFORMS.uAktivGebIdx.value = 0.0;
   if (!gebId) return;
   const lod = (Z.karte && Z.karte.lod2) || [];
   const b = lod.find((g) => g.id === gebId);
   if (!b) return;
+  DIORAMA_LIGHT_UNIFORMS.uAktivGebIdx.value = b._idx || 0.0;
   const posArr = [];
   for (const tri of (b.wallTriangles || []).concat(b.roofTriangles || [])) {
     for (const p of tri) posArr.push(p[0], p[1] * LOD_SKALA, p[2]);
@@ -913,10 +932,10 @@ function setzeLoD2Highlight(gebId) {
   const geo = new THREE.BufferGeometry();
   geo.setAttribute('position', new THREE.Float32BufferAttribute(posArr, 3));
   geo.computeVertexNormals();
-  const wand = lodWandfarbe(b.id);
+  const hellgelb = 0xffe866;
   const mat = new THREE.MeshLambertMaterial({
-    color: wand, transparent: true, opacity: 0.22,
-    emissive: wand, emissiveIntensity: 0.0,
+    color: hellgelb, transparent: true, opacity: 0.25,
+    emissive: hellgelb, emissiveIntensity: 0.35,
     polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2,
     depthWrite: false,
   });
@@ -925,21 +944,20 @@ function setzeLoD2Highlight(gebId) {
   scene.add(lodHighlight);
 }
 
-// Puls: betretenes Haus in seiner EIGENEN Farbe etwas heller und wieder normal
-// (~2.2 s Periode, sanft). Wird aus loop() aufgerufen.
+// Puls: betretenes Haus (Wände + Dach) pulsiert sanft in Hellgelb. Wird aus loop() aufgerufen.
 function highlightPulsen(ms) {
-  const p = 0.5 + 0.5 * Math.sin(ms / 700);
-  const st = 0.06 + 0.30 * p;
+  const p = 0.5 + 0.5 * Math.sin(ms / 650);
+  const st = 0.25 + 0.70 * p;
   if (lodHighlight && lodHighlight.material) lodHighlight.material.emissiveIntensity = st;
   for (const m of indoorPuls) m.emissiveIntensity = st;
 }
 
-// Indoor-Transparenz (Extrusions-Modus): genau EIN Einzelhaus halbtransparent.
-let glowLicht = null; // (früher warmer Glow – entfernt; nur noch Puls in Eigenfarbe)
+// Indoor-Transparenz (Extrusions-Modus): genau EIN Einzelhaus halbtransparent (0.66) + hellgelb pulsierend.
+let glowLicht = null;
 let indoorPuls = [];
 function setzeIndoorTransparenz(gebaeudeId) {
   indoorPuls = [];
-  // LoD2-Modus: gemergtes Mesh bleibt, Overlay highlightet das eine Haus.
+  // LoD2-Modus: gemergtes Mesh bleibt, Gebäude selbst 0.66 + Hellgelb-Overlay (0.25) pulsiert.
   if (Z.gebaeude.has('__lod2_walls')) {
     if (!gebaeudeId) setzeLoD2Highlight(null);
     else setzeLoD2Highlight(gebaeudeId);
@@ -950,10 +968,10 @@ function setzeIndoorTransparenz(gebaeudeId) {
     for (const kind of gruppe.children) {
       if (!kind.material) continue;
       kind.material.transparent = DEV || aktiv;
-      kind.material.opacity = aktiv ? 0.55 : (DEV ? 0.66 : 1.0);
+      kind.material.opacity = aktiv ? 0.66 : (DEV ? 0.66 : 1.0);
       kind.material.needsUpdate = false;
       if (kind.material.emissive) {
-        kind.material.emissive.setHex(0xffffff);
+        kind.material.emissive.setHex(0xffe866);
         kind.material.emissiveIntensity = 0;
         if (aktiv) indoorPuls.push(kind.material);
       }
@@ -1502,12 +1520,17 @@ function debugStreckenPanelRendern() {
   el.innerHTML = `<summary>📍 Strecken (${DEBUG_STRECKEN.length}/${MAX_DEBUG_STRECKEN}${aktivTxt})</summary>${zeilen}`;
 }
 
-function figurRouteSetzen(route) {
+function figurRouteSetzen(route, sofort) {
   if (route && Array.isArray(route.waypoints) && route.waypoints.length > 0) {
-    FIGUR_ROUTE = { waypoints: route.waypoints, wegIndex: route.wegIndex || 0 };
-  } else {
-    FIGUR_ROUTE = null;
+    const wp = route.waypoints;
+    const key = `${wp[0].x},${wp[0].z}->${wp[wp.length - 1].x},${wp[wp.length - 1].z}:${wp.length}`;
+    // Bei laufender gleicher Route NICHT wegIndex vom Server überschreiben — sonst
+    // kürzt die 3D-Figur Straßen-Ecken diagonal durch Häuser ab!
+    if (!sofort && FIGUR_ROUTE && FIGUR_ROUTE.key === key) return;
+    FIGUR_ROUTE = { key, waypoints: wp, wegIndex: sofort ? (route.wegIndex || 0) : 0 };
   }
+  // Hinweis: wenn route null wird (Ankunft am Server), läuft FIGUR_ROUTE
+  // seine letzten Waypoints (Hauseingang -> Tür) trotzdem sauber bis zum Ende ab.
 }
 function figurUpdaten(dt) {
   if (!Z.figur) return;
@@ -1577,20 +1600,17 @@ function pinsSchweben(nowMs) {
   }
 }
 
-// --- 2-Modi-Kamera OHNE Snapping -----------------------------------------------------------------
-// pilot: frei um die Figur drehbar (Distanz 5–45 m, Pitch konstant ~10°).
-// overview: Kiez-Blick vom Mittelpunkt (0,0,0), frei schwenk-/zoombar.
-// Wechsel per Smootherstep-Blende t^3*(6t²−15t+10); Start- und End-Pose werden
-// EXAKT aus dem jeweiligen Ziel-Frame gerechnet → kein Einrasten, kein Sprung.
-//
-// Konstanten: PITCH 0.19 rad (~11°) Augenhöhe; START 40° rechts vom Blickwinkel.
-// (Optional: hier könnte beim Initial-Load ein Gebäude-Kollisionscheck ergänzt
-// werden, der theta so lange dreht, bis die Sichtlinie Figur→Kamera frei ist.)
-const PILOT_MIN = 5;
-const PILOT_MAX = 45;
-const PILOT_PITCH = 0.19;
+// --- 2-Modi-Kamera OHNE Snapping (NAH = Charakter, FERN = Kiez) -----------------------------------
+// pilot (NAH):  doppelt so nah (3–22 m, Start 12 m), horizontal 360° drehbar + vertikal
+//               phi in [-20° .. +45°] (-0.35 rad nach unten .. +0.785 rad nach oben schauen).
+// overview (FERN): Kiez-Schweben (1-Finger/Links-Drag = schweben, Rechts-Drag/2-Finger = drehen & neigen).
+const PILOT_MIN = 3;
+const PILOT_MAX = 22;
+const PILOT_PITCH = -0.18; // ~10° leicht nach unten auf die Figur
+const PILOT_PHI_MIN = (-20 * Math.PI) / 180; // max 20° nach unten schauen (Kamera höher)
+const PILOT_PHI_MAX = (45 * Math.PI) / 180;  // max 45° nach oben in den Himmel/Dächer schauen
 const PILOT_START_Versatz = (40 * Math.PI) / 180; // +40° rechts vom Blickwinkel
-const BLEND_DAUER = 1.1; // Sekunden
+const BLEND_DAUER = 0.9; // Sekunden
 
 const smootherstep = (t) => { const x = Math.max(0, Math.min(1, t)); return x * x * x * (x * (x * 6 - 15) + 10); };
 
@@ -1599,19 +1619,35 @@ function figurKopf() {
   return new THREE.Vector3(Z.figur.position.x, 1.8, Z.figur.position.z);
 }
 
-// Ziel-Frame pilot: exakte Pose aus (dist, theta, phi) um den Figur-Kopf
+// Ziel-Frame pilot (NAH): phi < 0 = Kamera höher & schaut bis 20° runter; phi > 0 = Kamera auf ~1.2..1.8m & schaut bis 45° hoch
 function pilotPose(dist, theta, phi) {
   const kopf = figurKopf();
-  const cp = Math.cos(phi);
+  const p = THREE.MathUtils.clamp(phi, PILOT_PHI_MIN, PILOT_PHI_MAX);
+  if (p <= 0) {
+    const el = -p;
+    const cp = Math.cos(el);
+    const pos = new THREE.Vector3(
+      kopf.x + dist * cp * Math.sin(theta),
+      kopf.y + dist * Math.sin(el),
+      kopf.z + dist * cp * Math.cos(theta)
+    );
+    return { position: pos, lookAt: kopf.clone(), up: new THREE.Vector3(0, 1, 0) };
+  }
+  const camY = THREE.MathUtils.lerp(kopf.y, 1.05, Math.min(1, p / 0.5));
   const pos = new THREE.Vector3(
-    kopf.x + dist * cp * Math.sin(theta),
-    kopf.y + dist * Math.sin(phi),
-    kopf.z + dist * cp * Math.cos(theta)
+    kopf.x + dist * Math.sin(theta),
+    camY,
+    kopf.z + dist * Math.cos(theta)
   );
-  return { position: pos, lookAt: kopf.clone(), up: new THREE.Vector3(0, 1, 0) };
+  const lookAt = new THREE.Vector3(
+    kopf.x,
+    camY + dist * Math.tan(p),
+    kopf.z
+  );
+  return { position: pos, lookAt, up: new THREE.Vector3(0, 1, 0) };
 }
 
-// Ziel-Frame overview: Drehpunkt Kiez-Mitte (bzw. gemerktes Ziel), Pose aus Spherical
+// Ziel-Frame overview (FERN): Drehpunkt auf Kiez-Ebene, frei schwebend & neigbar
 function overPose(dist, theta, phi, ziel) {
   const z = ziel || Z.over.ziel;
   const cp = Math.cos(phi);
@@ -1623,9 +1659,6 @@ function overPose(dist, theta, phi, ziel) {
   return { position: pos, lookAt: z.clone(), up: new THREE.Vector3(0, 1, 0) };
 }
 
-// Blende starten: aktuelle Kamera-Pose einfrieren, Ziel-Modus + Ziel-Frame merken.
-// Beim Zurückzoomen nach pilot landet die Kamera bei ±40° zum Blickwinkel –
-// je nachdem, welche Seite weniger Drehung braucht (kein Riesenschwenk).
 function starteBlende(nach, jetzt) {
   const vonPose = {
     position: camera.position.clone(),
@@ -1634,28 +1667,26 @@ function starteBlende(nach, jetzt) {
   };
   let nachPose;
   if (nach === 'overview') {
-    // Übergangsziel: senkrecht über der Figur → Figur exakt in Bildmitte (Punkt 6:
-    // overviewTarget startet auf der Figur, danach frei über den Kiez schiebbar).
+    // overviewTarget startet auf der Figur, danach frei über den Kiez schweben
     const f = Z.figur ? Z.figur.position : new THREE.Vector3(0, 0, 0);
     Z.over.ziel.set(f.x, 0, f.z);
-    Z.over.dist = 260;
-    Z.over.theta = 0.01;
-    Z.over.phi = 1.25;
-    nachPose = { position: new THREE.Vector3(f.x + 0.01, 230, f.z), lookAt: new THREE.Vector3(f.x, 0, f.z), up: new THREE.Vector3(0, 0, -1) };
+    Z.over.dist = 240;
+    Z.over.theta = Z.pilot.theta;
+    Z.over.phi = 1.02;
+    nachPose = overPose(Z.over.dist, Z.over.theta, Z.over.phi, Z.over.ziel);
   } else {
-    // Zurück zu pilot: theta ±40° zum Blickwinkel, kürzere Seite gewinnt
     const figTheta = Z.figur ? Z.figur.rotation.y : 0;
     const a = figTheta + PILOT_START_Versatz;
     const b = figTheta - PILOT_START_Versatz;
     const dAkt = Z.pilot.theta;
     const diff = (x, y) => Math.abs(Math.atan2(Math.sin(x - y), Math.cos(x - y)));
     Z.pilot.theta = diff(a, dAkt) <= diff(b, dAkt) ? a : b;
-    Z.pilot.dist = PILOT_MAX - 4;
+    Z.pilot.dist = 12;
     Z.pilot.phi = PILOT_PITCH;
     nachPose = pilotPose(Z.pilot.dist, Z.pilot.theta, Z.pilot.phi);
   }
   Z.blende = { von: vonPose, nach: nachPose, modus: nach, t: 0, start: jetzt };
-  Z.modus = nach; // logischer Modus sofort (Buttons), Pose blendet weich hinterher
+  Z.modus = nach;
 }
 
 let _lookAt = new THREE.Vector3(0, 1.8, 0);
@@ -1671,19 +1702,10 @@ function kameraUpdaten(dt, jetzt) {
     camera.up.lerpVectors(B.von.up, B.nach.up, k).normalize();
     camera.lookAt(_lookAt);
     if (B.t >= 1) {
-      // Exakter End-Frame (kein Rest-Fehler): Pose = Ziel-Frame auf den Meter genau
       camera.position.copy(B.nach.position);
       _lookAt.copy(B.nach.lookAt);
       camera.up.copy(B.nach.up);
       camera.lookAt(_lookAt);
-      if (B.modus === 'overview') {
-        // Ab jetzt frei um das gemerkte Ziel (Figur-Position beim Wechsel):
-        // Spherical aus der exakten End-Pose ableiten (kein Snap).
-        const off = camera.position.clone().sub(Z.over.ziel);
-        Z.over.dist = THREE.MathUtils.clamp(off.length(), 25, 900);
-        Z.over.theta = Math.atan2(off.x, off.z);
-        Z.over.phi = THREE.MathUtils.clamp(Math.asin(THREE.MathUtils.clamp(off.y / off.length(), -1, 1)), 0.18, 1.52);
-      }
       Z.blende = null;
     }
     return;
@@ -1704,11 +1726,17 @@ function kameraUpdaten(dt, jetzt) {
 }
 
 
-// --- Steuerung: Drag = drehen/schwenken, Wheel = Zoom ---------------------------------------
+// --- Steuerung: NAH = drehen/neigen · FERN = schweben (Links/1-Finger) + drehen (Rechts/2-Finger) ---
 function modusButtonsSync() {
   document.querySelectorAll('#camBtns button').forEach((b) => {
     b.setAttribute('aria-pressed', String((b.dataset.cam === 'overview') === (Z.modus === 'overview')));
   });
+  const hw = $('hinweis');
+  if (hw) {
+    hw.textContent = Z.modus === 'pilot'
+      ? 'NAH: ziehen = rundum & hoch/runter · Rad/Pinch = zoom'
+      : 'FERN: ziehen = schweben · Rechts/2-Finger = drehen · Rad/Pinch = zoom';
+  }
 }
 
 function setzeModusButton(neu) {
@@ -1720,12 +1748,14 @@ function setzeModusButton(neu) {
 
 function bindeSteuerung() {
   const el = renderer.domElement;
-  let drag = null;
+  const pointers = new Map(); // pointerId -> { x, y, button, shift }
+  let letzterPinch = null;
+  let letzterMid = null;
+  let movedDist = 0;
   el.style.touchAction = 'none';
-  // Panning im overview-Modus: Rechts-Drag oder Shift+Links-Drag
-  // verschiebt das Fokus-Ziel flach über XZ (geklemmt auf Scheibe R*0.85 um Center). Touch: 2 Finger.
+
   const klemmeUeber = () => {
-    const r = DIORAMA.r * 0.85;
+    const r = DIORAMA.r * 0.92;
     const dx = Z.over.ziel.x - DIORAMA.cx;
     const dz = Z.over.ziel.z - DIORAMA.cz;
     const d = Math.hypot(dx, dz);
@@ -1736,7 +1766,7 @@ function bindeSteuerung() {
     Z.over.ziel.y = 0;
   };
   function panUm(dxPx, dyPx) {
-    const sk = Z.over.dist / 500; // weiter weg = schneller schieben
+    const sk = Z.over.dist / 520;
     const vor = new THREE.Vector3();
     camera.getWorldDirection(vor);
     vor.y = 0;
@@ -1747,67 +1777,104 @@ function bindeSteuerung() {
     Z.over.ziel.addScaledVector(vor, dyPx * sk);
     klemmeUeber();
   }
+
   el.addEventListener('pointerdown', (e) => {
-    drag = { x: e.clientX, y: e.clientY, pan: (e.button === 2) || e.shiftKey };
+    pointers.set(e.pointerId, { x: e.clientX, y: e.clientY, button: e.button, shift: e.shiftKey });
+    if (pointers.size === 1) movedDist = 0;
+    if (pointers.size === 2) {
+      const [a, b] = [...pointers.values()];
+      letzterPinch = Math.hypot(a.x - b.x, a.y - b.y);
+      letzterMid = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
+    }
     try { el.setPointerCapture(e.pointerId); } catch { /* egal */ }
   });
+
   el.addEventListener('pointermove', (e) => {
-    if (!drag || Z.blende) return;
-    const dx = e.clientX - drag.x;
-    const dy = e.clientY - drag.y;
-    drag = { x: e.clientX, y: e.clientY, pan: drag.pan || e.shiftKey };
-    if (Z.modus === 'pilot') {
-      Z.pilot.theta -= dx * 0.005;
-      // Pitch bleibt konstant (~10°): kein Hoch/Runter beim Drehen
-    } else if (drag.pan) {
-      panUm(dx, dy);
-    } else {
-      // Freies Orbit-Drehen & Neigen (Punkt 6): yaw 360°, pitch 0.18..1.52
-      Z.over.theta -= dx * 0.005;
-      Z.over.phi = THREE.MathUtils.clamp(Z.over.phi + dy * 0.003, 0.18, 1.52);
+    const prev = pointers.get(e.pointerId);
+    if (!prev) return;
+    const dx = e.clientX - prev.x;
+    const dy = e.clientY - prev.y;
+    movedDist += Math.hypot(dx, dy);
+    pointers.set(e.pointerId, { x: e.clientX, y: e.clientY, button: prev.button, shift: prev.shift || e.shiftKey });
+    if (Z.blende) return;
+
+    if (pointers.size === 2) {
+      // 2-Finger-Geste (Mobile/Trackpad): Pinch = Zoom, 2-Finger-Drag = Drehen & Neigen
+      const [a, b] = [...pointers.values()];
+      const pinch = Math.hypot(a.x - b.x, a.y - b.y);
+      const mid = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
+      if (letzterPinch && pinch > 10) {
+        const f = letzterPinch / pinch;
+        if (Z.modus === 'pilot') Z.pilot.dist = THREE.MathUtils.clamp(Z.pilot.dist * f, PILOT_MIN, PILOT_MAX);
+        else Z.over.dist = THREE.MathUtils.clamp(Z.over.dist * f, 35, 900);
+      }
+      if (letzterMid) {
+        const mdx = mid.x - letzterMid.x;
+        const mdy = mid.y - letzterMid.y;
+        if (Z.modus === 'pilot') {
+          Z.pilot.theta -= mdx * 0.0055;
+          Z.pilot.phi = THREE.MathUtils.clamp(Z.pilot.phi - mdy * 0.0045, PILOT_PHI_MIN, PILOT_PHI_MAX);
+        } else {
+          Z.over.theta -= mdx * 0.0055;
+          Z.over.phi = THREE.MathUtils.clamp(Z.over.phi + mdy * 0.004, 0.20, 1.50);
+        }
+      }
+      letzterPinch = pinch;
+      letzterMid = mid;
+      return;
+    }
+
+    if (pointers.size === 1) {
+      if (Z.modus === 'pilot') {
+        Z.pilot.theta -= dx * 0.006;
+        Z.pilot.phi = THREE.MathUtils.clamp(Z.pilot.phi - dy * 0.0045, PILOT_PHI_MIN, PILOT_PHI_MAX);
+      } else if (prev.button === 2 || prev.shift) {
+        // FERN mit Rechts-Drag / Shift: drehen & neigen
+        Z.over.theta -= dx * 0.0055;
+        Z.over.phi = THREE.MathUtils.clamp(Z.over.phi + dy * 0.004, 0.20, 1.50);
+      } else {
+        // FERN mit Links-Drag / 1-Finger: intuitiv über den Kiez schweben!
+        panUm(dx, dy);
+      }
     }
   });
-  const dragEnde = () => { drag = null; };
+
+  const dragEnde = (e) => {
+    pointers.delete(e.pointerId);
+    if (pointers.size < 2) { letzterPinch = null; letzterMid = null; }
+  };
   el.addEventListener('pointerup', dragEnde);
   el.addEventListener('pointercancel', dragEnde);
-  el.addEventListener('contextmenu', (e) => e.preventDefault()); // Rechts-Drag = Pan
-  // WASD/Pfeile schieben das overview-Ziel (Punkt 6)
+  el.addEventListener('contextmenu', (e) => e.preventDefault());
+
+  // WASD / Pfeile: schweben im FERN-Modus entlang der Blickrichtung
   window.addEventListener('keydown', (e) => {
     if (Z.modus !== 'overview' || Z.blende) return;
-    const schritt = Math.max(4, Z.over.dist * 0.05);
+    const schritt = Math.max(5, Z.over.dist * 0.06);
     const taste = e.key.toLowerCase();
-    if (taste === 'w' || taste === 'arrowup') { Z.over.ziel.z -= schritt; e.preventDefault(); }
-    else if (taste === 's' || taste === 'arrowdown') { Z.over.ziel.z += schritt; e.preventDefault(); }
-    else if (taste === 'a' || taste === 'arrowleft') { Z.over.ziel.x -= schritt; e.preventDefault(); }
-    else if (taste === 'd' || taste === 'arrowright') { Z.over.ziel.x += schritt; e.preventDefault(); }
+    if (taste === 'w' || taste === 'arrowup') { panUm(0, schritt * 14); e.preventDefault(); }
+    else if (taste === 's' || taste === 'arrowdown') { panUm(0, -schritt * 14); e.preventDefault(); }
+    else if (taste === 'a' || taste === 'arrowleft') { panUm(schritt * 14, 0); e.preventDefault(); }
+    else if (taste === 'd' || taste === 'arrowright') { panUm(-schritt * 14, 0); e.preventDefault(); }
     else return;
-    klemmeUeber();
   });
-  // 2-Finger-Drag auf Touch = Panning
-  el.addEventListener('touchmove', (e) => {
-    if (Z.modus !== 'overview' || Z.blende || e.touches.length !== 2) return;
-    e.preventDefault();
-    panUm(-2, 0);
-  }, { passive: false });
+
   el.addEventListener('wheel', (e) => {
     e.preventDefault();
     if (Z.blende) return;
     const f = 1 + Math.sign(e.deltaY) * 0.1;
     if (Z.modus === 'pilot') {
-      Z.pilot.dist = THREE.MathUtils.clamp(Z.pilot.dist * f, PILOT_MIN, PILOT_MAX + 20);
-      if (Z.pilot.dist > PILOT_MAX) setzeModusButton('overview');
+      Z.pilot.dist = THREE.MathUtils.clamp(Z.pilot.dist * f, PILOT_MIN, PILOT_MAX);
     } else {
-      // Zoom 25..900 m (Punkt 6); erst unter 25 m geht es zurück zu pilot
-      Z.over.dist = THREE.MathUtils.clamp(Z.over.dist * f, 25, 900);
-      if (Z.over.dist <= 25) setzeModusButton('pilot');
+      Z.over.dist = THREE.MathUtils.clamp(Z.over.dist * f, 35, 900);
     }
   }, { passive: false });
 
-  // Klick auf Gebäude/POI-Schild: Indoor-Transparenz umschalten
+  // Klick auf Gebäude: Indoor-Transparenz umschalten
   const ray = new THREE.Raycaster();
   const maus = new THREE.Vector2();
   el.addEventListener('click', (e) => {
-    if (drag && (Math.abs(e.clientX - drag.x) > 4 || Math.abs(e.clientY - drag.y) > 4)) return;
+    if (movedDist > 6) return;
     maus.set((e.clientX / window.innerWidth) * 2 - 1, -(e.clientY / window.innerHeight) * 2 + 1);
     ray.setFromCamera(maus, camera);
     const gruppen = [...Z.gebaeude.values()];
@@ -1961,7 +2028,7 @@ function staatAnwenden(s, opts) {
   } else {
     figurZielSetzen(ch.pos_x, ch.pos_z, ch.heading_rad);
   }
-  figurRouteSetzen(s.route || null); // Waypoints für weiche Interpolation (Punkt 1)
+  figurRouteSetzen(s.route || null, sofort); // Waypoints für weiche Interpolation (Punkt 1)
   debugStreckenAktualisieren(s);
   if (ch.inside_poi) {
     // Indoor: EXAKT das eine ALKIS-Einzelhaus transparent (world_meta_json.alkis_id).
@@ -2068,6 +2135,11 @@ function bindeGehirn() {
     p.hidden = !an;
     $('btnFeed').setAttribute('aria-pressed', String(an));
   });
+  // Auf Mobile (<= 820 px) startet der Live-Feed eingeklappt für freie Sicht
+  if (typeof window !== 'undefined' && window.matchMedia && window.matchMedia('(max-width: 820px)').matches) {
+    $('feedPanel').hidden = true;
+    $('btnFeed').setAttribute('aria-pressed', 'false');
+  }
 }
 
 async function gehirnLaden() {
@@ -2279,7 +2351,7 @@ async function ladeKarte() {
     // Initial-Kamera: pilot, +40° rechts vom Blickwinkel (Start-Frame, siehe Kamera-Kapitel)
     const h0 = 0; // Blickrichtung initial: +z (wird per State überschrieben)
     Z.pilot.theta = h0 + PILOT_START_Versatz;
-    Z.pilot.dist = 24;
+    Z.pilot.dist = 12;
     Z.pilot.phi = PILOT_PITCH;
     if (Z.figur) Z.figur.rotation.y = h0;
     const pose = pilotPose(Z.pilot.dist, Z.pilot.theta, Z.pilot.phi);

@@ -236,36 +236,26 @@ function waehleExploreZiel(db, karte, ch) {
   return kands[0].k;
 }
 
-// Route starten: A* zum Ziel, Waypoints in Meta ablegen.
-// PATHFINDING-FIX: Ziel ist immer ein Strassenknoten (entryNodeId) –
-// die Figur bleibt auf Graph-Kanten; erst bei Ankunft wird auf die
-// POI-Koordinate gesetzt ("Tuerschwelle betreten", kein Wand-Durchbruch).
-// Gibt null zurueck, wenn keine Graph-Route existiert (keine Luftlinie!).
+// Route starten: A* über die unsichtbaren Hauseingangspunkte auf der nächsten Strasse.
+// So verlässt/betritt die Figur Gebäude immer über den nächsten Straßenpunkt,
+// folgt allen Gehwegen/Ecken und läuft niemals diagonal durch Häuserblöcke.
 function starteRoute(db, karte, ch, zielX, zielZ, zielPoi) {
   const navGraph = karte.navGraph;
+  let tx = Number(zielX);
+  let tz = Number(zielZ);
+  let mitZielPunkt = false;
   if (navGraph && zielPoi) {
-    const poiZeilen = db.prepare('SELECT id, pos_x, pos_z FROM pois').all();
-    const idx = new Map(poiZeilen.map((p) => [p.id, p]));
-    const ziel = idx.get(zielPoi);
+    const ziel = db.prepare('SELECT id, pos_x, pos_z FROM pois WHERE id = ?').get(zielPoi);
     if (ziel) {
-      const snap = pf.snappePois(navGraph, [ziel]);
-      const eintritt = snap.get(ziel.id);
-      if (eintritt) {
-        const start = pf.findeWegFuerKoordinaten(navGraph, Number(ch.pos_x), Number(ch.pos_z), eintritt.x, eintritt.z);
-        const weg = (start && start.weg && !start.keineRoute) ? start.weg : [];
-        if (weg.length < 2) return null;
-        const meta = {
-          route: weg.map((p) => ({ x: Math.round(Number(p.x) * 10) / 10, z: Math.round(Number(p.z) * 10) / 10 })),
-          wegIndex: 0,
-          zielPoi: zielPoi || null,
-          restM: Math.round((start.distanzM || 0) * 10) / 10,
-        };
-        speichereRoute(db, ch, meta);
-        return meta;
-      }
+      tx = Number(ziel.pos_x);
+      tz = Number(ziel.pos_z);
+      mitZielPunkt = true;
     }
   }
-  const start = pf.findeWegFuerKoordinaten(navGraph, Number(ch.pos_x), Number(ch.pos_z), Number(zielX), Number(zielZ));
+  const start = pf.findeRouteZwischenPunkten(
+    navGraph, Number(ch.pos_x), Number(ch.pos_z), tx, tz,
+    { mitStartPunkt: Boolean(ch.inside_poi), mitZielPunkt }
+  );
   const weg = (start && start.weg && !start.keineRoute) ? start.weg : [];
   if (weg.length < 2) return null;
   const meta = {
@@ -350,6 +340,7 @@ async function fuehreSchrittAus(db, deps, characterId, schritt, jetztMs) {
     }
     ch.current_action = 'walk_to';
     ch.action_target_poi = ziel.id;
+    ch.inside_poi = null; // Unterwegs draußen auf den Wegen
     lasseZeitVergehen(ch, 20); // ein Tick = 20 s Aquarium-Zeit
     const schritt = geheSchritt(db, ch, meta);
     if (!schritt.angekommen) {
@@ -390,6 +381,7 @@ async function fuehreSchrittAus(db, deps, characterId, schritt, jetztMs) {
     }
     if (meta) {
       ch.current_action = 'explore_street';
+      ch.inside_poi = null; // Draußen unterwegs
       lasseZeitVergehen(ch, 20);
       const schritt2 = geheSchritt(db, ch, meta);
       const neu = entdeckeUmgebung(db, ch);
