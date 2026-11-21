@@ -7,8 +7,9 @@ import { TEXTUR_FAKTOR, DIORAMA_FASSADEN, DIORAMA_DAECHER, dioramaFarbe } from "
 
 const $ = (id) => document.getElementById(id);
 const DEV = new URLSearchParams(location.search).has('dev') || new URLSearchParams(location.search).get('mode') === 'dev';
-// TEST-FLAG: Gruenzeug (Parks + Baeume) sowie Strassen/Wege nur im Dev-Modus (?dev / ?mode=dev) einblenden.
-const ZEIGE_GRUEN = DEV;
+const CLAY = new URLSearchParams(location.search).get('map') === 'clay';
+// TEST-FLAG: Gruenzeug (Parks + Baeume) im Dev-Modus oder bei ?map=clay einblenden.
+const ZEIGE_GRUEN = DEV || CLAY;
 // Helligkeit aller Dachgrafiken (1.0 = Original, < 1.0 = dunkler, z. B. 0.55..0.85)
 const DACH_HELLIGKEIT = 0.6;
 // Optionaler Uhrzeit-Override zum Testen von Auf-/Untergang (null = echte Hamburger Zeit, sonst z. B. 6.5, 13.0, 19.5, 23.0)
@@ -356,12 +357,12 @@ function baueBoden() {
     bodenGruppe = null;
   }
   const gruppe = new THREE.Group();
-  // 3D-Sockel: nur noch dunkler Seiten-Mantel (openEnded=true), grüne Oberseite deaktiviert -> nur Luftbild bei y=0.005
-  const geo = new THREE.CylinderGeometry(DIORAMA.r, DIORAMA.r * 0.96, 16, 128, 1, true);
-  // const oben = new THREE.MeshLambertMaterial({ color: 0x6f7d4e });
+  // 3D-Sockel: bei ?map=clay mit grüner Oberseite (ohne Luftbild), sonst nur Seiten-Mantel + Luftbild
+  const geo = new THREE.CylinderGeometry(DIORAMA.r, DIORAMA.r * 0.96, 16, 128, 1, !CLAY);
   const seite = new THREE.MeshLambertMaterial({ color: 0x2b2d30 });
-  const boden = new THREE.Mesh(geo, seite);
-  // boden.receiveShadow = true; // Grüne Oberseite aus -> Schatten fallen nur noch aufs Luftbild
+  const bodenMat = CLAY ? [seite, new THREE.MeshLambertMaterial({ color: 0x6f7d4e }), seite] : seite;
+  const boden = new THREE.Mesh(geo, bodenMat);
+  if (CLAY) boden.receiveShadow = true;
   boden.position.set(DIORAMA.cx, -8, DIORAMA.cz);
   gruppe.add(boden);
   // Modellbau-Zierring am äußeren Diorama-Rand
@@ -370,8 +371,8 @@ function baueBoden() {
   const randMesh = new THREE.Mesh(randGeo, new THREE.MeshBasicMaterial({ color: 0x3b424c }));
   randMesh.position.set(DIORAMA.cx, 0.012, DIORAMA.cz);
   gruppe.add(randMesh);
-  // DIORAMA_V1: optionales Luftbild-Overlay (/kiez-aerial.jpg in public/), sonst prozedural
-  new THREE.TextureLoader().load("/kiez-aerial.jpg",
+  // DIORAMA_V1: optionales Luftbild-Overlay (/kiez-aerial.jpg in public/), bei ?map=clay ausblenden
+  if (!CLAY) new THREE.TextureLoader().load("/kiez-aerial.jpg",
     (tex) => {
       // Stale-Guard: wenn der Boden inzwischen neu gebaut wurde (ladeKarte()),
       // darf das Bild NICHT mehr in die entfernte Gruppe gehaengt werden.
@@ -785,6 +786,7 @@ function fassadenEmissive() {
 let dachLuftMesh = null;
 let luftTex = null;
 function baueDachLuftbild(tex) {
+  if (CLAY) return;
   luftTex = tex;
   if (dachLuftMesh) {
     scene.remove(dachLuftMesh);
