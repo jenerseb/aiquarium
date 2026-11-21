@@ -1027,12 +1027,14 @@ function gebaeudeHoeheBei(x, z) {
 
 function pinMesh(farbe, deckkraft) {
   const gruppe = new THREE.Group();
-  const mat = new THREE.MeshBasicMaterial({ color: farbe, transparent: deckkraft < 1, opacity: deckkraft });
+  const mat = new THREE.MeshBasicMaterial({ color: farbe, transparent: true, opacity: deckkraft, depthTest: false, depthWrite: false });
   const kegel = new THREE.Mesh(new THREE.ConeGeometry(1.4, 3.2, 12), mat);
   kegel.rotation.x = Math.PI; // Spitze nach unten
+  kegel.renderOrder = 20;
   gruppe.add(kegel);
   const stange = new THREE.Mesh(new THREE.CylinderGeometry(0.18, 0.18, 1, 8), mat);
   stange.position.y = 2.2;
+  stange.renderOrder = 20;
   gruppe.add(stange);
   return gruppe;
 }
@@ -1084,17 +1086,19 @@ function bauMarkerGruppe(p, index) {
   gruppe.userData.pin = pin;
   gruppe.userData.pinBaseY = hoehe;
   gruppe.userData.pinPhase = (Number.isFinite(index) ? index : 0) * 0.9;
-  // Markante, dicke senkrechte Säule bis zum Boden (y = 0)
+  // Markante, dicke senkrechte Säule bis zum Boden (y = 0) – immer vor Häusern sichtbar
   const linienGeo = new THREE.CylinderGeometry(0.24, 0.24, hoehe, 8);
   const linienFarbe = bekannt ? 0xffa800 : 0x6ea8ff;
-  const linie = new THREE.Mesh(linienGeo, new THREE.MeshBasicMaterial({ color: linienFarbe, transparent: true, opacity: bekannt ? 1.0 : 0.8 }));
+  const linie = new THREE.Mesh(linienGeo, new THREE.MeshBasicMaterial({ color: linienFarbe, transparent: true, opacity: bekannt ? 1.0 : 0.8, depthTest: false, depthWrite: false }));
   linie.position.y = hoehe / 2;
+  linie.renderOrder = 19;
   gruppe.add(linie);
   // Dev-Modus: unentdeckte Orte offenlegen – „?“ + Name in zweiter Zeile darunter
   const schild = (bekannt || !DEV)
     ? textSprite(bekannt ? p.name : '?', bekannt)
     : textSpriteZweizeilig('?', p.name);
   schild.position.y = hoehe + 3.4;
+  schild.renderOrder = 21;
   gruppe.add(schild);
   gruppe.position.set(Number(p.pos_x), 0, Number(p.pos_z));
   gruppe.userData.poiId = p.id;
@@ -2019,8 +2023,13 @@ function hudAktualisieren() {
     $(num).textContent = suffix || String(Math.round(wert));
   };
   balken('bGesund', 'nGesund', Number(ch.gesund) || 0, 100);
-  const frohWert = Number(ch.froh) || 0;
-  balken('bFroh', 'nFroh', frohWert + 50, 100, String(Math.round(frohWert)));
+  const frohWert = Math.max(-50, Math.min(50, Number(ch.froh) || 0));
+  const frohBreite = (Math.abs(frohWert) / 50) * 50;
+  const bFroh = $('bFroh');
+  bFroh.style.left = frohWert >= 0 ? '50%' : `${50 - frohBreite}%`;
+  bFroh.style.width = `${frohBreite}%`;
+  bFroh.style.background = frohWert >= 0 ? 'var(--himmel)' : 'var(--rot)';
+  $('nFroh').textContent = String(Math.round(frohWert));
   balken('bHunger', 'nHunger', Number(ch.hunger) || 0, 100);
   balken('bMued', 'nMued', Number(ch.erschoepfung) || 0, 100);
   $('bGeld').style.width = `${Math.max(2, Math.min(100, (Number(ch.geld) || 0) / 1.2))}%`;

@@ -30,6 +30,7 @@
   .balken{display:grid;grid-template-columns:86px 1fr 44px;align-items:center;gap:8px;font-size:.68rem;color:var(--mu)}
   .schiene{position:relative;height:7px;background:rgba(255,255,255,.1);border-radius:99px;overflow:hidden}
   .schiene i{display:block;height:100%;border-radius:99px;transition:width .5s ease}
+  #bFroh{position:absolute;top:0;transition:width .5s ease,left .5s ease,background .3s ease}
   .schiene .chunk{position:absolute;top:0;bottom:0;width:1px;background:rgba(0,0,0,.55)}
   .num{font-family:var(--mono);text-align:right;color:var(--ink)}
   .inv{margin-top:6px;font-size:.66rem;color:var(--mu);font-family:var(--mono);
@@ -140,7 +141,7 @@
 
 <div class="hud werte">
   <div class="balken"><span>Gesund</span><div class="schiene" id="sGesund"><i id="bGesund" style="background:var(--gruen);width:100%"></i></div><span class="num" id="nGesund">–</span></div>
-  <div class="balken"><span>Froh</span><div class="schiene"><i id="bFroh" style="background:var(--himmel);width:50%"></i></div><span class="num" id="nFroh">–</span></div>
+  <div class="balken"><span>Froh</span><div class="schiene" id="sFroh"><i id="bFroh" style="background:var(--himmel);left:50%;width:25%"></i><span class="chunk" style="left:50%"></span></div><span class="num" id="nFroh">–</span></div>
   <div class="balken"><span>Hunger</span><div class="schiene"><i id="bHunger" style="background:var(--amber);width:20%"></i></div><span class="num" id="nHunger">–</span></div>
   <div class="balken"><span>Müde</span><div class="schiene"><i id="bMued" style="background:#9b7bf0;width:15%"></i></div><span class="num" id="nMued">–</span></div>
   <div class="balken"><span>Geld</span><div class="schiene"><i id="bGeld" style="background:var(--gruen);width:18%"></i></div><span class="num" id="nGeld">–</span></div>
