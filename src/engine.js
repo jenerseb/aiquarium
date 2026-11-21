@@ -292,20 +292,50 @@ function waehleExploreZiel(db, karte, ch) {
 // Route starten: A* über die unsichtbaren Hauseingangspunkte auf der nächsten Strasse.
 // So verlässt/betritt die Figur Gebäude immer über den nächsten Straßenpunkt,
 // folgt allen Gehwegen/Ecken und läuft niemals diagonal durch Häuserblöcke.
+function zufallsPunktImPark(parks, x, z) {
+  const park = pf.parkFuerPunkt(parks, x, z);
+  const poly = park && park.polygon;
+  if (!Array.isArray(poly) || poly.length < 3) return { x, z };
+  let sx = 0, sz = 0;
+  for (const [px, pz] of poly) { sx += px; sz += pz; }
+  const cx = sx / poly.length;
+  const cz = sz / poly.length;
+  // Auf innere 66 % um den Schwerpunkt schrumpfen → sicher weg von Rand, Straßen & Gebäuden
+  const inner = poly.map(([px, pz]) => [cx + (px - cx) * 0.66, cz + (pz - cz) * 0.66]);
+  let minX = Infinity, maxX = -Infinity, minZ = Infinity, maxZ = -Infinity;
+  for (const [px, pz] of inner) {
+    if (px < minX) minX = px; if (px > maxX) maxX = px;
+    if (pz < minZ) minZ = pz; if (pz > maxZ) maxZ = pz;
+  }
+  for (let i = 0; i < 12; i += 1) {
+    const rx = minX + Math.random() * (maxX - minX);
+    const rz = minZ + Math.random() * (maxZ - minZ);
+    if (pf.punktInPolygon(rx, rz, inner)) return { x: Math.round(rx * 10) / 10, z: Math.round(rz * 10) / 10 };
+  }
+  if (pf.punktInPolygon(cx, cz, poly)) return { x: Math.round(cx * 10) / 10, z: Math.round(cz * 10) / 10 };
+  return { x, z };
+}
+
 function starteRoute(db, karte, ch, zielX, zielZ, zielPoi, erzwingeZielPunkt = false) {
   const navGraph = karte.navGraph;
+  const parks = karte.parks || [];
   let tx = Number(zielX);
   let tz = Number(zielZ);
   let mitZielPunkt = Boolean(erzwingeZielPunkt);
   if (navGraph && zielPoi) {
-    const ziel = db.prepare('SELECT id, pos_x, pos_z FROM pois WHERE id = ?').get(zielPoi);
+    const ziel = db.prepare('SELECT id, category, pos_x, pos_z FROM pois WHERE id = ?').get(zielPoi);
     if (ziel) {
-      tx = Number(ziel.pos_x);
-      tz = Number(ziel.pos_z);
+      if (ziel.category === 'park') {
+        const pt = zufallsPunktImPark(parks, Number(ziel.pos_x), Number(ziel.pos_z));
+        tx = pt.x;
+        tz = pt.z;
+      } else {
+        tx = Number(ziel.pos_x);
+        tz = Number(ziel.pos_z);
+      }
       mitZielPunkt = true;
     }
   }
-  const parks = karte.parks || [];
   const imStartPark = Boolean(pf.parkFuerPunkt(parks, Number(ch.pos_x), Number(ch.pos_z)));
   const imZielPark = Boolean(pf.parkFuerPunkt(parks, tx, tz));
   const start = pf.findeRouteZwischenPunkten(
@@ -409,7 +439,11 @@ async function fuehreSchrittAus(db, deps, characterId, schritt, jetztMs) {
       else notizen.length = 0;
       return { ok: true, notizen, charakter: ch, unterwegs: true, restM: schritt.restM };
     } else {
-      ch.pos_x = Number(ziel.pos_x); ch.pos_z = Number(ziel.pos_z);
+      const ende = ziel.category === 'park' && meta && Array.isArray(meta.route) && meta.route.length > 0
+        ? meta.route[meta.route.length - 1]
+        : null;
+      ch.pos_x = ende ? Number(ende.x) : Number(ziel.pos_x);
+      ch.pos_z = ende ? Number(ende.z) : Number(ziel.pos_z);
       ch.inside_poi = ziel.id;
       speichereRoute(db, ch, null);
       ch.current_action = 'idle';
