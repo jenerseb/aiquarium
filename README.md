@@ -191,7 +191,7 @@ Danach im Browser öffnen:
   - `?map=clay` – Clay-/Modell-Kartenstil (ohne Luftbild, mit Grünzeug)
   - `?photo=<0..100>` – Luftbild-Deckkraft auf dem Boden in Prozent (Standard: `0` bei `?map=clay`, sonst `100`)
   - `?roof=<0..100>` – Luftbild-Deckkraft auf den 3D-Dächern in Prozent (Standard: `0` bei `?map=clay`, sonst `100`; bei `roof > 0` sind die 3D-Dächer darunter grau statt ziegelrot)
-  - `?ax=<m>&az=<m>` – Luftbild-Versatz (Boden + Dächer gemeinsam) in Metern zum Feintuning (Standard: `ax=0, az=14`)
+  - `?ax=<m>&az=<m>&ascale=<f>` – Luftbild-Kalibrierung (Boden + Dächer gemeinsam; Standard: `ax=0, az=9.2, ascale=0.988`)
   - `?round=<0..100>` – Abrundungs-Faktor der 3D-Gebäudekanten in Prozent (Standard: `45`)
   - `?fx=<liste>` – Stilisierungsfilter, kommagetrennt kombinierbar: `warm,pixel,sobel,paint,tilt,crt,noir`
 - **Interaktion in der 3D-Szene:**

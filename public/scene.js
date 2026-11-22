@@ -26,12 +26,14 @@ const _roundParam = new URLSearchParams(location.search).get('round');
 const GEBAEUDE_ABRUNDUNG = (_roundParam !== null && _roundParam !== '' && Number.isFinite(Number(_roundParam)))
   ? Math.max(0, Math.min(100, Number(_roundParam))) / 100
   : 0.45;
-// Luftbild-Kalibrierung in Metern (Boden + Daecher gemeinsam, +z = nach Sueden; live testbar via ?ax=0&az=14)
+// Luftbild-Kalibrierung in Metern (Boden + Daecher gemeinsam, +z = nach Sueden; live testbar via ?ax=0&az=9.2&ascale=0.988)
 const _axParam = new URLSearchParams(location.search).get('ax');
 const _azParam = new URLSearchParams(location.search).get('az');
+const _ascaleParam = new URLSearchParams(location.search).get('ascale');
 const AERIAL_OFFSET = {
   x: (_axParam !== null && _axParam !== '' && Number.isFinite(Number(_axParam))) ? Number(_axParam) : 0,
-  z: (_azParam !== null && _azParam !== '' && Number.isFinite(Number(_azParam))) ? Number(_azParam) : 14,
+  z: (_azParam !== null && _azParam !== '' && Number.isFinite(Number(_azParam))) ? Number(_azParam) : 9.2,
+  scale: (_ascaleParam !== null && _ascaleParam !== '' && Number.isFinite(Number(_ascaleParam))) ? Number(_ascaleParam) : 0.988,
 };
 // Optionaler Uhrzeit-Override zum Testen von Auf-/Untergang (null = echte Hamburger Zeit, sonst z. B. 6.5, 13.0, 19.5, 23.0)
 const ZEIT_OVERRIDE_STUNDE = null;
@@ -536,7 +538,7 @@ function baueBoden() {
       // Schärfe bei flachem Kamerawinkel: maximale Anisotropie der GPU nutzen
       tex.anisotropy = renderer.capabilities.getMaxAnisotropy();
       if (PHOTO_OPACITY > 0) {
-        const luftGeo = new THREE.CircleGeometry(DIORAMA.r, 96);
+        const luftGeo = new THREE.CircleGeometry(DIORAMA.r * AERIAL_OFFSET.scale, 96);
         luftGeo.rotateX(-Math.PI / 2);
         const voll = PHOTO_OPACITY >= 1;
         const luft = new THREE.Mesh(luftGeo, dioramaShader(new THREE.MeshLambertMaterial({
@@ -990,7 +992,8 @@ function baueDachLuftbild(tex) {
   const posArr = [];
   const uvArr = [];
   const gebIdxArr = [];
-  const span = 2 * DIORAMA.r;
+  const rEff = DIORAMA.r * AERIAL_OFFSET.scale;
+  const span = 2 * rEff;
   for (let i = 0; i < lod.length; i += 1) {
     const b = lod[i];
     const idx = b._idx || (i + 1);
@@ -998,8 +1001,8 @@ function baueDachLuftbild(tex) {
       for (const p of tri) {
         posArr.push(p[0], p[1] * LOD_SKALA, p[2]);
         uvArr.push(
-          (p[0] - (DIORAMA.cx + AERIAL_OFFSET.x - DIORAMA.r)) / span,
-          ((DIORAMA.cz + AERIAL_OFFSET.z + DIORAMA.r) - p[2]) / span
+          (p[0] - (DIORAMA.cx + AERIAL_OFFSET.x - rEff)) / span,
+          ((DIORAMA.cz + AERIAL_OFFSET.z + rEff) - p[2]) / span
         );
         gebIdxArr.push(idx);
       }
