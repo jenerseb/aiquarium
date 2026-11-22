@@ -26,6 +26,13 @@ const _roundParam = new URLSearchParams(location.search).get('round');
 const GEBAEUDE_ABRUNDUNG = (_roundParam !== null && _roundParam !== '' && Number.isFinite(Number(_roundParam)))
   ? Math.max(0, Math.min(100, Number(_roundParam))) / 100
   : 0.45;
+// Luftbild-Kalibrierung in Metern (Boden + Daecher gemeinsam, +z = nach Sueden; live testbar via ?ax=0&az=14)
+const _axParam = new URLSearchParams(location.search).get('ax');
+const _azParam = new URLSearchParams(location.search).get('az');
+const AERIAL_OFFSET = {
+  x: (_axParam !== null && _axParam !== '' && Number.isFinite(Number(_axParam))) ? Number(_axParam) : 0,
+  z: (_azParam !== null && _azParam !== '' && Number.isFinite(Number(_azParam))) ? Number(_azParam) : 14,
+};
 // Optionaler Uhrzeit-Override zum Testen von Auf-/Untergang (null = echte Hamburger Zeit, sonst z. B. 6.5, 13.0, 19.5, 23.0)
 const ZEIT_OVERRIDE_STUNDE = null;
 
@@ -529,14 +536,14 @@ function baueBoden() {
       // Schärfe bei flachem Kamerawinkel: maximale Anisotropie der GPU nutzen
       tex.anisotropy = renderer.capabilities.getMaxAnisotropy();
       if (PHOTO_OPACITY > 0) {
-        const luftGeo = new THREE.CircleGeometry(DIORAMA.r * 0.99, 96);
+        const luftGeo = new THREE.CircleGeometry(DIORAMA.r, 96);
         luftGeo.rotateX(-Math.PI / 2);
         const voll = PHOTO_OPACITY >= 1;
         const luft = new THREE.Mesh(luftGeo, dioramaShader(new THREE.MeshLambertMaterial({
           map: tex, transparent: !voll, opacity: PHOTO_OPACITY, depthWrite: voll,
         })));
         luft.receiveShadow = true; // Gebaeude-Schatten auf dem Luftbild
-        luft.position.set(DIORAMA.cx, 0.005, DIORAMA.cz);
+        luft.position.set(DIORAMA.cx + AERIAL_OFFSET.x, 0.005, DIORAMA.cz + AERIAL_OFFSET.z);
         gruppe.add(luft);
       }
       // Dächer mit dem Luftbild texturieren (LoD2), sobald es da ist.
@@ -830,8 +837,8 @@ function lodDachfarbe(b) {
   return 0x9c4a3b; // Terrakotta (Dachform steht im Batch, nicht in lod2.json)
 }
 function lodWandfarbe(id) {
-  // Warme Backstein-/Putz-Töne, deterministisch je Gebäude.
-  const palette = [0xb3563f, 0xc97e5a, 0xe3c893, 0xd9b98a, 0x9aa0a8, 0x8f4f43, 0xc4a484];
+  // Warme Backstein-/Putz-Töne, deterministisch je Gebäude (Weiß statt Gelb, Altrosa statt Grau).
+  const palette = [0xb3563f, 0xc97e5a, 0xf2efe9, 0xf2efe9, 0xc9969b, 0x8f4f43, 0xc4a484];
   let h = 0;
   const s = String(id);
   for (let i = 0; i < s.length; i += 1) h = (h * 31 + s.charCodeAt(i)) >>> 0;
@@ -990,7 +997,10 @@ function baueDachLuftbild(tex) {
     for (const tri of b.roofTriangles || []) {
       for (const p of tri) {
         posArr.push(p[0], p[1] * LOD_SKALA, p[2]);
-        uvArr.push((p[0] - (DIORAMA.cx - DIORAMA.r)) / span, ((DIORAMA.cz + DIORAMA.r) - p[2]) / span);
+        uvArr.push(
+          (p[0] - (DIORAMA.cx + AERIAL_OFFSET.x - DIORAMA.r)) / span,
+          ((DIORAMA.cz + AERIAL_OFFSET.z + DIORAMA.r) - p[2]) / span
+        );
         gebIdxArr.push(idx);
       }
     }
