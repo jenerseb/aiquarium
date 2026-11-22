@@ -6,9 +6,10 @@ mit 18 Euro, einem Notizbuch und null Wissen über die Stadt.
 Du schaust zu, wie er den Kiez erkundet, Pfand sammelt, sich Jobs sucht,
 Zettel hinterlässt und nachts im Schlaf seinen Tag sortiert.
 
-Die Welt läuft in echter Hamburger Zeit (`Europe/Berlin`), die Aktionen
-im komprimierten Aquarium-Tempo (z. B. 20 Minuten pro Arbeitsschicht,
-35 Minuten Schlaf).
+Die Welt läuft in echter Hamburger Zeit (`Europe/Berlin`), viele Aktionen
+laufen im Echtzeit-Timer (z. B. `15 Min` Ausruhen, `2–10 h` Nachtschlaf),
+Wege und andere Schritte im komprimierten Aquarium-Tempo. Details zu allen
+Raten und Regeln stehen in [`gehirn_und_welt_logik.md`](gehirn_und_welt_logik.md).
 
 ---
 
@@ -56,21 +57,26 @@ in der `.env` änderbar.
   (3D-Tiles/b3dm, `data/hamburg_lod2.json`, 1288 Häuser, ~61k Dreiecke),
   gemergt in 2 Draw Calls, Lizenz **dl-de/by-2.0** (FHH, LGV).
 
-## Was kann er gerade? (Stand: Meilenstein 2)
+## Was kann er gerade?
 
-- **Loslaufen & entdecken:** Er läuft auf echten Bürgersteigen (A*-Wegfindung
-  über OpenStreetMap-Daten, 550 Gebäude, 1307 Wegknoten) und entdeckt Orte
-  erst, wenn er nah genug dran ist (22 m).
+- **Loslaufen, joggen & entdecken:** Er läuft auf echten Bürgersteigen (A*-Wegfindung
+  über OpenStreetMap-Daten, `walk_to` / `explore_street`, Innenpunkte in Parks und
+  Gebäuden) oder dreht einen `jog`-Rundlauf (`+75 %` Tempo) und entdeckt Orte
+  erst, wenn er nah genug dran ist (`22 m`).
 - **Essen & ausgeben:** Wünsche wie „Pommes mit Ketchup" prüft ein
   Welt-Arbiter auf Plausibilität und Preis, klammert sie in feste Grenzen
   und merkt sie sich dauerhaft – so entsteht organisch eine Speisekarte.
-- **Arbeiten:** Per Zettel (`leave_note`) bewerben, Zusage vom (autonomen)
+- **Arbeiten & Projekte:** Per Zettel (`leave_note`) bewerben, Zusage vom (autonomen)
   Ladenbesitzer oder per Telegram, Schichten für 8–18 € arbeiten.
   Wer krank zur Schicht kommt, kassiert einen Strike – beim zweiten ist
-  der Job weg.
-- **Schlafen & träumen:** Schläft er daheim, fasst einmal pro Tag ein
-  Nacht-Call den Tag in einer Schlagzeile zusammen, lernt eine Gewohnheit
-  und räumt sein Gedächtnis auf (25 Kurz- + 25 Langzeit-Slots).
+  der Job weg. Daneben arbeitet er an Projekten (`work_on_project`), liest
+  Bücher/`stadtlexikon` (max. 1×/Tag) oder nutzt `web_search` (max. 1×/Tag).
+- **Ausruhen, schlafen & träumen:** `rest` (`15 Min` Echtzeit) erholt nur leicht;
+  `sleep` (`2–10 h` Echtzeit je nach Müdigkeit, abgestimmt auf das Aufwachfenster
+  `06:00–11:00 Uhr`) regeneriert laufend während des Timers (`-18/h` Müdigkeit,
+  `+1,5/h` Hunger, `-1/h` Froh, `+4/h` Gesundheit bis zum Chunk-Cap). Schläft er
+  daheim, fasst einmal pro Tag ein Nacht-Call den Tag in einer Schlagzeile
+  zusammen und räumt sein Gedächtnis auf (25 Kurz- + 25 Langzeit-Slots).
 - **Sterben & neu anfangen:** Fällt seine Gesundheit auf null, landet er in
   der Hall of Fame – und ein neuer Stadterkunder beginnt bei null.
 
@@ -121,9 +127,12 @@ Das komplette Modell-Routing steht in **einer Datei: `model.json`** (Projekt-Roo
 
 | Aufruf | Was kommt zurück |
 |---|---|
-| `GET /api/state` | Werte, Position, Feed, Weltuhr |
+| `GET /api/state` | Werte, Position, Feed, Weltuhr, Aktivitätstimer |
+| `GET /api/map` | Statische Kiez-Geometrie (Gebäude, Bäume, Straßen, Parks, POIs) |
+| `GET /api/poi/:id` | POI-Details (`?dev=1` für alle POIs + Dev-Metadaten; sonst nur entdeckte POIs mit abgespeckten Infos) |
 | `GET /api/brain` | „Gehirn": Sheet, Memories, Loops, Fame, LLM-Input/Fehler-Debug |
 | `GET /api/stream` | Live-Ticks als SSE |
+| `GET /api/dev/llm-log` | Letzte erfolgreiche LLM-Calls (Dev) |
 | `POST /api/dev/tick` | Schritt von Hand (nur localhost) |
 | `POST /api/dev/nightly` | Nacht-Call von Hand (nur localhost) |
 
@@ -176,12 +185,18 @@ node scripts/fetch-osm.js  # Karte frisch von OpenStreetMap laden
 
 Danach im Browser öffnen:
 
-- `http://localhost:3077/` – die 3D-Stadt (Charakter-Kamera, HUD, Feed)
-- `http://localhost:3077/?dev` bzw. `?mode=dev` – zusätzlich Dev-Buttons für
-  1 Tick und 1 Nightly-Call
-- `Gehirn`-Button oben rechts – 4 Tabs: Kopf, Character Sheet, Gedächtnis,
-  Chronik
-- Kamera: ziehen = drehen, Rad = zoomen, weit raus = Kiez-Blick von oben
+- `http://localhost:3077/` – die 3D-Stadt (Charakter-Kamera, HUD, Aktivitätspille, Feed)
+- **URL-Parameter (frei kombinierbar):**
+  - `?dev` bzw. `?mode=dev` – Dev-Modus (Buttons für `1 Tick` / `Nightly`, `LLM-Log`, unentdeckte POI-Namen + volle POI-Modal-Details, Park-/Baum-Grün, Routenlinie & Dev-Strecken)
+  - `?map=clay` – Clay-/Modell-Kartenstil (ohne Luftbild, mit Grünzeug)
+  - `?photo=<0..100>` – Luftbild-Deckkraft auf dem Boden in Prozent (Standard: `0` bei `?map=clay`, sonst `100`)
+  - `?roof=<0..100>` – Luftbild-Deckkraft auf den 3D-Dächern in Prozent (Standard: `0` bei `?map=clay`, sonst `100`; bei `roof > 0` sind die 3D-Dächer darunter grau statt ziegelrot)
+  - `?fx=<liste>` – Stilisierungsfilter, kommagetrennt kombinierbar: `warm,pixel,sobel,paint,tilt,crt,noir`
+- **Interaktion in der 3D-Szene:**
+  - Klick/Tap auf POI-Marker oder -Namen öffnet das POI-Info-Modal (Beschreibung, Adresse, mögliche Aktivitäten, Angebote, Besuche; im Normal-Modus nur entdeckte POIs, im Dev-Modus alle)
+  - Klick auf ein Gebäude schaltet die Indoor-Transparenz um
+  - `Gehirn`-Button oben rechts – 4 Tabs: Kopf, Character Sheet, Gedächtnis, Chronik
+  - Kamera: ziehen = drehen, Rad/Pinch = zoomen; die Gedankenblase wird nur in der Nah-Kamera (`Nah (Charakter)`) angezeigt
 
 ## Neue POIs vorschlagen & übernehmen
 
@@ -219,13 +234,11 @@ nginx-SSE-Config und Troubleshooting: **[deploy-vps.md](deploy-vps.md)**.
 
 ## Gut zu wissen
 
-- **Kosten:** Tagsüber laufen günstige/Free-Modelle
-  (`gemma-4-26b`, `glm-5.3-flash`, `nemotron Free`), nur der eine
-  Nacht-Call nutzt `mimo-v2.6-pro`. Mit `AIQUARIUM_MODEL=…` in der `.env`
-  lässt sich das Tagesmodell tauschen.
-- **Ohne Key geht's auch:** Fehlt `OPENROUTER_API_KEY`, läuft die Welt mit
+- **Kosten & Routing:** Modell-Ketten und Rollen werden zentral in `model.json`
+  konfiguriert; API-Keys (`GEMINI_API_KEY`, `OPENROUTER_API_KEY`) liegen in der `.env`.
+- **Ohne Key geht's auch:** Fehlen die API-Keys, läuft die Welt mit
   deterministischen Fallbacks weiter – gut zum Entwickeln und Testen.
-- **3D kommt später:** `public/` enthält vorerst nur Three.js als
-  Platzhalter; Szene, Kamera und Gehirn-Overlay sind der nächste Schritt.
+- **3D-Szene & Doku:** Die Three.js-Szene lebt in `public/scene.js`; die
+  aktuellen Simulations- und KI-Regeln sind in [`gehirn_und_welt_logik.md`](gehirn_und_welt_logik.md) dokumentiert.
 - **Daten:** Die echte Welt-DB liegt außerhalb des Repos und wird nie
   committet (siehe `.gitignore`). Tests nutzen immer Wegwerf-DBs in `$TMPDIR`.

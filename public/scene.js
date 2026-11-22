@@ -9,15 +9,23 @@ const $ = (id) => document.getElementById(id);
 const DEV = new URLSearchParams(location.search).has('dev') || new URLSearchParams(location.search).get('mode') === 'dev';
 const CLAY = new URLSearchParams(location.search).get('map') === 'clay';
 const _photoParam = new URLSearchParams(location.search).get('photo');
-const PHOTO_OPACITY = CLAY
-  ? (_photoParam !== null && _photoParam !== '' && Number.isFinite(Number(_photoParam))
-    ? Math.max(0, Math.min(100, Number(_photoParam))) / 100
-    : 0)
-  : 1.0;
-// TEST-FLAG: Gruenzeug (Parks + Baeume) im Dev-Modus oder bei ?map=clay einblenden.
+const PHOTO_OPACITY = _photoParam !== null && _photoParam !== '' && Number.isFinite(Number(_photoParam))
+  ? Math.max(0, Math.min(100, Number(_photoParam))) / 100
+  : (CLAY ? 0 : 1.0);
+const _roofParam = new URLSearchParams(location.search).get('roof');
+const ROOF_OPACITY = _roofParam !== null && _roofParam !== '' && Number.isFinite(Number(_roofParam))
+  ? Math.max(0, Math.min(100, Number(_roofParam))) / 100
+  : (CLAY ? 0 : 1.0);
+// TEST-FLAG: Gruenzeug (Baeume) im Dev-Modus oder bei ?map=clay einblenden; Parks vorerst in beiden Modi aus.
 const ZEIGE_GRUEN = DEV || CLAY;
+const ZEIGE_PARKS = false;
 // Helligkeit aller Dachgrafiken (1.0 = Original, < 1.0 = dunkler, z. B. 0.55..0.85)
 const DACH_HELLIGKEIT = 0.6;
+// Abrundungs-Faktor fuer 3D-Gebaeudekanten (0 = scharf, 0.45 = leicht abgerundet, 1 = maximal weich; auch via ?round=0..100)
+const _roundParam = new URLSearchParams(location.search).get('round');
+const GEBAEUDE_ABRUNDUNG = (_roundParam !== null && _roundParam !== '' && Number.isFinite(Number(_roundParam)))
+  ? Math.max(0, Math.min(100, Number(_roundParam))) / 100
+  : 0.45;
 // Optionaler Uhrzeit-Override zum Testen von Auf-/Untergang (null = echte Hamburger Zeit, sonst z. B. 6.5, 13.0, 19.5, 23.0)
 const ZEIT_OVERRIDE_STUNDE = null;
 
@@ -511,8 +519,8 @@ function baueBoden() {
   const randMesh = new THREE.Mesh(randGeo, new THREE.MeshBasicMaterial({ color: 0x3b424c }));
   randMesh.position.set(DIORAMA.cx, 0.012, DIORAMA.cz);
   gruppe.add(randMesh);
-  // DIORAMA_V1: optionales Luftbild-Overlay (/kiez-aerial.jpg in public/), bei ?map=clay standardmäßig 0 (% via ?photo=0..100)
-  if (PHOTO_OPACITY > 0) new THREE.TextureLoader().load("/kiez-aerial.jpg",
+  // DIORAMA_V1: optionales Luftbild-Overlay (/kiez-aerial.jpg in public/), Boden via ?photo=0..100, Dächer via ?roof=0..100
+  if (PHOTO_OPACITY > 0 || ROOF_OPACITY > 0) new THREE.TextureLoader().load("/kiez-aerial.jpg",
     (tex) => {
       // Stale-Guard: wenn der Boden inzwischen neu gebaut wurde (ladeKarte()),
       // darf das Bild NICHT mehr in die entfernte Gruppe gehaengt werden.
@@ -520,17 +528,21 @@ function baueBoden() {
       tex.colorSpace = THREE.SRGBColorSpace;
       // Schärfe bei flachem Kamerawinkel: maximale Anisotropie der GPU nutzen
       tex.anisotropy = renderer.capabilities.getMaxAnisotropy();
-      const luftGeo = new THREE.CircleGeometry(DIORAMA.r * 0.99, 96);
-      luftGeo.rotateX(-Math.PI / 2);
-      const voll = PHOTO_OPACITY >= 1;
-      const luft = new THREE.Mesh(luftGeo, dioramaShader(new THREE.MeshLambertMaterial({
-        map: tex, transparent: !voll, opacity: PHOTO_OPACITY, depthWrite: voll,
-      })));
-      luft.receiveShadow = true; // Gebaeude-Schatten auf dem Luftbild
-      luft.position.set(DIORAMA.cx, 0.005, DIORAMA.cz);
-      gruppe.add(luft);
+      if (PHOTO_OPACITY > 0) {
+        const luftGeo = new THREE.CircleGeometry(DIORAMA.r * 0.99, 96);
+        luftGeo.rotateX(-Math.PI / 2);
+        const voll = PHOTO_OPACITY >= 1;
+        const luft = new THREE.Mesh(luftGeo, dioramaShader(new THREE.MeshLambertMaterial({
+          map: tex, transparent: !voll, opacity: PHOTO_OPACITY, depthWrite: voll,
+        })));
+        luft.receiveShadow = true; // Gebaeude-Schatten auf dem Luftbild
+        luft.position.set(DIORAMA.cx, 0.005, DIORAMA.cz);
+        gruppe.add(luft);
+      }
       // Dächer mit dem Luftbild texturieren (LoD2), sobald es da ist.
-      try { baueDachLuftbild(tex); } catch (err) { console.warn('[luftbild] dächer:', err.message); }
+      if (ROOF_OPACITY > 0) {
+        try { baueDachLuftbild(tex); } catch (err) { console.warn('[luftbild] dächer:', err.message); }
+      }
     },
     undefined,
     () => { /* kein Luftbild -> prozeduraler Boden bleibt */ }
@@ -756,7 +768,14 @@ function baueGebaeude(buildings) {
       // DIORAMA_V1: weicher Modellbau-Bevel (Miniatur-Look statt scharfer Kloetze)
       let geo = null;
       try {
-        geo = new THREE.ExtrudeGeometry(form, { depth: Math.max(0.1, h - 0.35), bevelEnabled: true, bevelThickness: 0.3, bevelSize: 0.25, bevelSegments: 2 });
+        const bev = GEBAEUDE_ABRUNDUNG;
+        geo = new THREE.ExtrudeGeometry(form, {
+          depth: Math.max(0.1, h - 0.45 * bev),
+          bevelEnabled: bev > 0,
+          bevelThickness: 0.45 * bev,
+          bevelSize: 0.35 * bev,
+          bevelSegments: bev > 0 ? 3 : 1,
+        });
         geo.rotateX(-Math.PI / 2);
         geo.computeBoundingBox();
         geo.translate(0, -geo.boundingBox.min.y, 0);
@@ -777,7 +796,7 @@ function baueGebaeude(buildings) {
       mesh.castShadow = true;
       mesh.receiveShadow = true;
       mesh.position.set(0, 0, 0); // exakt auf dem Boden, kein Schweben
-      const dachFarbe = b.roofColour || "#343942"; // DIORAMA_V1-Fix: direkt Schiefer, ohne Hash-Funktion
+      const dachFarbe = ROOF_OPACITY > 0 ? "#4a4f57" : (b.roofColour || "#343942"); // bei roof > 0 grau statt ziegelrot/bunt
       const dachMatBau = new THREE.MeshLambertMaterial({ color: new THREE.Color(dachFarbe).multiplyScalar(DACH_HELLIGKEIT), ...(DEV ? { transparent: true, opacity: 0.66 } : {}) });
       const dachGeo = new THREE.ShapeGeometry(form);
       dachGeo.rotateX(-Math.PI / 2);
@@ -916,11 +935,41 @@ function fassadenEmissive() {
   return tex;
 }
 
+function rundeGebaeudeNormalen(geo, posArr, gebIdxArr, faktor) {
+  geo.computeVertexNormals();
+  const f = Math.max(0, Math.min(1, Number(faktor) || 0));
+  if (f <= 0) return;
+  const norm = geo.getAttribute('normal');
+  const sum = new Map();
+  const keyFuer = (i) => `${gebIdxArr[i]}_${Math.round(posArr[i * 3] * 20)}_${Math.round(posArr[i * 3 + 1] * 20)}_${Math.round(posArr[i * 3 + 2] * 20)}`;
+  for (let i = 0; i < gebIdxArr.length; i += 1) {
+    const k = keyFuer(i);
+    let acc = sum.get(k);
+    if (!acc) { acc = [0, 0, 0]; sum.set(k, acc); }
+    acc[0] += norm.getX(i);
+    acc[1] += norm.getY(i);
+    acc[2] += norm.getZ(i);
+  }
+  for (let i = 0; i < gebIdxArr.length; i += 1) {
+    const acc = sum.get(keyFuer(i));
+    const len = Math.hypot(acc[0], acc[1], acc[2]) || 1;
+    const sx = acc[0] / len;
+    const sy = acc[1] / len;
+    const sz = acc[2] / len;
+    const nx = norm.getX(i) * (1 - f) + sx * f;
+    const ny = norm.getY(i) * (1 - f) + sy * f;
+    const nz = norm.getZ(i) * (1 - f) + sz * f;
+    const nLen = Math.hypot(nx, ny, nz) || 1;
+    norm.setXYZ(i, nx / nLen, ny / nLen, nz / nLen);
+  }
+  norm.needsUpdate = true;
+}
+
 // --- Dächer mit dem Luftbild texturieren (UV = georeferenzierte Position) ---
 let dachLuftMesh = null;
 let luftTex = null;
 function baueDachLuftbild(tex) {
-  if (PHOTO_OPACITY <= 0) return;
+  if (ROOF_OPACITY <= 0) return;
   luftTex = tex;
   if (dachLuftMesh) {
     scene.remove(dachLuftMesh);
@@ -951,12 +1000,12 @@ function baueDachLuftbild(tex) {
   geo.setAttribute('position', new THREE.Float32BufferAttribute(posArr, 3));
   geo.setAttribute('uv', new THREE.Float32BufferAttribute(uvArr, 2));
   geo.setAttribute('aGebIdx', new THREE.Float32BufferAttribute(gebIdxArr, 1));
-  geo.computeVertexNormals();
+  rundeGebaeudeNormalen(geo, posArr, gebIdxArr, GEBAEUDE_ABRUNDUNG);
   const dachTint = new THREE.Color().setScalar(DACH_HELLIGKEIT);
-  const voll = PHOTO_OPACITY >= 1;
+  const voll = ROOF_OPACITY >= 1;
   dachLuftMesh = new THREE.Mesh(geo, dioramaShader(new THREE.MeshLambertMaterial({
     map: tex, color: dachTint, transparent: true,
-    opacity: DEV ? Math.min(0.66, PHOTO_OPACITY) : PHOTO_OPACITY,
+    opacity: DEV ? Math.min(0.66, ROOF_OPACITY) : ROOF_OPACITY,
     depthWrite: voll,
     ...(!voll ? { polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -1 } : {}),
   }), { gebIdxAttr: true }));
@@ -1008,7 +1057,11 @@ function baueLoD2(lod) {
         wandGebIdx.push(idx);
       }
     }
-    tmpFarbe.setHex(LOD_DACHFARBEN.flachdach).lerp(new THREE.Color(lodDachfarbe(b)), 0.85).multiplyScalar(DACH_HELLIGKEIT);
+    if (ROOF_OPACITY > 0) {
+      tmpFarbe.setHex(LOD_DACHFARBEN.flachdach).multiplyScalar(DACH_HELLIGKEIT);
+    } else {
+      tmpFarbe.setHex(LOD_DACHFARBEN.flachdach).lerp(new THREE.Color(lodDachfarbe(b)), 0.85).multiplyScalar(DACH_HELLIGKEIT);
+    }
     for (const tri of b.roofTriangles || []) {
       for (const p of tri) {
         dachPos.push(p[0], p[1] * LOD_SKALA, p[2]);
@@ -1023,7 +1076,7 @@ function baueLoD2(lod) {
     geo.setAttribute('color', new THREE.Float32BufferAttribute(colArr, 3));
     geo.setAttribute('aGebIdx', new THREE.Float32BufferAttribute(gebIdxArr, 1));
     if (uvArr) geo.setAttribute('uv', new THREE.Float32BufferAttribute(uvArr, 2));
-    geo.computeVertexNormals();
+    rundeGebaeudeNormalen(geo, posArr, gebIdxArr, GEBAEUDE_ABRUNDUNG);
     const mat = dioramaShader(new THREE.MeshLambertMaterial({
       vertexColors: true,
       map: uvArr ? fassadenKachel() : null,
@@ -2797,7 +2850,7 @@ async function ladeKarte() {
     sonne.shadow.camera.updateProjectionMatrix();
     try { baueBoden(); } catch (err) { console.warn('[karte] boden:', err.message); }
     if (DEV || CLAY) { try { baueStrassen(karte.streets); } catch (err) { console.warn('[karte] strassen:', err.message); } }
-    if (ZEIGE_GRUEN) { try { baueParks(karte.parks); } catch (err) { console.warn('[karte] parks:', err.message); } }
+    if (ZEIGE_PARKS && ZEIGE_GRUEN) { try { baueParks(karte.parks); } catch (err) { console.warn('[karte] parks:', err.message); } }
     if (ZEIGE_GRUEN) { try { baueDioramaBaeume(karte.trees); } catch (err) { console.warn("[karte] baeume:", err.message); } } // DIORAMA_V1
     try { baueGebaeude(karte.buildings); } catch (err) { console.warn('[karte] gebaeude:', err.message); }
     try { bauePoiSchilder(karte.pois); } catch (err) { console.warn('[karte] poi-marker:', err.message); }
