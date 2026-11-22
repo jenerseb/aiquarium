@@ -384,7 +384,7 @@ async function main() {
     const cz = g.sz / g.n;
     if (TEST_MODUS) {
       if (cx < TEST_BOX.minX || cx > TEST_BOX.maxX || cz < TEST_BOX.minZ || cz > TEST_BOX.maxZ) continue;
-    } else if (cx < -505 || cx > 975 || cz < -430 || cz > 546) continue;
+    } else if (Math.hypot(cx - 203.4, cz - 44.3) > 770) continue;
     const h = g.maxY - g.minY;
     if (!(h >= 2 && h <= 80)) continue;
     const base = g.minY;
