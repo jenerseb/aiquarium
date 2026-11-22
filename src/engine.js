@@ -618,8 +618,13 @@ async function fuehreSchrittAus(db, deps, characterId, schritt, jetztMs) {
     if (!poi) return { ok: false, grund: 'ort_unbekannt', notizen };
     const res = await arbiter.resolveIntent(db, brain, poi, action, detail || 'etwas Einfaches', characterId);
     const angebot = res.angebot;
-    if (action === 'consume' && Number(ch.geld) < Number(angebot.price)) {
-      return { ok: false, grund: 'geld_reicht_nicht', notizen, angebot };
+    if (Number(angebot.price) > 0 && Number(ch.geld) < Number(angebot.price)) {
+      return {
+        ok: false,
+        grund: 'geld_reicht_nicht',
+        notizen: [`${angebot.label} kostet ${Math.round(Number(angebot.price))} Euro – dein Geld reicht nicht.`],
+        angebot,
+      };
     }
     const frohDelta = (action === 'consume' && Number(ch.hunger) < 40 && Number(angebot.froh_delta) > 0)
       ? Math.round(Number(angebot.froh_delta) * 0.5)
@@ -630,7 +635,8 @@ async function fuehreSchrittAus(db, deps, characterId, schritt, jetztMs) {
     addFroh(ch, frohDelta);
     lasseZeitVergehen(ch, dauerFuer(schritt));
     notizen.push(`${angebot.label}: ${angebot.narrative || ''}`.trim() + (res.neu ? ' (Neu im Kiez-Katalog!)' : ''));
-    if (frohDelta >= 5 || res.neu) {
+    const istTrivialPark = poi && ['park', 'home'].includes(poi.category) && frohDelta < 5;
+    if (!istTrivialPark && (frohDelta >= 5 || res.neu)) {
       require('./memory').speichereMemory(db, characterId, {
         tier: 'short', kind: 'moment',
         text: `${poi.name}: ${angebot.label}${angebot.narrative ? ' – ' + angebot.narrative : ''}`.slice(0, 180),
@@ -1256,8 +1262,26 @@ function wendeLaufendenSchlafAn(db, ch, timer, jetztMs) {
   speichereLaufendeAktion(db, ch, timer);
 }
 
+function erwarteterOrtFuer(db, ch, schritt) {
+  if (!schritt) return null;
+  const a = schritt.action;
+  if (a === 'sleep' || a === 'read_book' || a === 'write_notebook') return 'apartment';
+  if (a === 'buy_item' || a === 'return_deposit') return 'spaeti';
+  if (a === 'visit_doctor') return 'praxis';
+  if (a === 'work_shift') {
+    const job = arbiter.aktiverJob(db, ch.id);
+    return job ? job.poi_id : null;
+  }
+  if (a === 'do_activity' || a === 'consume' || a === 'leave_note') {
+    return schritt.target || null;
+  }
+  return null;
+}
+
 function kannAktionStarten(db, ch, schritt, jetztMs = Date.now()) {
   const a = schritt.action;
+  const sollOrt = erwarteterOrtFuer(db, ch, schritt);
+  if (sollOrt && ch.inside_poi !== sollOrt) return false;
   if (a === 'jog' && Number(ch.erschoepfung) >= 80) return false;
   if (a === 'consume' && Number(ch.hunger) < 20) return false;
   if (a === 'sleep') {
@@ -1396,6 +1420,12 @@ async function tick(db, deps, characterId, jetztMs) {
     }
     schritt = queue.shift();
     if (!schritt) return { ok: false, grund: 'leerer_plan', notizen: [] };
+    // Auto-walk_to: startet eine ortsgebundene Aktion nie vom falschen Ort aus (Timer startet erst vor Ort).
+    const sollOrt = erwarteterOrtFuer(db, ch, schritt);
+    if (sollOrt && ch.inside_poi !== sollOrt && db.prepare('SELECT id FROM pois WHERE id = ?').get(sollOrt)) {
+      queue.unshift(schritt);
+      schritt = { action: 'walk_to', target: sollOrt, detail: '' };
+    }
     speichereQueue(db, ch, queue, snapshot);
     if (deps.echtzeit && schritt.action !== 'walk_to' && schritt.action !== 'explore_street' && schritt.action !== 'jog' && kannAktionStarten(db, ch, schritt, jetztMs)) {
       const durationS = echtzeitDauerFuer(db, ch, schritt, jetztMs);
@@ -1435,6 +1465,9 @@ async function tick(db, deps, characterId, jetztMs) {
     }
   }
   const ergebnis = await schrittAusfuehren(db, deps, characterId, schritt, jetztMs, { timerAbgeschlossen });
+  if (ergebnis && !ergebnis.ok && ergebnis.grund === 'geld_reicht_nicht') {
+    speichereQueue(db, ladeCharakter(db, characterId), [], null);
+  }
   ch = ladeCharakter(db, characterId);
   // Weiter unterwegs? Dann Schritt vorn wieder einreihen (Rest-Queue bleibt dahinter).
   // Geprüft wird NACH der Ausführung – sonst ginge z. B. „consume“ nach „walk_to“ verloren.

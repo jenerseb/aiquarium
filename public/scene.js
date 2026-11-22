@@ -778,11 +778,12 @@ function baueGebaeude(buildings) {
       let geo = null;
       try {
         const bev = GEBAEUDE_ABRUNDUNG;
+        const bevF = bev / 0.45;
         geo = new THREE.ExtrudeGeometry(form, {
-          depth: Math.max(0.1, h - 0.45 * bev),
+          depth: Math.max(0.1, h - 0.35 * bevF),
           bevelEnabled: bev > 0,
-          bevelThickness: 0.45 * bev,
-          bevelSize: 0.35 * bev,
+          bevelThickness: 0.3 * bevF,
+          bevelSize: 0.25 * bevF,
           bevelSegments: bev > 0 ? 3 : 1,
         });
         geo.rotateX(-Math.PI / 2);

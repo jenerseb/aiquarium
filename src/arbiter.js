@@ -46,6 +46,54 @@ function normalisiereKey(text) {
     .replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '').slice(0, 60) || 'wunsch';
 }
 
+const STOP_WOERTER = new Set([
+  'am', 'an', 'auf', 'aus', 'bei', 'das', 'dem', 'den', 'der', 'des', 'die', 'ein', 'eine', 'einen',
+  'einer', 'einem', 'einmal', 'etwas', 'fuer', 'fur', 'im', 'in', 'ins', 'kurz', 'mal', 'mit', 'nach',
+  'noch', 'oder', 'sich', 'ueber', 'uber', 'um', 'und', 'vom', 'von', 'vor', 'zu', 'zum', 'zur',
+  'ansehen', 'anschauen', 'angucken', 'checken', 'gucken', 'schauen', 'machen', 'tun', 'gehen',
+  'besuchen', 'sitzen', 'setzen', 'bleiben', 'verbringen', 'probieren', 'testen', 'stoebern', 'stobern',
+  'hoeren', 'horen', 'lesen', 'treffen', 'geniessen',
+]);
+
+function kernWoerter(text, poi) {
+  const clean = (s) => String(s || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+    .replace(/ä/g, 'ae').replace(/ö/g, 'oe').replace(/ü/g, 'ue').replace(/ß/g, 'ss')
+    .replace(/[^a-z0-9]+/g, ' ').trim();
+  const poiTokens = new Set();
+  if (poi) {
+    for (const w of clean(poi.id).split(/\s+/)) if (w) poiTokens.add(w);
+    for (const w of clean(poi.name).split(/\s+/)) if (w) poiTokens.add(w);
+  }
+  const woerter = clean(text).split(/\s+/).filter((w) => w && !STOP_WOERTER.has(w) && !poiTokens.has(w));
+  return [...new Set(woerter)].sort();
+}
+
+function findeAehnlichesAngebot(db, poi, kind, wunschText) {
+  const key = normalisiereKey(wunschText);
+  const exakt = findeAngebot(db, poi.id, kind, key);
+  if (exakt) return exakt;
+  const alle = db.prepare('SELECT * FROM poi_offers WHERE poi_id = ? AND kind = ? ORDER BY id').all(poi.id, kind);
+  if (alle.length === 0) return null;
+  const wLow = String(wunschText || '').trim().toLowerCase();
+  const kernW = kernWoerter(wunschText, poi);
+  for (const row of alle) {
+    if (String(row.label || '').trim().toLowerCase() === wLow) return row;
+    if (kernW.length === 0) continue;
+    const kernR = kernWoerter(row.label, poi);
+    if (kernR.length === 0) continue;
+    const schnitt = kernW.filter((w) => kernR.includes(w));
+    if (schnitt.length === 0) continue;
+    const vereinigung = new Set([...kernW, ...kernR]).size;
+    if (schnitt.length === Math.max(kernW.length, kernR.length) || (schnitt.length / vereinigung) >= 0.6) {
+      return row;
+    }
+  }
+  return null;
+}
+
+const PASSIV_GRATIS_RE = /plakat|schaukasten|aushang|fenster|stoebern|stobern|gucken|schauen|beobacht|durchatmen|bank|spazier|schlend|umsehen|ausruhen|sitzen/;
+const KULTUR_EVENT_RE = /film|kino|konzert|live|party|club|spiel|buehne|buhne|lesung|comedy|slam|eintritt|ticket|billard|dart|ausstellung|dj|musik/;
+
 // Deterministischer Fallback, wenn kein LLM erreichbar ist (auch für Tests):
 // plausibel, aber strikt innerhalb der ECONOMY-Grenzen geklammert.
 function deterministischesAngebot(poi, kind, wunschText) {
@@ -65,14 +113,21 @@ function deterministischesAngebot(poi, kind, wunschText) {
     };
   }
   const d = ECONOMY.deltaBounds;
+  const istGratisKat = !poi || GRATIS_AKTIVITAET_KATS.has(kat);
+  const wLow = String(wunschText || '').toLowerCase();
+  const istPassiv = istGratisKat || (PASSIV_GRATIS_RE.test(wLow) && !KULTUR_EVENT_RE.test(wLow));
+  const preis = istPassiv ? 0 : (KULTUR_EVENT_RE.test(wLow) ? runde2((pMin + pMax) / 2) : Math.max(1, runde2(pMin)));
+  const froh = istGratisKat ? 2 : (istPassiv ? 3 : 8);
   return {
     poi_id: poi.id, kind, intent_key: key,
     label: String(wunschText).slice(0, 80),
-    price: 0,
+    price: preis,
     hunger_delta: 0,
-    erschoepfung_delta: klammere(6, d.activityErschoepfung[0], d.activityErschoepfung[1]),
-    froh_delta: klammere(5, d.activityFroh[0], d.activityFroh[1]),
-    narrative: 'Man lässt dich mitmachen. Kostet nichts, bringt ein bisschen Freude.',
+    erschoepfung_delta: klammere(istGratisKat ? 3 : 6, d.activityErschoepfung[0], d.activityErschoepfung[1]),
+    froh_delta: klammere(froh, d.activityFroh[0], d.activityFroh[1]),
+    narrative: preis > 0
+      ? `Du gönnst dir das Erlebnis (${preis} € Eintritt) und kommst beschwingt wieder heraus.`
+      : 'Kleiner Abstecher ohne Kosten – ganz nett für zwischendurch.',
   };
 }
 
@@ -80,19 +135,28 @@ function deterministischesAngebot(poi, kind, wunschText) {
 // Kleiner LLM-Call (arbiter-Rolle): plausibilisiert Preis + Wirkung.
 // Primary → Fallback via getRoleSlots('arbiter') (429/JSON-Fehler → Fallback).
 // Gibt { obj, usedModel, tokens } zurück (für Dev-Feed-Transparenz).
-async function arbiterLLM(brain, poi, kind, wunschText, db, characterId) {
+async function arbiterLLM(brain, poi, kind, wunschText, db, characterId, bestehende = []) {
   if (!brain || typeof brain.callModel !== 'function') return null;
   const apiKey = process.env.OPENROUTER_API_KEY;
   if (!apiKey) return null;
   const [pMin, pMax] = preisGrenzenFuer(poi ? poi.category : 'spaeti');
+  const katalog = Array.isArray(bestehende) && bestehende.length > 0
+    ? `Bereits bekannte Angebote an diesem Ort (${kind}): ${bestehende.map((o) => `„${o.label}“`).join(', ')}.\nFalls der Wunsch inhaltlich schon einem dieser Angebote entspricht (auch anders formuliert), uebernimm EXAKT dessen label statt ein Duplikat anzulegen.`
+    : '';
+  const preisRegel = kind === 'do_activity'
+    ? `Eintritt/Kosten fuer do_activity: 0 Euro fuer passives/freies Schauen (Plakate, Schaukasten, Stoebern, Bank), sonst ${Math.max(1, pMin)} bis ${pMax} Euro Eintritt (ganze Euro).`
+    : `Preisrahmen fuer diese Kategorie: ${pMin} bis ${pMax} Euro (nur ganze Euro-Betraege).`;
+  const frohRegel = kind === 'do_activity'
+    ? '"froh_delta": 1..4 fuer simple Gratis-Dinge, 6..12 fuer echte bezahlte Erlebnisse (Kino, Konzert, Club, Stadion) bzw. -6..-1 bei Enttaeuschung.'
+    : '"froh_delta": -2..10.';
   const prompt = [
     'Du bist der nuechterne Welt-Arbiter eines Kiez-Spiels in Hamburg-St. Pauli.',
     `Ort: ${poi ? `${poi.name} (${poi.category})` : 'unbekannt'}: ${poi ? poi.public_desc : ''}`,
+    ...(katalog ? [katalog] : []),
     `Spielerwunsch (${kind}): „${wunschText}“`,
-    `Preisrahmen fuer diese Kategorie: ${pMin} bis ${pMax} Euro (nur ganze Euro-Betraege).`,
+    preisRegel,
     'Antworte NUR als JSON: { "plausibel": true/false, "label": "kurzer Name", "price": zahl,',
-    ' "hunger_delta": -50..-5 (nur consume, sonst 0), "erschoepfung_delta": 2..15 bei Aktivitaet,',
-    ' "froh_delta": -6..12 (auch negativ bei enttaeuschendem/anstrengendem Erlebnis), "narrative": "ein Satz" }. Unplausibles -> plausibel:false.',
+    ` "hunger_delta": -50..-5 (nur consume, sonst 0), "erschoepfung_delta": 2..15 bei Aktivitaet, ${frohRegel}, "narrative": "ein Satz" }. Unplausibles -> plausibel:false.`,
   ].join('\n');
   // LLM-Input-Log (Debug): was der Arbiter-Call als INPUT bekommt.
   if (db) {
@@ -141,38 +205,50 @@ function klammereAngebot(poi, kind, intentKey, vorschlag) {
       narrative: typeof v.narrative === 'string' ? v.narrative.slice(0, 280) : '',
     };
   }
+  const istGratisKat = poi && GRATIS_AKTIVITAET_KATS.has(poi.category);
+  const rohPreis = Number(v.price) || 0;
+  const preis = istGratisKat ? 0 : (rohPreis > 0 ? runde2(klammere(rohPreis, Math.max(1, pMin), pMax)) : 0);
+  const maxFroh = istGratisKat ? 3 : (preis === 0 ? 4 : d.activityFroh[1]);
   return {
     poi_id: poi.id, kind, intent_key: intentKey,
     label: String(v.label || intentKey).slice(0, 80),
-    price: 0,
+    price: preis,
     hunger_delta: 0,
     erschoepfung_delta: klammere(Number(v.erschoepfung_delta) || 6, d.activityErschoepfung[0], d.activityErschoepfung[1]),
-    froh_delta: klammere(Number(v.froh_delta) || 5, d.activityFroh[0], d.activityFroh[1]),
+    froh_delta: klammere(Number(v.froh_delta) || (istGratisKat ? 2 : 5), d.activityFroh[0], maxFroh),
     narrative: typeof v.narrative === 'string' ? v.narrative.slice(0, 280) : '',
   };
 }
 
-const GRATIS_AKTIVITAET_KATS = new Set(['park', 'denkmal', 'home', 'arzt']);
+const GRATIS_AKTIVITAET_KATS = new Set(['park', 'denkmal', 'home', 'arzt', 'praxis']);
 
 async function resolveIntent(db, brain, poi, kind, wunschText, characterId) {
+  const aehnlich = findeAehnlichesAngebot(db, poi, kind, wunschText);
+  if (aehnlich) return { angebot: aehnlich, neu: false };
+  const bestehende = db.prepare('SELECT * FROM poi_offers WHERE poi_id = ? AND kind = ? ORDER BY id').all(poi.id, kind);
   const key = normalisiereKey(wunschText);
-  const bekannt = findeAngebot(db, poi.id, kind, key);
-  if (bekannt) return { angebot: bekannt, neu: false };
   // Park/Denkmal/Wohnung/Praxis: kostenlose Aktivitäten lokal abwickeln (0 LLM-Calls).
   // An Kultur-/Gastro-POIs (kino, club, kneipe, etc.) prüft der Arbiter einmalig per LLM & cached.
   if (kind === 'do_activity' && (!poi || GRATIS_AKTIVITAET_KATS.has(poi.category))) {
-    const angebot = klammereAngebot(poi, kind, key, deterministischesAngebot(poi, kind, wunschText));
+    const det = deterministischesAngebot(poi, kind, wunschText);
+    const kanonKey = normalisiereKey(det.label) || key;
+    const ex = bestehende.find((o) => o.intent_key === kanonKey);
+    if (ex) return { angebot: ex, neu: false };
+    const angebot = klammereAngebot(poi, kind, kanonKey, det);
     const gespeichert = speichereAngebot(db, angebot);
     return { angebot: gespeichert, neu: true, quelle: { source: 'lokal', model: '', tokens: 0 } };
   }
-  const llm = await arbiterLLM(brain, poi, kind, wunschText, db, characterId);
+  const llm = await arbiterLLM(brain, poi, kind, wunschText, db, characterId, bestehende);
   const llmObj = llm && llm.obj ? llm.obj : null;
-  let angebot;
-  if (!llmObj || llmObj.plausibel === false) {
-    angebot = klammereAngebot(poi, kind, key, deterministischesAngebot(poi, kind, wunschText));
-  } else {
-    angebot = klammereAngebot(poi, kind, key, llmObj);
-  }
+  const basis = (!llmObj || llmObj.plausibel === false)
+    ? deterministischesAngebot(poi, kind, wunschText)
+    : llmObj;
+  const label = String(basis.label || wunschText).slice(0, 80);
+  const kanonKey = normalisiereKey(label) || key;
+  const dupe = bestehende.find((o) =>
+    o.intent_key === kanonKey || String(o.label || '').trim().toLowerCase() === label.trim().toLowerCase());
+  if (dupe) return { angebot: dupe, neu: false };
+  const angebot = klammereAngebot(poi, kind, kanonKey, basis);
   const gespeichert = speichereAngebot(db, angebot);
   const quelle = llm
     ? { source: 'llm', model: llm.usedModel, tokens: llm.tokens }

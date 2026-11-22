@@ -5,6 +5,19 @@ Abgleich zwischen [masterplan_aiquarium_hamburg_mvp.md](./masterplan_aiquarium_h
 
 ---
 
+## seb issues:
+
+### poi activities
+müssen von arbiter dedupliziert werden bei anfrage. also "plakate checken" und "plakate an haus73 ansehen" muss in 1 zusammengefassst werdn oder eben auf anfrage dann das bereits bestehende ausgeben anstatt neues anzuelegen.
+
+### timer von activity
+startet schon beim hingehen, nicht erst vor ort- activity startet zu früh?
+
+### bekanntschafts bias
+charakter wählt wohl sitzen im park so oft, weil es kleine boni verspricht, aber sollte eigentlich lieber in bekannte pois gehen und dort aktivitäten machen. aber die müsste er sich erst ausdenken und mit arbiter usmachen. das tut er scheinabr ungern.
+
+
+
 ## 1. Offene Bugs & fehlende Mechaniken (Ist vs. Masterplan)
 
 - **`practised` (Übungs-Tracking) wird nirgends verwendet (`src/db.js`, `src/engine.js`):**
@@ -30,3 +43,7 @@ Abgleich zwischen [masterplan_aiquarium_hamburg_mvp.md](./masterplan_aiquarium_h
   `const ZEIGE_GRUEN = false;` — Grünflächen und Straßenbäume sind bewusst testweise deaktiviert und sollen vorerst aus bleiben.
 - **Konfiguration & Dateien:**
   `.env.example` fehlt im Projekt-Root (im Masterplan §3 vorgesehen).
+- **Abgerundete 3D-Gebäudekanten bei LoD2 (`public/scene.js`):**
+  Im aktiven LoD2-Modus (`data/hamburg_lod2.json`, 1.402 Gebäude als rohe Dreieckssuppe) bleiben Gebäudeecken und Silhouetten spitz; `rundeGebaeudeNormalen` (`GEBAEUDE_ABRUNDUNG` / `?round=0..100`) glättet dort nur die Beleuchtungs-Normalen, was mit `MeshLambertMaterial` + Fassadentextur/`bumpMap` kaum sichtbar ist. Echten 3D-Bevel (`ExtrudeGeometry` mit `bevelEnabled: true`) nutzt bisher nur der Non-LoD2-Fallback (`hamburg_geodata.json`). Mögliche spätere Optionen:
+  1. **Option 1 – Umschalter auf ALKIS-`ExtrudeGeometry` (z. B. `?lod=0`):** Echte abgerundete 3D-Kanten über `GEBAEUDE_ABRUNDUNG`, allerdings nur Flachdächer statt LoD2-Giebeldächer und ohne LoD2-Dachluftbild.
+  2. **Option 2 – Echtes Mesh-Beveling auf LoD2-Dreiecken:** Half-Edge-Topologie/Edge-Beveling auf `wallTriangles`/`roofTriangles` aufbauen, damit auch Giebeldächer und Gauben ohne Risse oder Löcher abgerundet werden können.

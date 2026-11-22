@@ -261,15 +261,17 @@ function orteText(orte, db = null) {
   const a = ['Bekannte Orte (nur dorthin kannst du direkt gehen):'];
   let qOffers = null;
   if (db) {
-    try { qOffers = db.prepare('SELECT label FROM poi_offers WHERE poi_id = ? ORDER BY id DESC LIMIT 4'); } catch { qOffers = null; }
+    try { qOffers = db.prepare('SELECT label, price FROM poi_offers WHERE poi_id = ? ORDER BY id DESC LIMIT 4'); } catch { qOffers = null; }
   }
   for (const o of orte) {
-    const desc = o.public_desc ? ` – ${String(o.public_desc).slice(0, 70)}` : '';
+    const desc = o.public_desc ? ` – ${String(o.public_desc).slice(0, 180)}` : '';
     let ang = '';
     if (qOffers) {
       try {
         const rows = qOffers.all(o.id);
-        if (rows.length > 0) ang = ` [bekannt: ${rows.map((r) => r.label).join(', ')}]`;
+        if (rows.length > 0) {
+          ang = ` [bekannt: ${rows.map((r) => `${r.label}${Number(r.price) > 0 ? ' (kostet etwas)' : ''}`).join(', ')}]`;
+        }
       } catch { /* egal */ }
     }
     a.push(`- ${o.id}: ${o.name} (${o.category})${desc}${ang}`);
@@ -333,7 +335,12 @@ function buildPrompt(db, ch, ctx) {
   const regelnExtra = [];
   if (Number(ch.hunger) < 20) regelnExtra.push('Noch völlig satt: consume nicht als ersten Schritt planen.');
   if (Number(ch.hunger) < 55 && Number(ch.erschoepfung) < 50) {
-    regelnExtra.push('Du bist fit: geh raus, erkunde neue Ecken (explore_street), geh eine Runde joggen (jog) oder unternimm an einem Ort etwas Konkretes (do_activity, z. B. passend zur Ortsbeschreibung).');
+    regelnExtra.push('Du bist fit: geh raus, erkunde neue Ecken (explore_street), geh eine Runde joggen (jog) oder besuche entdeckte Orte (Kino, Club, Kneipe, Kultur) für konkrete Aktivitäten (do_activity, z. B. Film, Konzert, Plakate).');
+  }
+  if (Number(ch.geld) >= 12 && Number(ch.hunger) < 55) {
+    regelnExtra.push('Du hast genug Geld für Kiez-Erlebnisse: statt nur im Park zu sitzen, gönn dir an entdeckten Kultur- oder Gastro-POIs etwas Richtiges (do_activity).');
+  } else if (Number(ch.geld) < 8) {
+    regelnExtra.push('Dein Geld ist knapp – für kostenpflichtige Erlebnisse (Kino, Konzert, Club, Essen) erst etwas verdienen (work_shift, Job suchen per leave_note oder Pfand sammeln).');
   }
   if (lexikonHeute) regelnExtra.push('Das Stadtlexikon hast du heute schon gelesen – erst morgen wieder.');
   if (webSearchHeute) regelnExtra.push('Du hast heute schon einmal gegoogelt (web_search) – erst morgen wieder.');
@@ -395,6 +402,7 @@ function buildPrompt(db, ch, ctx) {
     '',
     kommunikationsRegel(handy, webSearchHeute),
     'Keine Beträge oder Prozentwerte nennen – die rechnet die Welt.',
+    'Aktivitäten (do_activity): Gratis-Dinge wie Parkbank oder Plakate ansehen heben die Laune nur leicht; echte Kiez-Erlebnisse (Kino, Konzert, Club) kosten Eintritt, machen dafür aber spürbar glücklicher.',
     ...regelnExtra,
     '',
     'ANTWORTE NUR ALS JSON:',
