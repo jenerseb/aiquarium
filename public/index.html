@@ -88,6 +88,9 @@
   .gehirn[hidden]{display:none}
   .kasten{width:min(860px,94vw);max-height:88vh;background:#0d131b;border:1px solid var(--line);
     border-radius:14px;display:flex;flex-direction:column;overflow:hidden}
+  .kasten.poiKasten{width:min(520px,94vw)}
+  .poiTags{display:flex;flex-wrap:wrap;gap:6px;margin-top:4px}
+  .poiTag{font-size:.7rem;padding:3px 8px;border-radius:99px;border:1px solid var(--line);background:rgba(255,255,255,.04);color:var(--ink)}
   .kasten header{display:flex;align-items:center;gap:8px;padding:12px 16px;border-bottom:1px solid var(--line)}
   .kasten header h2{font-size:.9rem;flex:1}
   .kasten header button{background:transparent;border:1px solid var(--line);color:var(--mu);
@@ -217,6 +220,13 @@
       <button role="tab" data-tab="chronik" aria-selected="false">Chronik</button>
     </div>
     <div class="inhalt" id="gehirnInhalt">lädt …</div>
+  </div>
+</div>
+
+<div class="gehirn" id="poiModal" hidden>
+  <div class="kasten poiKasten" role="dialog" aria-label="Ortsinfo">
+    <header><h2 id="poiTitel">Ort</h2><button id="btnPoiZu">schließen ×</button></header>
+    <div class="inhalt" id="poiInhalt">lädt …</div>
   </div>
 </div>
 

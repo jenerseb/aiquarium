@@ -183,6 +183,103 @@ function apiBrain() {
   };
 }
 
+const POI_AKTIONEN_KAT = {
+  home: ['Schlafen', 'Ausruhen', 'Bücher & Notizbuch', 'Projektarbeit'],
+  park: ['Spazieren & Entdecken', 'Pfand sammeln', 'Projektarbeit', 'Ausruhen'],
+  spaeti: ['Essen & Trinken', 'Pfand abgeben', 'Handy kaufen'],
+  praxis: ['Arztbesuch (15 €)'],
+  imbiss: ['Essen & Trinken', 'Aushang / Bewerbung'],
+  restaurant: ['Essen & Trinken', 'Aushang / Bewerbung'],
+  kneipe: ['Essen & Trinken', 'Aktivitäten', 'Aushang / Bewerbung'],
+  club: ['Konzerte & Events', 'Getränke', 'Aushang / Bewerbung'],
+  kino: ['Kinofilme ansehen', 'Snacks'],
+  stadion: ['Spiele & Events', 'Snacks'],
+  kultur: ['Veranstaltungen & Kultur', 'Aushang / Bewerbung'],
+  supermarkt: ['Einkaufen & Verpflegung', 'Aushang / Bewerbung'],
+  kaufhaus: ['Einkaufen & Stöbern'],
+};
+
+function poiAdresseFuer(poi, worldMeta) {
+  if (worldMeta && (worldMeta.address || worldMeta.adresse || worldMeta.street)) {
+    return String(worldMeta.address || worldMeta.adresse || worldMeta.street);
+  }
+  const m = String(poi.name || '').match(/\(([^)]+)\)/);
+  if (m && m[1]) return `${m[1]}, St. Pauli, Hamburg`;
+  return 'St. Pauli, Hamburg';
+}
+
+function apiPoi(poiId, dev = false) {
+  const { db, characterId } = ZUSTAND;
+  const poi = db.prepare('SELECT id, name, category, pos_x, pos_z, public_desc, world_meta_json, discovered FROM pois WHERE id = ?').get(poiId);
+  if (!poi) return { status: 404, body: { ok: false, grund: 'nicht_gefunden' } };
+  const entdeckt = Number(poi.discovered) === 1;
+  if (!dev && !entdeckt) return { status: 403, body: { ok: false, grund: 'nicht_entdeckt' } };
+
+  let worldMeta = null;
+  try { worldMeta = poi.world_meta_json ? JSON.parse(poi.world_meta_json) : null; } catch { worldMeta = null; }
+  const adresse = poiAdresseFuer(poi, worldMeta);
+  const aktionen = POI_AKTIONEN_KAT[poi.category] || ['Umsehen & Erkunden'];
+  const offers = db.prepare('SELECT kind, intent_key, label, price, hunger_delta, erschoepfung_delta, froh_delta, narrative FROM poi_offers WHERE poi_id = ? ORDER BY id').all(poiId);
+
+  const evRows = db.prepare("SELECT type, payload_json, created_at FROM events WHERE character_id = ? AND type LIKE 'aktion_%' ORDER BY id DESC LIMIT 300").all(characterId);
+  let besuche = 0;
+  let letzterBesuch = null;
+  const recentEvents = [];
+  for (const r of evRows) {
+    let p = null;
+    try { p = r.payload_json ? JSON.parse(r.payload_json) : null; } catch { p = null; }
+    const target = p && p.schritt && p.schritt.target;
+    if (target !== poiId) continue;
+    if (recentEvents.length < 6) {
+      recentEvents.push({ type: r.type, created_at: r.created_at, notizen: (p && p.notizen) || [] });
+    }
+    if (r.type === 'aktion_walk_to') {
+      const notizen = Array.isArray(p && p.notizen) ? p.notizen.join(' ') : '';
+      if (/Angekommen/i.test(notizen)) {
+        besuche += 1;
+        if (!letzterBesuch) letzterBesuch = r.created_at;
+      }
+    }
+  }
+
+  const base = {
+    id: poi.id,
+    name: poi.name,
+    category: poi.category,
+    discovered: entdeckt,
+    beschreibung: poi.public_desc,
+    adresse,
+    aktionen,
+    angebote: offers.map((o) => ({ label: o.label, kind: o.kind, price: o.price })),
+    besuche,
+    letzterBesuch,
+  };
+
+  if (!dev) {
+    return { status: 200, body: { ok: true, dev: false, poi: base } };
+  }
+
+  const job = db.prepare('SELECT role_title, wage_per_shift, strikes, shifts_completed, status FROM jobs WHERE character_id = ? AND poi_id = ? ORDER BY id DESC LIMIT 1').get(characterId, poiId) || null;
+  const openLoops = db.prepare("SELECT kind, text, urgency, status FROM open_loops WHERE character_id = ? AND related_poi = ? AND status = 'open' ORDER BY id DESC LIMIT 5").all(characterId, poiId);
+  return {
+    status: 200,
+    body: {
+      ok: true,
+      dev: true,
+      poi: {
+        ...base,
+        pos_x: poi.pos_x,
+        pos_z: poi.pos_z,
+        worldMeta,
+        angebote: offers,
+        job,
+        openLoops,
+        recentEvents,
+      },
+    },
+  };
+}
+
 function sendeSSE(ereignis) {
   const text = `data: ${JSON.stringify(ereignis)}\n\n`;
   for (const res of ZUSTAND.sseClients) {
@@ -236,6 +333,12 @@ function erstelleServer() {
       if (url.pathname === '/api/health' && req.method === 'GET') return json(res, 200, { ok: true, service: 'aiquarium' });
       if (url.pathname === '/api/state' && req.method === 'GET') return json(res, 200, apiState());
       if (url.pathname === '/api/brain' && req.method === 'GET') return json(res, 200, apiBrain());
+      if (url.pathname.startsWith('/api/poi/') && req.method === 'GET') {
+        const poiId = decodeURIComponent(url.pathname.slice('/api/poi/'.length));
+        const dev = url.searchParams.get('dev') === '1' || url.searchParams.get('dev') === 'true';
+        const r = apiPoi(poiId, dev);
+        return json(res, r.status, r.body);
+      }
       if ((url.pathname === '/api/map' || url.pathname === '/kiez-map.json' || url.pathname === '/kiez_map.json') && req.method === 'GET') return json(res, 200, apiMap());
       if (url.pathname === '/favicon.ico') { res.writeHead(204); res.end(); return; }
       if (url.pathname === '/api/stream' && req.method === 'GET') {

@@ -2168,13 +2168,25 @@ function bindeSteuerung() {
     }
   }, { passive: false });
 
-  // Klick auf Gebäude: Indoor-Transparenz umschalten
+  // Klick auf POI-Marker/Name (vor Gebäude-Transparenz) oder Gebäude
   const ray = new THREE.Raycaster();
   const maus = new THREE.Vector2();
   el.addEventListener('click', (e) => {
     if (movedDist > 6) return;
     maus.set((e.clientX / window.innerWidth) * 2 - 1, -(e.clientY / window.innerHeight) * 2 + 1);
     ray.setFromCamera(maus, camera);
+    const poiGruppen = [...Z.poiSchilder.values()].filter((g) => g.visible);
+    const poiTreffer = ray.intersectObjects(poiGruppen, true);
+    if (poiTreffer.length > 0) {
+      let o = poiTreffer[0].object;
+      while (o && !o.userData.poiId) o = o.parent;
+      const poiId = o ? o.userData.poiId : null;
+      const poi = poiId ? Z.pois.get(poiId) : null;
+      if (poiId && (DEV || (poi && Number(poi.discovered) === 1))) {
+        oeffnePoiModal(poiId);
+        return;
+      }
+    }
     const gruppen = [...Z.gebaeude.values()];
     const treffer = ray.intersectObjects(gruppen, true);
     if (treffer.length > 0) {
@@ -2427,6 +2439,73 @@ function blasePositionieren() {
 }
 
 
+async function oeffnePoiModal(poiId) {
+  const modal = $('poiModal');
+  const titel = $('poiTitel');
+  const inhalt = $('poiInhalt');
+  if (!modal || !inhalt) return;
+  const cached = Z.pois.get(poiId);
+  if (titel) titel.textContent = cached ? cached.name : poiId;
+  inhalt.innerHTML = 'lädt …';
+  modal.hidden = false;
+  try {
+    const res = await fetch('/api/poi/' + encodeURIComponent(poiId) + (DEV ? '?dev=1' : ''));
+    const data = await res.json();
+    if (!data || !data.ok || !data.poi) {
+      inhalt.innerHTML = `<div class="karte rot">${esc((data && data.grund === 'nicht_entdeckt') ? 'Dieser Ort wurde noch nicht entdeckt.' : 'Ortsinfos konnten nicht geladen werden.')}</div>`;
+      return;
+    }
+    const p = data.poi;
+    if (titel) {
+      titel.innerHTML = `${esc(p.name)} <span class="badge">${esc(p.category)}</span>`
+        + (DEV ? ` <span class="badge">${p.discovered ? 'entdeckt' : 'unentdeckt'}</span>` : '');
+    }
+    const aktionenHtml = (p.aktionen || []).map((a) => `<span class="poiTag">${esc(a)}</span>`).join('');
+    const angeboteHtml = (p.angebote || []).length
+      ? (p.angebote.map((o) => {
+        const preis = Number(o.price) > 0 ? ` · ${Number(o.price).toFixed(2)} €` : '';
+        const devExtra = DEV
+          ? `<div style="font-size:.66rem;color:var(--mu);font-family:var(--mono)">${esc(o.kind || '')} · ${esc(o.intent_key || '')} · H:${o.hunger_delta || 0} M:${o.erschoepfung_delta || 0} F:${o.froh_delta || 0}</div>`
+          : '';
+        return `<div class="karte"><b>${esc(o.label)}</b>${esc(preis)}${devExtra}</div>`;
+      }).join(''))
+      : '<div style="color:var(--mu);font-size:.75rem">Noch keine speziellen Angebote verzeichnet.</div>';
+
+    let html = `
+      <div class="karte gruen">
+        <div>${esc(p.beschreibung || 'Keine Beschreibung vorhanden.')}</div>
+        <div style="margin-top:6px;font-size:.72rem;color:var(--mu)">Adresse: ${esc(p.adresse || 'St. Pauli, Hamburg')}</div>
+      </div>
+      <div class="zwei" style="margin:8px 0">
+        <div class="karte"><h3>Besuche bisher</h3><b>${Number(p.besuche || 0)}×</b>${p.letzterBesuch ? `<div style="font-size:.68rem;color:var(--mu)">Zuletzt: ${esc(p.letzterBesuch)}</div>` : ''}</div>
+        <div class="karte"><h3>Mögliche Aktivitäten</h3><div class="poiTags">${aktionenHtml}</div></div>
+      </div>
+      <h3>Bekannte Angebote</h3>
+      ${angeboteHtml}
+    `;
+
+    if (DEV) {
+      const evHtml = (p.recentEvents || []).length
+        ? p.recentEvents.map((e) => `<div class="karte" style="font-size:.72rem"><b>${esc(e.type)}</b> <span style="color:var(--mu)">(${esc(e.created_at || '')})</span>${(e.notizen && e.notizen.length) ? `<div>${esc(e.notizen.join(' · '))}</div>` : ''}</div>`).join('')
+        : '<div style="color:var(--mu);font-size:.72rem">Keine Events zu diesem POI.</div>';
+      html += `
+        <h3>Dev-Details</h3>
+        <div class="karte gelb" style="font-family:var(--mono);font-size:.7rem">
+          id=${esc(p.id)} · pos=(${Number(p.pos_x).toFixed(1)}, ${Number(p.pos_z).toFixed(1)})
+          ${p.worldMeta ? `<div>meta: ${esc(JSON.stringify(p.worldMeta))}</div>` : ''}
+          ${p.job ? `<div>job: ${esc(p.job.role_title)} (${esc(p.job.status)}, ${Number(p.job.wage_per_shift).toFixed(2)} €, ${p.job.shifts_completed} Schichten, ${p.job.strikes} Strikes)</div>` : ''}
+          ${(p.openLoops && p.openLoops.length) ? `<div>loops: ${esc(p.openLoops.map((l) => l.text).join(' | '))}</div>` : ''}
+        </div>
+        <h3>Letzte POI-Events</h3>
+        ${evHtml}
+      `;
+    }
+    inhalt.innerHTML = html;
+  } catch (err) {
+    inhalt.innerHTML = `<div class="karte rot">Fehler beim Laden: ${esc(err && err.message ? err.message : String(err))}</div>`;
+  }
+}
+
 // --- Gehirn-Modal (live /api/brain, 4 Tabs) ----------------------------------------------------------------------------
 let gehirnTab = 'kopf';
 
@@ -2444,6 +2523,14 @@ function bindeGehirn() {
   });
   $('btnGehirnZu').addEventListener('click', () => { $('gehirn').hidden = true; });
   $('gehirn').addEventListener('click', (e) => { if (e.target === $('gehirn')) $('gehirn').hidden = true; });
+  $('btnPoiZu').addEventListener('click', () => { $('poiModal').hidden = true; });
+  $('poiModal').addEventListener('click', (e) => { if (e.target === $('poiModal')) $('poiModal').hidden = true; });
+  window.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') {
+      $('gehirn').hidden = true;
+      $('poiModal').hidden = true;
+    }
+  });
   document.querySelectorAll('.reiter button').forEach((b) => {
     b.addEventListener('click', async () => {
       gehirnTab = b.dataset.tab;
