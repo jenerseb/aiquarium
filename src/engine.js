@@ -3,7 +3,7 @@
 // Aktions-Ticks, Multi-Step-Plan-Queue, Interrupts, Health-Chunks, Tod/Respawn.
 // Die Engine rechnet – das Modell spürt nur Konsequenzen (natürliche Sätze).
 
-const { AKTION, ECHTZEIT_DAUER, SEKUNDAER, ECONOMY, GESUND, FROH, chunkCapFuer } = require('./config');
+const { AKTION, ECHTZEIT_DAUER, SEKUNDAER, SCHLAF, ECONOMY, GESUND, FROH, chunkCapFuer } = require('./config');
 const pf = require('./pathfinding');
 const arbiter = require('./arbiter');
 const checks = require('./checks');
@@ -132,12 +132,13 @@ function addFroh(ch, delta) {
 
 function lasseZeitVergehen(ch, sekunden, jetztMs = Date.now()) {
   const stunden = sekunden / 3600;
-  ch.hunger = Math.min(100, ch.hunger + stunden * SEKUNDAER.hunger.proStunde);
+  const schlaeft = ch.current_action === 'sleep';
+  ch.hunger = Math.min(100, ch.hunger + stunden * (schlaeft ? SCHLAF.hungerProStunde : SEKUNDAER.hunger.proStunde));
   const muedFaktor = Number(ch.froh) < 0 ? 1.25 : 1.0;
   const h = hamburgStunde(jetztMs);
   const nachtSchlafDruck = (h >= 21 || h < 4) ? 2.2 : 1.0;
-  if (ch.current_action === 'sleep') {
-    ch.erschoepfung = Math.max(0, ch.erschoepfung - stunden * 60);
+  if (schlaeft) {
+    ch.erschoepfung = Math.max(0, ch.erschoepfung - stunden * SCHLAF.erschoepfungProStunde);
   } else if (ch.current_action === 'rest') {
     ch.erschoepfung = Math.max(0, ch.erschoepfung - stunden * 24);
   } else if (ch.current_action === 'jog') {
@@ -147,10 +148,16 @@ function lasseZeitVergehen(ch, sekunden, jetztMs = Date.now()) {
   } else {
     ch.erschoepfung = Math.min(100, ch.erschoepfung + stunden * SEKUNDAER.erschoepfung.proStunde * muedFaktor * nachtSchlafDruck);
   }
-  const frohRate = Number(ch.froh) > FROH.euphorieSchwelle ? FROH.euphorieProStunde : FROH.proStunde;
+  const frohRate = schlaeft
+    ? SCHLAF.frohProStunde
+    : (Number(ch.froh) > FROH.euphorieSchwelle ? FROH.euphorieProStunde : FROH.proStunde);
   ch.froh = Math.max(FROH.min, Math.min(FROH.max, Number(ch.froh) + stunden * frohRate));
   if (ch.hunger >= GESUND.hungerSchwelle || ch.erschoepfung >= GESUND.erschoepfungSchwelle) {
     ch.gesund = Math.max(0, ch.gesund - stunden * 4);
+  } else if (schlaeft) {
+    const cap = Math.min(Number(ch.gesund_chunk_cap) || 100, chunkCapFuer(Number(ch.gesund)));
+    ch.gesund_chunk_cap = cap;
+    ch.gesund = Math.min(cap, Number(ch.gesund) + stunden * SCHLAF.gesundProStunde);
   }
   const aktuellerCap = chunkCapFuer(Number(ch.gesund));
   if (aktuellerCap < (Number(ch.gesund_chunk_cap) || 100)) {
@@ -667,7 +674,7 @@ async function fuehreSchrittAus(db, deps, characterId, schritt, jetztMs) {
 
 // --- Restliche Schritte: Pfand, Jobs, Ruhe, Arzt, Buecher --------------------------
 
-async function fuehreSchrittAusTeil2(db, deps, characterId, schritt, jetztMs) {
+async function fuehreSchrittAusTeil2(db, deps, characterId, schritt, jetztMs, opts = {}) {
   let ch = ladeCharakter(db, characterId);
   const notizen = [];
   const action = schritt.action;
@@ -735,23 +742,27 @@ async function fuehreSchrittAusTeil2(db, deps, characterId, schritt, jetztMs) {
     }
     if (abrech.gekuendigt) notizen.push('Gekuendigt nach dem 2. Strike.');
   } else if (action === 'rest' || action === 'sleep') {
-    if (action === 'sleep') {
-      if (ch.inside_poi !== 'apartment') {
-        return { ok: false, grund: 'nur_daheim', notizen: ['Zum Schlafen musst du heim in deine Wohnung.'] };
-      }
-      const h = hamburgStunde(jetztMs);
-      const minMuede = (h >= 20 || h < 5) ? 20 : 50;
-      if (Number(ch.erschoepfung) < minMuede) {
-        return { ok: false, grund: 'nicht_muede', notizen: ['Du bist noch viel zu wach zum Schlafen und stehst wieder vom Bett auf.'] };
-      }
-    }
-    ch.current_action = action;
-    lasseZeitVergehen(ch, dauerFuer(schritt));
-    if (action === 'sleep') {
-      heileDurchSchlaf(ch);
+    if (action === 'sleep' && opts.timerAbgeschlossen) {
       notizen.push('Du hast tief geschlafen und bist erholt aufgewacht.');
     } else {
-      notizen.push('Du hast dich ausgeruht.');
+      if (action === 'sleep') {
+        if (ch.inside_poi !== 'apartment') {
+          return { ok: false, grund: 'nur_daheim', notizen: ['Zum Schlafen musst du heim in deine Wohnung.'] };
+        }
+        const h = hamburgStunde(jetztMs);
+        const minMuede = (h >= 20 || h < 5) ? 20 : 50;
+        if (Number(ch.erschoepfung) < minMuede) {
+          return { ok: false, grund: 'nicht_muede', notizen: ['Du bist noch viel zu wach zum Schlafen und stehst wieder vom Bett auf.'] };
+        }
+      }
+      ch.current_action = action;
+      lasseZeitVergehen(ch, dauerFuer(schritt), jetztMs);
+      if (action === 'sleep') {
+        heileDurchSchlaf(ch);
+        notizen.push('Du hast tief geschlafen und bist erholt aufgewacht.');
+      } else {
+        notizen.push('Du hast dich ausgeruht.');
+      }
     }
   } else if (action === 'visit_doctor') {
     if (Number(ch.geld) < ECONOMY.arztKosten) return { ok: false, grund: 'geld_reicht_nicht', notizen };
@@ -912,12 +923,12 @@ async function fuehreSchrittAusTeil3(db, deps, characterId, schritt, jetztMs) {
 }
 
 // Dispatcher: Teil 1 -> Teil 2 -> Teil 3 (sleep mit nightly läuft über Teil 2 + Engine-Tick)
-async function schrittAusfuehren(db, deps, characterId, schritt, jetztMs) {
+async function schrittAusfuehren(db, deps, characterId, schritt, jetztMs, opts = {}) {
   const a = schritt.action;
   if (['walk_to', 'explore_street', 'jog', 'consume', 'do_activity', 'leave_note'].includes(a)) {
     return fuehreSchrittAus(db, deps, characterId, schritt, jetztMs);
   }
-  const r2 = await fuehreSchrittAusTeil2(db, deps, characterId, schritt, jetztMs);
+  const r2 = await fuehreSchrittAusTeil2(db, deps, characterId, schritt, jetztMs, opts);
   if (r2.ok || r2.grund !== 'unbekannt_teil2') return r2;
   return fuehreSchrittAusTeil3(db, deps, characterId, schritt, jetztMs);
 }
@@ -1231,6 +1242,20 @@ function speichereLaufendeAktion(db, ch, timer) {
     .run(ch.action_meta_json, ch.action_duration_s, ch.current_action, ch.id);
 }
 
+function wendeLaufendenSchlafAn(db, ch, timer, jetztMs) {
+  if (!timer || timer.action !== 'sleep') return;
+  const bisMs = Math.min(jetztMs, Number(timer.endsAtMs) || jetztMs);
+  const lastMs = Number(timer.lastAppliedAtMs || timer.startedAtMs || bisMs);
+  const deltaS = Math.max(0, (bisMs - lastMs) / 1000);
+  if (deltaS <= 0) return;
+  ch.current_action = 'sleep';
+  lasseZeitVergehen(ch, deltaS, bisMs);
+  klammereCharakter(ch);
+  speichereCharakter(db, ch);
+  timer.lastAppliedAtMs = bisMs;
+  speichereLaufendeAktion(db, ch, timer);
+}
+
 function kannAktionStarten(db, ch, schritt, jetztMs = Date.now()) {
   const a = schritt.action;
   if (a === 'jog' && Number(ch.erschoepfung) >= 80) return false;
@@ -1290,10 +1315,15 @@ async function tick(db, deps, characterId, jetztMs) {
   }
 
   let aktionTimer = deps.echtzeit ? ladeLaufendeAktion(ch) : null;
+  let timerAbgeschlossen = false;
   let schritt = null;
   let gedanke = '';
   let planQuelle = null; // KI-Nachweis für den Feed (Punkt 7)
   if (aktionTimer) {
+    if (aktionTimer.action === 'sleep') {
+      wendeLaufendenSchlafAn(db, ch, aktionTimer, jetztMs);
+      ch = ladeCharakter(db, characterId);
+    }
     if (jetztMs < aktionTimer.endsAtMs) {
       return {
         ok: true,
@@ -1304,6 +1334,7 @@ async function tick(db, deps, characterId, jetztMs) {
         gedanke: '',
       };
     }
+    timerAbgeschlossen = true;
     schritt = { action: aktionTimer.action, target: aktionTimer.target, detail: aktionTimer.detail };
     speichereLaufendeAktion(db, ch, null);
     ch = ladeCharakter(db, characterId);
@@ -1377,6 +1408,7 @@ async function tick(db, deps, characterId, jetztMs) {
           detail: schritt.detail || '',
           poiName: poiRow ? poiRow.name : (poiId || ''),
           startedAtMs: jetztMs,
+          lastAppliedAtMs: jetztMs,
           endsAtMs: jetztMs + durationS * 1000,
           durationS,
         };
@@ -1402,7 +1434,7 @@ async function tick(db, deps, characterId, jetztMs) {
       return { ok: true, schritt, ergebnis: { ok: false, grund: 'geld_reicht_nicht' }, notizen: notiz, interrupt: 'geld_reicht_nicht', gedanke };
     }
   }
-  const ergebnis = await schrittAusfuehren(db, deps, characterId, schritt, jetztMs);
+  const ergebnis = await schrittAusfuehren(db, deps, characterId, schritt, jetztMs, { timerAbgeschlossen });
   ch = ladeCharakter(db, characterId);
   // Weiter unterwegs? Dann Schritt vorn wieder einreihen (Rest-Queue bleibt dahinter).
   // Geprüft wird NACH der Ausführung – sonst ginge z. B. „consume“ nach „walk_to“ verloren.

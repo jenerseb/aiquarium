@@ -62,6 +62,13 @@ const SEKUNDAER = {
   geld: { start: 18.0, einheit: 'EUR' },
 };
 
+const SCHLAF = {
+  erschoepfungProStunde: 18.0,
+  hungerProStunde: 1.5,
+  frohProStunde: -1.0,
+  gesundProStunde: 4.0,
+};
+
 // ---- Aktionsdauern (Aquarium-Zeit, Sekunden) ----
 const AKTION = {
   walkToSpeedMs: 1.3, // m/s für walk_to
@@ -289,6 +296,7 @@ module.exports = {
   chunkCapFuer,
   FROH,
   SEKUNDAER,
+  SCHLAF,
   AKTION,
   ECHTZEIT_DAUER,
   ECONOMY,

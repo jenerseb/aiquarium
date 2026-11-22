@@ -51,16 +51,17 @@ Das LLM sieht **keine rohen Prozentwerte**, sondern Gefühlssätze aus [src/prom
 
 | Wert | Start | Bereich | Passiver Drift (`/ h`) | Aktive Effekte & Regeln |
 | :--- | :---: | :---: | :--- | :--- |
-| **`hunger`** | `20` | `0..100` | **`+2.5 / h`** | `work_shift`: `+12` · `sleep`: `+12` (+ Zeit) · `consume`: `-5..-50` |
-| **`erschoepfung`** | `15` | `0..100` | **`+3.0 / h`** (`×1.25` bei `froh < 0`, `×2.2` Schlafdruck `21–04 Uhr`, `×1.5` beim Gehen, `18 / h` beim `jog`) | `work_shift`: `+22` · `work_on_project`: `+5` · `explore_street`: `+6` · `jog` (Rundlauf): `+10` (+ Zeit) · `rest` (`15 Min` Echtzeit): nur leichte Erholung (`-24 / h` Aquarium-Zeit) · `sleep`: **`→ 0`** |
-| **`froh`** | `25` | **`-50..+50`** | **`-2.0 / h`** (`-4.0 / h` ab `> 30`) | `explore_street`: `+3` · `jog`: `+4` · `consume`: `-2..+14` · `do_activity`: `-8..+16` · `work_on_project`: `+5` |
-| **`gesund`** | `100` | `0..100` | `0 / h` (**`-4.0 / h`** ab `hunger >= 85` oder `erschoepfung >= 90`) | `sleep`: heilt bis `gesund_chunk_cap` · `visit_doctor` (`15 €`): Cap `+20` |
+| **`hunger`** | `20` | `0..100` | **`+2.5 / h`** (`+1.5 / h` im `sleep`) | `work_shift`: `+12` · `consume`: `-5..-50` |
+| **`erschoepfung`** | `15` | `0..100` | **`+3.0 / h`** (`×1.25` bei `froh < 0`, `×2.2` Schlafdruck `21–04 Uhr`, `×1.5` beim Gehen, `18 / h` beim `jog`) | `work_shift`: `+22` · `work_on_project`: `+5` · `explore_street`: `+6` · `jog` (Rundlauf): `+10` (+ Zeit) · `rest` (`15 Min` Echtzeit): nur leichte Erholung (`-24 / h` Aquarium-Zeit) · `sleep`: **`-18 / h`** laufend während des Timers |
+| **`froh`** | `25` | **`-50..+50`** | **`-2.0 / h`** (`-4.0 / h` ab `> 30`, **`-1.0 / h`** im `sleep`) | `explore_street`: `+3` · `jog`: `+4` · `consume`: `-2..+14` · `do_activity`: `-8..+16` · `work_on_project`: `+5` |
+| **`gesund`** | `100` | `0..100` | `0 / h` (**`-4.0 / h`** ab `hunger >= 85` oder `erschoepfung >= 90`) | `sleep`: **`+4.0 / h`** laufend bis `gesund_chunk_cap` · `visit_doctor` (`15 €`): Cap `+20` |
 | **`gesund_chunk_cap`** | `100` | `20..100` | Sinkt mit `gesund` auf 20er-Stufen | Steigt nur durch `visit_doctor` (`praxis`) |
 | **`geld`** | `18 €` | `≥ 0 €` | `0 / h` | `work_shift`: `+8..18 €` · `return_deposit`: `+1 €`/Flasche · `buy_item` Handy: `-50 €` |
 
 ### Schlaf (`sleep`) vs. Ausruhen (`rest`) & emergenter Nachtschlaf
 - **`rest`**: Überall möglich, dauert **`15 Min`** Echtzeit (`ECHTZEIT_DAUER.rest`), erholt Müdigkeit nur leicht (`-24 / h` in `lasseZeitVergehen`) und heilt keine Gesundheit.
-- **`sleep`**: Nur in `apartment` möglich; tagsüber ab `erschoepfung >= 50`, **abends/nachts (`20:00–05:00 Uhr`) bereits ab `erschoepfung >= 20`** (Edge-Case-Schutz nach ruhigen Tagen).
+- **`sleep`**: Nur in `apartment` möglich; Eintritt wird beim Zubettgehen geprüft: tagsüber ab `erschoepfung >= 50`, **abends/nachts (`20:00–05:00 Uhr`) bereits ab `erschoepfung >= 20`** (Edge-Case-Schutz nach ruhigen Tagen).
+- **Laufende Echtzeit-Schlafwirkung (`lastAppliedAtMs`)**: Während des `sleep`-Timers werden die Werte pro Tick über die verstrichene Echtzeit angewendet (`erschoepfung -18 / h`, `hunger +1.5 / h`, `froh -1.0 / h`, `gesund +4.0 / h` bis `gesund_chunk_cap`). `lastAppliedAtMs` in `action_meta_json.aktionTimer` holt nach einem Server-Restart verpasste Stunden nach; beim Timer-Abschluss gibt es keine Doppelheilung, keinen `+12`-Hunger-Bonus und keinen zweiten `minMuede`-Check.
 - **Dynamische Schlafdauer (`berechneSchlafDauerS`)**: Je nach `erschoepfung` **`2 h` bis `10 h` Echtzeit**, geschnitten mit dem nächsten Berliner Aufwachfenster **`06:00–11:00 Uhr`** (fällt das Fenster außerhalb `[2 h, 10 h]`, greift sauber `[2 h, 10 h]`).
 - **Weiche Zirkadianik (ohne harte Uhrzeit-Sperre)**: Zwischen **`21:00` und `04:00 Uhr`** steigt der Schlafdruck passiv um **`×2.2`**. Ist er abends (`20:00–01:00`) noch hellwach in `apartment`, regt der Prompt zum Ausgehen/Joggen an; spät nachts (`23:00–04:00`) verstärkt er den Impuls zu `sleep`.
 - **Zimmer-Loop-Schutz**: `write_notebook` (max. 2×/Tag, erst wieder nach einer Außenaktion) und `work_on_project` (nicht 2× direkt hintereinander) werden nach Nutzung aus `whitelistFuer` entfernt; `recentActions` zeigt die letzten Aktionen im Prompt.
